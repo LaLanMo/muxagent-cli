@@ -1,0 +1,246 @@
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+type RuntimeID string
+
+const (
+	RuntimeOpenCode RuntimeID = "opencode"
+)
+
+type Config struct {
+	ActiveRuntime RuntimeID                     `json:"active_runtime"`
+	Runtimes      map[RuntimeID]RuntimeSettings `json:"runtimes"`
+	RelayURL      string                        `json:"relay_url,omitempty"`
+}
+
+type RuntimeSettings struct {
+	BaseURL string     `json:"base_url"`
+	Auth    AuthConfig `json:"auth"`
+}
+
+type AuthConfig struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// Default returns the configuration that should be used when no config file
+// exists or when callers want to seed a new config. It is intentionally small
+// and explicit so callers can see the exact values that make the CLI usable.
+func Default() Config {
+	return Config{
+		ActiveRuntime: RuntimeOpenCode,
+		RelayURL:      "ws://localhost:8080/ws",
+		Runtimes: map[RuntimeID]RuntimeSettings{
+			RuntimeOpenCode: {
+				BaseURL: "http://127.0.0.1:4096",
+				Auth: AuthConfig{
+					Username: "opencode",
+					Password: "",
+				},
+			},
+		},
+	}
+}
+
+// UserConfigPath returns the path to the user-level config file at ~/.muxagent/config.json.
+func UserConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".muxagent", "config.json"), nil
+}
+
+// ProjectConfigPath returns the path to the project-level config file at ./.muxagent/config.json.
+func ProjectConfigPath() string {
+	return filepath.Join(".muxagent", "config.json")
+}
+
+// loadFile reads and parses a config file at the given path. Returns empty
+// Config and os.ErrNotExist if file doesn't exist. Other errors are returned
+// as-is for callers to handle.
+func loadFile(path string) (Config, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(payload, &cfg); err != nil {
+		return Config{}, err
+	}
+
+	return cfg, nil
+}
+
+// load reads config from $HOME/.muxagent/config.json and unmarshals it into a
+// Config value. It does not apply defaults or synthesize missing values, so any
+// absent fields remain zero values and missing runtime entries remain missing.
+// A missing file is returned as an error (typically os.ErrNotExist) so the
+// caller can explicitly decide whether to fall back to defaults or fail fast.
+func load() (Config, error) {
+	path, err := UserConfigPath()
+	if err != nil {
+		return Config{}, err
+	}
+	return loadFile(path)
+}
+
+// LoadEffective loads config using layered priority:
+// 1. Start with built-in defaults
+// 2. Merge user config (~/.muxagent/config.json)
+// 3. Merge project config (./.muxagent/config.json)
+// 4. Apply environment variable overrides (MUXAGENT_*)
+//
+// Each layer overrides the previous (non-empty values win).
+// Missing files are silently skipped; parse errors are returned.
+func LoadEffective() (Config, error) {
+	cfg := Default()
+
+	// Layer 2: User config
+	userPath, err := UserConfigPath()
+	if err != nil {
+		return Config{}, err
+	}
+	if userCfg, err := loadFile(userPath); err == nil {
+		cfg = mergeConfig(cfg, userCfg)
+	} else if !os.IsNotExist(err) {
+		return Config{}, err
+	}
+
+	// Layer 3: Project config
+	projectPath := ProjectConfigPath()
+	if projectCfg, err := loadFile(projectPath); err == nil {
+		cfg = mergeConfig(cfg, projectCfg)
+	} else if !os.IsNotExist(err) {
+		return Config{}, err
+	}
+
+	// Layer 4: Environment overrides
+	cfg = applyEnvOverrides(cfg)
+
+	return cfg, nil
+}
+
+// Save writes the full config to $HOME/.muxagent/config.json as JSON and
+// returns the resolved file path. It creates parent directories as needed and
+// writes with owner-only permissions. Save always overwrites the entire file
+// rather than merging fields, so the on-disk contents match the provided cfg.
+func Save(cfg Config) (string, error) {
+	path, err := UserConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return SaveTo(cfg, path)
+}
+
+// SaveTo writes the full config to the specified path as JSON and returns the
+// resolved file path. It creates parent directories as needed and writes with
+// owner-only permissions. SaveTo always overwrites the entire file rather than
+// merging fields, so the on-disk contents match the provided cfg.
+func SaveTo(cfg Config, path string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+
+	payload, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
+// Exists checks if a config file exists at the given path.
+func Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ActiveRuntimeSettings returns the settings for the active runtime.
+// Returns an error if the runtime is not configured.
+func (c Config) ActiveRuntimeSettings() (RuntimeSettings, error) {
+	settings, ok := c.Runtimes[c.ActiveRuntime]
+	if !ok {
+		return RuntimeSettings{}, fmt.Errorf("runtime %q not configured", c.ActiveRuntime)
+	}
+	return settings, nil
+}
+
+// mergeConfig merges overlay into base, returning a new config where non-empty
+// overlay values override base values. Used for layered config loading.
+func mergeConfig(base, overlay Config) Config {
+	result := base
+
+	if overlay.ActiveRuntime != "" {
+		result.ActiveRuntime = overlay.ActiveRuntime
+	}
+
+	if overlay.RelayURL != "" {
+		result.RelayURL = overlay.RelayURL
+	}
+
+	// Merge runtimes map
+	for name, settings := range overlay.Runtimes {
+		if result.Runtimes == nil {
+			result.Runtimes = make(map[RuntimeID]RuntimeSettings)
+		}
+		existing := result.Runtimes[name]
+		if settings.BaseURL != "" {
+			existing.BaseURL = settings.BaseURL
+		}
+		if settings.Auth.Username != "" {
+			existing.Auth.Username = settings.Auth.Username
+		}
+		if settings.Auth.Password != "" {
+			existing.Auth.Password = settings.Auth.Password
+		}
+		result.Runtimes[name] = existing
+	}
+
+	return result
+}
+
+// applyEnvOverrides reads MUXAGENT_* environment variables and applies them to
+// the config. Env vars have highest priority and override all file-based config
+// values.
+//
+// Supported env vars:
+//   - MUXAGENT_RELAY_URL
+//   - MUXAGENT_RUNTIMES_<RUNTIME>_BASE_URL
+//   - MUXAGENT_RUNTIMES_<RUNTIME>_USERNAME
+//   - MUXAGENT_RUNTIMES_<RUNTIME>_PASSWORD
+func applyEnvOverrides(cfg Config) Config {
+	if val := os.Getenv("MUXAGENT_RELAY_URL"); val != "" {
+		cfg.RelayURL = val
+	}
+
+	for name, settings := range cfg.Runtimes {
+		prefix := "MUXAGENT_RUNTIMES_" + strings.ToUpper(string(name)) + "_"
+
+		if val := os.Getenv(prefix + "BASE_URL"); val != "" {
+			settings.BaseURL = val
+		}
+		if val := os.Getenv(prefix + "USERNAME"); val != "" {
+			settings.Auth.Username = val
+		}
+		if val := os.Getenv(prefix + "PASSWORD"); val != "" {
+			settings.Auth.Password = val
+		}
+
+		cfg.Runtimes[name] = settings
+	}
+
+	return cfg
+}
