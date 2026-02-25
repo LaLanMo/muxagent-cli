@@ -48,6 +48,7 @@ type AuthStatusOutput struct {
 	MachineID                          string        `json:"machine_id,omitempty"`
 	MachineSignPub                     string        `json:"machine_sign_pub,omitempty"`
 	MachineEncPub                      string        `json:"machine_enc_pub,omitempty"`
+	MachineHostname                    string        `json:"machine_hostname,omitempty"`
 	RelayChallenge                     string        `json:"relay_challenge,omitempty"`
 	ExpiresAt                          int64         `json:"expires_at,omitempty"`
 	ApprovedAt                         int64         `json:"approved_at,omitempty"`
@@ -366,6 +367,7 @@ func buildAuthStatusSignaturePayload(status *AuthStatusOutput, requestID string)
 		status.MachineID,
 		status.MachineSignPub,
 		status.MachineEncPub,
+		status.MachineHostname,
 		status.RelayChallenge,
 		fmt.Sprintf("%d", status.ExpiresAt),
 		status.ApprovedByMasterSignKeyFingerprint,

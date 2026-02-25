@@ -11,7 +11,7 @@ import (
 type RuntimeID string
 
 const (
-	RuntimeOpenCode RuntimeID = "opencode"
+	RuntimeACP RuntimeID = "acp"
 )
 
 type Config struct {
@@ -21,29 +21,22 @@ type Config struct {
 }
 
 type RuntimeSettings struct {
-	BaseURL string     `json:"base_url"`
-	Auth    AuthConfig `json:"auth"`
-}
-
-type AuthConfig struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	CWD     string            `json:"cwd,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // Default returns the configuration that should be used when no config file
-// exists or when callers want to seed a new config. It is intentionally small
-// and explicit so callers can see the exact values that make the CLI usable.
+// exists or when callers want to seed a new config.
 func Default() Config {
 	return Config{
-		ActiveRuntime: RuntimeOpenCode,
+		ActiveRuntime: RuntimeACP,
 		RelayURL:      "ws://localhost:8080/ws",
 		Runtimes: map[RuntimeID]RuntimeSettings{
-			RuntimeOpenCode: {
-				BaseURL: "http://127.0.0.1:4096",
-				Auth: AuthConfig{
-					Username: "opencode",
-					Password: "",
-				},
+			RuntimeACP: {
+				Command: "opencode",
+				Args:    []string{"acp"},
 			},
 		},
 	}
@@ -197,14 +190,22 @@ func mergeConfig(base, overlay Config) Config {
 			result.Runtimes = make(map[RuntimeID]RuntimeSettings)
 		}
 		existing := result.Runtimes[name]
-		if settings.BaseURL != "" {
-			existing.BaseURL = settings.BaseURL
+		if settings.Command != "" {
+			existing.Command = settings.Command
 		}
-		if settings.Auth.Username != "" {
-			existing.Auth.Username = settings.Auth.Username
+		if len(settings.Args) > 0 {
+			existing.Args = settings.Args
 		}
-		if settings.Auth.Password != "" {
-			existing.Auth.Password = settings.Auth.Password
+		if settings.CWD != "" {
+			existing.CWD = settings.CWD
+		}
+		if len(settings.Env) > 0 {
+			if existing.Env == nil {
+				existing.Env = make(map[string]string)
+			}
+			for k, v := range settings.Env {
+				existing.Env[k] = v
+			}
 		}
 		result.Runtimes[name] = existing
 	}
@@ -218,9 +219,8 @@ func mergeConfig(base, overlay Config) Config {
 //
 // Supported env vars:
 //   - MUXAGENT_RELAY_URL
-//   - MUXAGENT_RUNTIMES_<RUNTIME>_BASE_URL
-//   - MUXAGENT_RUNTIMES_<RUNTIME>_USERNAME
-//   - MUXAGENT_RUNTIMES_<RUNTIME>_PASSWORD
+//   - MUXAGENT_RUNTIMES_<RUNTIME>_COMMAND
+//   - MUXAGENT_RUNTIMES_<RUNTIME>_CWD
 func applyEnvOverrides(cfg Config) Config {
 	if val := os.Getenv("MUXAGENT_RELAY_URL"); val != "" {
 		cfg.RelayURL = val
@@ -229,14 +229,11 @@ func applyEnvOverrides(cfg Config) Config {
 	for name, settings := range cfg.Runtimes {
 		prefix := "MUXAGENT_RUNTIMES_" + strings.ToUpper(string(name)) + "_"
 
-		if val := os.Getenv(prefix + "BASE_URL"); val != "" {
-			settings.BaseURL = val
+		if val := os.Getenv(prefix + "COMMAND"); val != "" {
+			settings.Command = val
 		}
-		if val := os.Getenv(prefix + "USERNAME"); val != "" {
-			settings.Auth.Username = val
-		}
-		if val := os.Getenv(prefix + "PASSWORD"); val != "" {
-			settings.Auth.Password = val
+		if val := os.Getenv(prefix + "CWD"); val != "" {
+			settings.CWD = val
 		}
 
 		cfg.Runtimes[name] = settings

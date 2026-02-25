@@ -6,7 +6,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/sst/opencode-sdk-go v0.19.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.32.0
 )
@@ -22,12 +21,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-require (
-	github.com/spf13/cobra v1.10.2
-	github.com/tidwall/gjson v1.14.4 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tidwall/sjson v1.2.5 // indirect
-)
-
-replace github.com/sst/opencode-sdk-go => github.com/anomalyco/opencode-sdk-go v0.19.2
+require github.com/spf13/cobra v1.10.2

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/acptest"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/auth"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/config"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/daemon"
@@ -17,6 +18,7 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	rootCmd.AddCommand(
+		acptest.NewCmd(),
 		auth.NewCmd(),
 		config.NewCmd(),
 		daemon.NewCmd(),

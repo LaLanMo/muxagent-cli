@@ -9,6 +9,7 @@ const (
 	MessageTypeRegistered        MessageType = "registered"
 	MessageTypeSessionInit       MessageType = "session-init"
 	MessageTypeSessionAck        MessageType = "session-ack"
+	MessageTypeSessionEnd        MessageType = "session-end"
 	MessageTypeRPC               MessageType = "rpc"
 	MessageTypeResponse          MessageType = "response"
 	MessageTypeEvent             MessageType = "event"
@@ -63,6 +64,11 @@ type SessionAckMessage struct {
 	MachineID           string      `json:"machine_id"`
 	MachineEphemeralPub string      `json:"machine_ephemeral_pub"`
 	Signature           string      `json:"signature"`
+}
+
+type SessionEndMessage struct {
+	Type      MessageType `json:"type"`
+	MachineID string      `json:"machine_id"`
 }
 
 type EncryptedMessage struct {

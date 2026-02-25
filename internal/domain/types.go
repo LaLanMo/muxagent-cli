@@ -2,34 +2,78 @@ package domain
 
 import "time"
 
+// --- Session ---
+
 type SessionStatus string
 
 const (
+	SessionStatusIdle            SessionStatus = "idle"
 	SessionStatusRunning         SessionStatus = "running"
 	SessionStatusWaitingApproval SessionStatus = "waiting_approval"
 	SessionStatusError           SessionStatus = "error"
 	SessionStatusDone            SessionStatus = "done"
 )
 
-type PartType string
+type Session struct {
+	ID        string         `json:"id"`
+	Title     string         `json:"title"`
+	Status    SessionStatus  `json:"status"`
+	Model     string         `json:"model,omitempty"`
+	Cost      *CostInfo      `json:"cost,omitempty"`
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+// --- Cost ---
+
+type CostInfo struct {
+	TotalUSD     float64 `json:"totalUsd,omitempty"`
+	InputTokens  int64   `json:"inputTokens,omitempty"`
+	OutputTokens int64   `json:"outputTokens,omitempty"`
+	CacheRead    int64   `json:"cacheRead,omitempty"`
+	CacheWrite   int64   `json:"cacheWrite,omitempty"`
+}
+
+// --- Tool ---
+
+type ToolStatus string
 
 const (
-	PartTypeText       PartType = "text"
-	PartTypeImage      PartType = "image"
-	PartTypeAudio      PartType = "audio"
-	PartTypeFile       PartType = "file"
-	PartTypeToolCall   PartType = "tool_call"
-	PartTypeToolResult PartType = "tool_result"
-	PartTypeReasoning  PartType = "reasoning"
-	PartTypeData       PartType = "data"
+	ToolStatusPending    ToolStatus = "pending"
+	ToolStatusInProgress ToolStatus = "in_progress"
+	ToolStatusCompleted  ToolStatus = "completed"
+	ToolStatusFailed     ToolStatus = "failed"
 )
+
+type ToolActivity struct {
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Status   ToolStatus     `json:"status"`
+	Title    string         `json:"title,omitempty"`
+	Input    map[string]any `json:"input,omitempty"`
+	Output   string         `json:"output,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+// --- Message ---
 
 type MessageRole string
 
 const (
-	MessageRoleUser   MessageRole = "user"
-	MessageRoleSystem MessageRole = "system"
-	MessageRoleAgent  MessageRole = "agent"
+	MessageRoleUser  MessageRole = "user"
+	MessageRoleAgent MessageRole = "agent"
+)
+
+type PartType string
+
+const (
+	PartTypeText      PartType = "text"
+	PartTypeReasoning PartType = "reasoning"
+	PartTypeFile      PartType = "file"
+	PartTypeTool      PartType = "tool"
+	PartTypeData      PartType = "data"
 )
 
 type MediaPart struct {
@@ -37,38 +81,15 @@ type MediaPart struct {
 	Base64   string `json:"base64,omitempty"`
 	MimeType string `json:"mimeType,omitempty"`
 	Name     string `json:"name,omitempty"`
-	Path     string `json:"path,omitempty"`
 	Size     int64  `json:"size,omitempty"`
 }
 
-type ToolCallPart struct {
-	ID    string         `json:"id,omitempty"`
-	Name  string         `json:"name,omitempty"`
-	Input map[string]any `json:"input,omitempty"`
-}
-
-type ToolResultPart struct {
-	ToolCallID string         `json:"toolCallId,omitempty"`
-	Content    []MessagePart  `json:"content,omitempty"`
-	Output     string         `json:"output,omitempty"`
-	Data       map[string]any `json:"data,omitempty"`
-}
-
 type MessagePart struct {
-	Type       PartType        `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	Media      *MediaPart      `json:"media,omitempty"`
-	ToolCall   *ToolCallPart   `json:"toolCall,omitempty"`
-	ToolResult *ToolResultPart `json:"toolResult,omitempty"`
-	Data       map[string]any  `json:"data,omitempty"`
-}
-
-type Session struct {
-	ID        string        `json:"id"`
-	Title     string        `json:"title"`
-	Status    SessionStatus `json:"status"`
-	CreatedAt time.Time     `json:"createdAt"`
-	UpdatedAt time.Time     `json:"updatedAt"`
+	Type  PartType       `json:"type"`
+	Text  string         `json:"text,omitempty"`
+	Media *MediaPart     `json:"media,omitempty"`
+	Tool  *ToolActivity  `json:"tool,omitempty"`
+	Data  map[string]any `json:"data,omitempty"`
 }
 
 type Message struct {
@@ -76,61 +97,144 @@ type Message struct {
 	SessionID string         `json:"sessionId"`
 	Role      MessageRole    `json:"role"`
 	Parts     []MessagePart  `json:"parts"`
+	Cost      *CostInfo      `json:"cost,omitempty"`
+	Model     string         `json:"model,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt,omitempty"`
 }
+
+// --- Approval ---
 
 type ApprovalRequest struct {
 	ID        string         `json:"id"`
 	SessionID string         `json:"sessionId"`
+	ToolName  string         `json:"toolName"`
 	Title     string         `json:"title"`
-	Metadata  map[string]any `json:"metadata"`
-	Patterns  []string       `json:"patterns"`
-	CallID    string         `json:"callId"`
-	MessageID string         `json:"messageId"`
+	Kind      string         `json:"kind,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
+	Options   []PermOption   `json:"options,omitempty"`
 	CreatedAt time.Time      `json:"createdAt"`
 }
+
+// --- ACP types ---
+
+// SessionUpdateType is the discriminated union type for ACP session/update notifications.
+type SessionUpdateType string
+
+const (
+	UpdateUserMessageChunk  SessionUpdateType = "user_message_chunk"
+	UpdateAgentMessageChunk SessionUpdateType = "agent_message_chunk"
+	UpdateAgentThoughtChunk SessionUpdateType = "agent_thought_chunk"
+	UpdateToolCall          SessionUpdateType = "tool_call"
+	UpdateToolCallUpdate    SessionUpdateType = "tool_call_update"
+	UpdatePlan              SessionUpdateType = "plan"
+	UpdateAvailableCommands SessionUpdateType = "available_commands_update"
+	UpdateCurrentMode       SessionUpdateType = "current_mode_update"
+	UpdateConfigOption      SessionUpdateType = "config_option_update"
+)
+
+// ContentBlock is an ACP prompt input block.
+type ContentBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"`
+	URI      string `json:"uri,omitempty"`
+}
+
+// PermToolCall describes a tool call in an ACP permission request.
+type PermToolCall struct {
+	ToolCallID string         `json:"toolCallId"`
+	Title      string         `json:"title"`
+	Status     string         `json:"status"`
+	Kind       string         `json:"kind,omitempty"`
+	RawInput   map[string]any `json:"rawInput,omitempty"`
+}
+
+// PermOption describes an available response option in an ACP permission request.
+type PermOption struct {
+	OptionID string `json:"optionId"`
+	Kind     string `json:"kind"`
+	Name     string `json:"name"`
+}
+
+// PermissionRequest is the full ACP permission request from agent to client.
+type PermissionRequest struct {
+	SessionID string        `json:"sessionId"`
+	ToolCall  *PermToolCall `json:"toolCall,omitempty"`
+	Options   []PermOption  `json:"options"`
+}
+
+// PermissionResponse is the ACP permission response from client to agent.
+type PermissionResponse struct {
+	Outcome PermOutcome `json:"outcome"`
+}
+
+// PermOutcome describes the selected permission outcome.
+type PermOutcome struct {
+	Outcome  string `json:"outcome"`
+	OptionID string `json:"optionId"`
+}
+
+// --- Events ---
 
 type EventType string
 
 const (
 	EventMessageDelta      EventType = "message.delta"
 	EventMessageFinal      EventType = "message.final"
+	EventToolStarted       EventType = "tool.started"
+	EventToolUpdated       EventType = "tool.updated"
+	EventToolCompleted     EventType = "tool.completed"
+	EventToolFailed        EventType = "tool.failed"
+	EventReasoning         EventType = "reasoning"
 	EventApprovalRequested EventType = "approval.requested"
 	EventApprovalReplied   EventType = "approval.replied"
 	EventSessionStatus     EventType = "session.status"
 	EventRunFailed         EventType = "run.failed"
 	EventRunFinished       EventType = "run.finished"
 	EventConnectionState   EventType = "connection.state"
+	EventPlanUpdated       EventType = "plan.updated"
 )
 
-// MessagePartEvent represents a streaming text delta event
 type MessagePartEvent struct {
 	PartID    string `json:"partId"`
 	MessageID string `json:"messageId"`
-	Delta     string `json:"delta"`    // Incremental text
-	PartType  string `json:"partType"` // "text", "tool", etc.
-	FullText  string `json:"fullText"` // Accumulated text so far
+	Delta     string `json:"delta"`
+	PartType  string `json:"partType"`
+	FullText  string `json:"fullText"`
 }
 
-// SessionError represents an error that occurred in a session
+type ToolEvent struct {
+	PartID    string         `json:"partId"`
+	MessageID string         `json:"messageId"`
+	CallID    string         `json:"callId"`
+	Name      string         `json:"name"`
+	Title     string         `json:"title,omitempty"`
+	Status    ToolStatus     `json:"status"`
+	Input     map[string]any `json:"input,omitempty"`
+	Output    string         `json:"output,omitempty"`
+	Error     string         `json:"error,omitempty"`
+}
+
 type SessionError struct {
-	Name    string `json:"name"`
+	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
 type Event struct {
 	Type      EventType `json:"type"`
 	SessionID string    `json:"sessionId,omitempty"`
+	Seq       uint64    `json:"seq"`
 	At        time.Time `json:"at"`
 
-	// Rich event data (only one populated based on Type)
 	MessagePart *MessagePartEvent `json:"messagePart,omitempty"`
 	Message     *Message          `json:"message,omitempty"`
+	Tool        *ToolEvent        `json:"tool,omitempty"`
 	Approval    *ApprovalRequest  `json:"approval,omitempty"`
 	Session     *Session          `json:"session,omitempty"`
 	Error       *SessionError     `json:"error,omitempty"`
+	Data        map[string]any    `json:"data,omitempty"`
 }
 
 type ConnectionState string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,9 +12,12 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
+	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/control"
 	"github.com/LaLanMo/muxagent-cli/internal/keyring"
 	"github.com/LaLanMo/muxagent-cli/internal/relayws"
+	"github.com/LaLanMo/muxagent-cli/internal/runtime"
+	"github.com/LaLanMo/muxagent-cli/internal/runtime/acp"
 )
 
 type Daemon struct {
@@ -22,6 +26,8 @@ type Daemon struct {
 	token    string
 	relay    *relayws.Client
 	relayURL string
+	rt       runtime.Client
+	eventBuf *relayws.EventBuffer
 }
 
 func New(relayURL string) *Daemon {
@@ -35,6 +41,29 @@ func (d *Daemon) Start() error {
 	}
 	d.token = token
 
+	// Initialize runtime client
+	cfg, err := config.LoadEffective()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	runtimeSettings, err := cfg.ActiveRuntimeSettings()
+	if err != nil {
+		return fmt.Errorf("failed to get runtime settings: %w", err)
+	}
+
+	rtClient := acp.NewClient(acp.Config{
+		Command: runtimeSettings.Command,
+		Args:    runtimeSettings.Args,
+		CWD:     runtimeSettings.CWD,
+		Env:     runtimeSettings.Env,
+	})
+
+	if err := rtClient.Start(context.Background()); err != nil {
+		return fmt.Errorf("failed to start ACP runtime: %w", err)
+	}
+	d.rt = rtClient
+	d.eventBuf = relayws.NewEventBuffer(4096)
+
 	mux := http.NewServeMux()
 
 	// HTTP endpoints for daemon control only
@@ -47,8 +76,31 @@ func (d *Daemon) Start() error {
 			_ = d.Stop(context.Background())
 		}()
 	})
-
-	// Session/approval/events logic will be handled via WebSocket RPC
+	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Message string `json:"message"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			control.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if payload.Message == "" {
+			payload.Message = "echo from daemon"
+		}
+		if d.relay == nil {
+			control.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "relay not connected"})
+			return
+		}
+		if err := d.relay.SendEcho(map[string]any{
+			"from":    "daemon",
+			"message": payload.Message,
+			"ts":      time.Now().Unix(),
+		}); err != nil {
+			control.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		control.WriteOK(w)
+	})
 
 	server := control.NewServer(token, control.WithAuth(token, mux))
 	addr, err := server.Listen()
@@ -61,7 +113,6 @@ func (d *Daemon) Start() error {
 	// Connect to relay server
 	hostname, _ := os.Hostname()
 
-	// Load credentials (required for authenticated connection)
 	creds, machineSignPriv, _, err := auth.LoadCredentials()
 	if err != nil {
 		return fmt.Errorf("failed to load credentials (run 'muxagent auth login' first): %w", err)
@@ -73,10 +124,13 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to sync keyring: %w", err)
 	}
 
-	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, creds, machineSignPriv, keyringMgr)
+	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, creds, machineSignPriv, keyringMgr, rtClient, d.eventBuf)
 	if err != nil {
 		return fmt.Errorf("failed to create relay client: %w", err)
 	}
+
+	// Start event bridge: runtime events → ring buffer → relay (to mobile)
+	go d.runEventBridge(context.Background(), relayClient)
 
 	go func() {
 		if err := relayClient.Connect(context.Background()); err != nil {
@@ -93,7 +147,32 @@ func (d *Daemon) Start() error {
 	return nil
 }
 
+// runEventBridge reads events from the ACP runtime, pushes them to the ring buffer,
+// and forwards them to the mobile client if a session is active.
+func (d *Daemon) runEventBridge(ctx context.Context, relay *relayws.Client) {
+	events := d.rt.Events()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			ev = d.eventBuf.Push(ev)
+			if relay.HasSession() {
+				if err := relay.SendEvent(ev); err != nil {
+					log.Printf("event forward error: %v", err)
+				}
+			}
+		}
+	}
+}
+
 func (d *Daemon) Stop(ctx context.Context) error {
+	if d.rt != nil {
+		d.rt.Stop()
+	}
 	if d.relay != nil {
 		d.relay.Close()
 	}
