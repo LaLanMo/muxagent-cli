@@ -24,6 +24,7 @@ import (
 type RuntimeClient interface {
 	NewSession(ctx context.Context, cwd string) (string, error)
 	LoadSession(ctx context.Context, sessionID, cwd string) error
+	ListSessions(ctx context.Context) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
 	Cancel(ctx context.Context, sessionID string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error
@@ -283,6 +284,8 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 		result, respErr = c.rpcCreateSession(ctx, payload.Params)
 	case "session.load":
 		result, respErr = c.rpcLoadSession(ctx, payload.Params)
+	case "session.list":
+		result, respErr = c.rpcListSessions(ctx)
 	case "session.prompt":
 		result, respErr = c.rpcPrompt(ctx, payload.Params)
 	case "session.cancel":
@@ -322,7 +325,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 	}
 	cwd, _ := params["cwd"].(string)
 	if cwd == "" {
-		cwd = "."
+		return nil, "missing cwd"
 	}
 	sessionID, err := c.runtime.NewSession(ctx, cwd)
 	if err != nil {
@@ -340,10 +343,34 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 		return nil, "missing sessionId"
 	}
 	cwd, _ := params["cwd"].(string)
+	if cwd == "" {
+		return nil, "missing cwd"
+	}
 	if err := c.runtime.LoadSession(ctx, sessionID, cwd); err != nil {
 		return nil, err.Error()
 	}
 	return map[string]bool{"ok": true}, ""
+}
+
+func (c *Client) rpcListSessions(ctx context.Context) (any, string) {
+	if c.runtime == nil {
+		return nil, "runtime not available"
+	}
+	sessions, err := c.runtime.ListSessions(ctx)
+	if err != nil {
+		return nil, err.Error()
+	}
+
+	result := make([]map[string]any, 0, len(sessions))
+	for _, session := range sessions {
+		result = append(result, map[string]any{
+			"sessionId": session.SessionID,
+			"cwd":       session.CWD,
+			"title":     session.Title,
+			"updatedAt": session.UpdatedAt.Format(time.RFC3339Nano),
+		})
+	}
+	return map[string]any{"sessions": result}, ""
 }
 
 func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, string) {

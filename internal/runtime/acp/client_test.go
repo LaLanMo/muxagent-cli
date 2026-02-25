@@ -98,6 +98,24 @@ func TestClient_InitializeAndNewSession(t *testing.T) {
 	assert.Equal(t, "test-session-001", sessionID)
 }
 
+func TestClient_ListSessions(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClient(t, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sessions, err := client.ListSessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+	assert.Equal(t, "test-session-001", sessions[0].SessionID)
+	assert.Equal(t, "/tmp", sessions[0].CWD)
+	assert.Equal(t, "Mock Session One", sessions[0].Title)
+	assert.Equal(t, "test-session-002", sessions[1].SessionID)
+	assert.Equal(t, "/workspace/mock-project", sessions[1].CWD)
+	assert.Equal(t, "Mock Session Two", sessions[1].Title)
+}
+
 func TestClient_PromptStreamsEvents(t *testing.T) {
 	bin := buildMockAgent(t)
 	client := newTestClient(t, bin)
@@ -138,17 +156,27 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 
 	// Verify tool event details
 	for _, ev := range events {
+		if ev.Type == domain.EventMessageDelta {
+			require.NotNil(t, ev.MessagePart)
+			assert.NotEmpty(t, ev.MessagePart.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.PartID)
+			assert.Equal(t, domain.MessageRoleAgent, ev.MessagePart.Role)
+		}
 		if ev.Type == domain.EventToolStarted {
 			require.NotNil(t, ev.Tool)
 			assert.Equal(t, "call-001", ev.Tool.CallID)
 			assert.Equal(t, "Bash", ev.Tool.Name)
+			assert.NotEmpty(t, ev.Tool.MessageID)
 		}
 		if ev.Type == domain.EventToolCompleted {
 			require.NotNil(t, ev.Tool)
 			assert.Equal(t, "file1.go\nfile2.go", ev.Tool.Output)
+			assert.NotEmpty(t, ev.Tool.MessageID)
 		}
 		if ev.Type == domain.EventReasoning {
 			require.NotNil(t, ev.MessagePart)
+			assert.NotEmpty(t, ev.MessagePart.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.PartID)
 			assert.Equal(t, "reasoning", ev.MessagePart.PartType)
 			assert.Contains(t, ev.MessagePart.Delta, "thinking")
 		}
@@ -213,6 +241,52 @@ func TestClient_Cancel(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestClient_CancelRespondsPendingPermission(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClient(t, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	sessionID, err := client.NewSession(ctx, "/tmp")
+	require.NoError(t, err)
+
+	approvalSeen := make(chan struct{}, 1)
+	promptDone := make(chan error, 1)
+
+	go func() {
+		_, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+			{Type: "text", Text: "trigger permission"},
+		})
+		promptDone <- err
+	}()
+
+	go func() {
+		for ev := range client.Events() {
+			if ev.Type == domain.EventApprovalRequested {
+				approvalSeen <- struct{}{}
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-approvalSeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("approval request was never received")
+	}
+
+	err = client.Cancel(ctx, sessionID)
+	require.NoError(t, err)
+
+	select {
+	case err := <-promptDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("prompt did not resume after cancel response")
+	}
+}
+
 func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	bin := buildMockAgent(t)
 	client := newTestClient(t, bin)
@@ -245,11 +319,38 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 
 	// Verify content
 	var messageParts []string
+	var roleMap = map[domain.MessageRole]int{}
 	for _, ev := range events {
 		if ev.Type == domain.EventMessageDelta && ev.MessagePart != nil {
 			messageParts = append(messageParts, ev.MessagePart.Delta)
+			assert.NotEmpty(t, ev.MessagePart.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.PartID)
+			roleMap[ev.MessagePart.Role]++
+		}
+		if (ev.Type == domain.EventToolStarted || ev.Type == domain.EventToolCompleted) && ev.Tool != nil {
+			assert.NotEmpty(t, ev.Tool.MessageID)
 		}
 	}
+	assert.GreaterOrEqual(t, roleMap[domain.MessageRoleUser], 1, "expected replayed user message chunk")
+	assert.GreaterOrEqual(t, roleMap[domain.MessageRoleAgent], 1, "expected replayed agent message chunk")
+	assert.Contains(t, messageParts, "Hi ")
+	assert.Contains(t, messageParts, "there")
 	assert.Contains(t, messageParts, "History: ")
 	assert.Contains(t, messageParts, "replayed message")
+}
+
+func TestClient_RequiresAbsoluteCWD(t *testing.T) {
+	client := acp.NewClient(acp.Config{})
+
+	_, err := client.NewSession(context.Background(), "")
+	require.ErrorContains(t, err, "cwd must be an absolute path")
+
+	_, err = client.NewSession(context.Background(), "relative/path")
+	require.ErrorContains(t, err, "cwd must be an absolute path")
+
+	err = client.LoadSession(context.Background(), "sid", "")
+	require.ErrorContains(t, err, "cwd must be an absolute path")
+
+	err = client.LoadSession(context.Background(), "sid", "relative/path")
+	require.ErrorContains(t, err, "cwd must be an absolute path")
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -21,10 +22,13 @@ type Config struct {
 	Env     map[string]string
 }
 
-// sessionMsgState tracks the current agent message being streamed for a session.
+// sessionMsgState tracks streamed message IDs for a session when ACP updates
+// do not include stable message/part IDs.
 type sessionMsgState struct {
-	agentMsgID string // ID for the current agent response message
-	textPartID string // ID for the current text part within the message
+	agentMsgID  string
+	agentPartID string
+	userMsgID   string
+	userPartID  string
 }
 
 // Client implements runtime.Client over ACP (JSON-RPC 2.0 over stdio).
@@ -100,8 +104,8 @@ func (c *Client) Stop() error {
 
 // NewSession creates a new ACP session.
 func (c *Client) NewSession(ctx context.Context, cwd string) (string, error) {
-	if cwd == "" {
-		cwd = "."
+	if err := validateAbsoluteCWD(cwd); err != nil {
+		return "", err
 	}
 	params := map[string]any{
 		"cwd":        cwd,
@@ -123,9 +127,14 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (string, error) {
 
 // LoadSession loads an existing session. History is replayed via session/update notifications.
 func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) error {
-	if cwd == "" {
-		cwd = "."
+	if err := validateAbsoluteCWD(cwd); err != nil {
+		return err
 	}
+
+	c.msgMu.Lock()
+	c.sessionMsg[sessionID] = &sessionMsgState{}
+	c.msgMu.Unlock()
+
 	params := map[string]any{
 		"sessionId":  sessionID,
 		"cwd":        cwd,
@@ -138,20 +147,53 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) error {
 	return nil
 }
 
+// ListSessions lists available sessions from ACP runtime.
+func (c *Client) ListSessions(ctx context.Context) ([]domain.SessionSummary, error) {
+	result, err := c.transport.Call(ctx, "session/list", map[string]any{})
+	if err != nil {
+		return nil, fmt.Errorf("session/list: %w", err)
+	}
+
+	var resp struct {
+		Sessions []struct {
+			SessionID string `json:"sessionId"`
+			CWD       string `json:"cwd"`
+			Title     string `json:"title"`
+			UpdatedAt string `json:"updatedAt"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("parse session/list result: %w", err)
+	}
+
+	summaries := make([]domain.SessionSummary, 0, len(resp.Sessions))
+	for _, item := range resp.Sessions {
+		updatedAt := time.Now()
+		if item.UpdatedAt != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, item.UpdatedAt); err == nil {
+				updatedAt = parsed
+			} else if parsed, err := time.Parse(time.RFC3339, item.UpdatedAt); err == nil {
+				updatedAt = parsed
+			}
+		}
+		summaries = append(summaries, domain.SessionSummary{
+			SessionID: item.SessionID,
+			CWD:       item.CWD,
+			Title:     item.Title,
+			UpdatedAt: updatedAt,
+		})
+	}
+	return summaries, nil
+}
+
 // Prompt sends a prompt to the agent. Returns the stop reason when the agent finishes.
 func (c *Client) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error) {
 	// Assign fresh IDs for this agent response turn.
 	c.msgMu.Lock()
-	c.sessionMsg[sessionID] = &sessionMsgState{
-		agentMsgID: uuid.NewString(),
-		textPartID: uuid.NewString(),
-	}
+	state := c.ensureSessionMsgStateLocked(sessionID)
+	state.agentMsgID = uuid.NewString()
+	state.agentPartID = uuid.NewString()
 	c.msgMu.Unlock()
-	defer func() {
-		c.msgMu.Lock()
-		delete(c.sessionMsg, sessionID)
-		c.msgMu.Unlock()
-	}()
 
 	params := map[string]any{
 		"sessionId": sessionID,
@@ -173,9 +215,15 @@ func (c *Client) Prompt(ctx context.Context, sessionID string, content []domain.
 
 // Cancel sends a cancel notification for the given session.
 func (c *Client) Cancel(ctx context.Context, sessionID string) error {
-	return c.transport.Notify("session/cancel", map[string]any{
+	if err := c.transport.Notify("session/cancel", map[string]any{
 		"sessionId": sessionID,
-	})
+	}); err != nil {
+		return err
+	}
+	if err := c.cancelPendingPermissions(sessionID); err != nil {
+		return fmt.Errorf("cancel pending permissions: %w", err)
+	}
+	return nil
 }
 
 // ReplyPermission responds to a pending permission request from the agent.
@@ -221,7 +269,7 @@ func (c *Client) handleNotifications() {
 func (c *Client) handleRequests() {
 	for req := range c.transport.Requests() {
 		switch req.Method {
-		case "session/requestPermission":
+		case "session/request_permission":
 			c.handlePermissionRequest(req)
 		default:
 			log.Printf("[acp] unhandled agent request: %s", req.Method)
@@ -340,14 +388,30 @@ func (c *Client) handleAgentMessageChunk(sessionID string, raw json.RawMessage) 
 		return
 	}
 	c.msgMu.Lock()
-	state := c.sessionMsg[sessionID]
+	state := c.ensureSessionMsgStateLocked(sessionID)
+	// A new assistant chunk closes the previous user chunk grouping.
+	state.userMsgID = ""
+	state.userPartID = ""
+	msgID := update.MessageID
+	if msgID == "" {
+		if state.agentMsgID == "" {
+			state.agentMsgID = uuid.NewString()
+		}
+		msgID = state.agentMsgID
+	} else {
+		state.agentMsgID = msgID
+	}
+	partID := update.PartID
+	if partID == "" {
+		if state.agentPartID == "" {
+			state.agentPartID = uuid.NewString()
+		}
+		partID = state.agentPartID
+	} else {
+		state.agentPartID = partID
+	}
 	c.msgMu.Unlock()
 
-	var msgID, partID string
-	if state != nil {
-		msgID = state.agentMsgID
-		partID = state.textPartID
-	}
 	c.emit(domain.Event{
 		Type:      domain.EventMessageDelta,
 		SessionID: sessionID,
@@ -355,6 +419,7 @@ func (c *Client) handleAgentMessageChunk(sessionID string, raw json.RawMessage) 
 		MessagePart: &domain.MessagePartEvent{
 			MessageID: msgID,
 			PartID:    partID,
+			Role:      domain.MessageRoleAgent,
 			Delta:     update.Content.Text,
 			PartType:  "text",
 		},
@@ -371,20 +436,33 @@ func (c *Client) handleAgentThoughtChunk(sessionID string, raw json.RawMessage) 
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
+	c.msgMu.Lock()
+	state := c.ensureSessionMsgStateLocked(sessionID)
+	if state.agentMsgID == "" {
+		state.agentMsgID = uuid.NewString()
+	}
+	msgID := state.agentMsgID
+	c.msgMu.Unlock()
+
 	c.emit(domain.Event{
 		Type:      domain.EventReasoning,
 		SessionID: sessionID,
 		At:        time.Now(),
 		MessagePart: &domain.MessagePartEvent{
-			Delta:    update.Content.Text,
-			PartType: "reasoning",
+			MessageID: msgID,
+			PartID:    uuid.NewString(),
+			Role:      domain.MessageRoleAgent,
+			Delta:     update.Content.Text,
+			PartType:  "reasoning",
 		},
 	})
 }
 
 func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 	var update struct {
-		Content struct {
+		MessageID string `json:"messageId"`
+		PartID    string `json:"partId"`
+		Content   struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
@@ -392,13 +470,44 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
+
+	c.msgMu.Lock()
+	state := c.ensureSessionMsgStateLocked(sessionID)
+	msgID := update.MessageID
+	partID := update.PartID
+	if msgID == "" {
+		if state.userMsgID == "" {
+			state.userMsgID = uuid.NewString()
+		}
+		msgID = state.userMsgID
+	} else {
+		state.userMsgID = msgID
+	}
+	if partID == "" {
+		if state.userPartID == "" {
+			state.userPartID = uuid.NewString()
+		}
+		partID = state.userPartID
+	} else {
+		state.userPartID = partID
+	}
+	state.userMsgID = msgID
+	state.userPartID = partID
+	// A new user message marks the next assistant response boundary.
+	state.agentMsgID = ""
+	state.agentPartID = ""
+	c.msgMu.Unlock()
+
 	c.emit(domain.Event{
 		Type:      domain.EventMessageDelta,
 		SessionID: sessionID,
 		At:        time.Now(),
 		MessagePart: &domain.MessagePartEvent{
-			Delta:    update.Content.Text,
-			PartType: "user",
+			MessageID: msgID,
+			PartID:    partID,
+			Role:      domain.MessageRoleUser,
+			Delta:     update.Content.Text,
+			PartType:  "text",
 		},
 	})
 }
@@ -413,38 +522,65 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
+	c.msgMu.Lock()
+	state := c.ensureSessionMsgStateLocked(sessionID)
+	if state.agentMsgID == "" {
+		state.agentMsgID = uuid.NewString()
+	}
+	if state.agentPartID == "" {
+		state.agentPartID = uuid.NewString()
+	}
+	msgID := state.agentMsgID
+	partID := state.agentPartID
+	c.msgMu.Unlock()
+
 	c.emit(domain.Event{
 		Type:      domain.EventToolStarted,
 		SessionID: sessionID,
 		At:        time.Now(),
 		Tool: &domain.ToolEvent{
-			CallID: update.ToolCallID,
-			Name:   update.Title,
-			Title:  update.Title,
-			Status: domain.ToolStatusPending,
+			PartID:    partID,
+			MessageID: msgID,
+			CallID:    update.ToolCallID,
+			Name:      update.Title,
+			Title:     update.Title,
+			Status:    domain.ToolStatusPending,
 		},
 	})
 }
 
 func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	var update struct {
-		ToolCallID string         `json:"toolCallId"`
-		Status     string         `json:"status"`
-		Kind       string         `json:"kind"`
-		Title      string         `json:"title"`
-		RawInput   map[string]any `json:"rawInput"`
-		RawOutput  map[string]any `json:"rawOutput"`
+		ToolCallID string          `json:"toolCallId"`
+		Status     string          `json:"status"`
+		Kind       string          `json:"kind"`
+		Title      string          `json:"title"`
+		RawInput   map[string]any  `json:"rawInput"`
+		RawOutput  map[string]any  `json:"rawOutput"`
 		Content    json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
+	c.msgMu.Lock()
+	state := c.ensureSessionMsgStateLocked(sessionID)
+	if state.agentMsgID == "" {
+		state.agentMsgID = uuid.NewString()
+	}
+	if state.agentPartID == "" {
+		state.agentPartID = uuid.NewString()
+	}
+	msgID := state.agentMsgID
+	partID := state.agentPartID
+	c.msgMu.Unlock()
 
 	toolEvent := domain.ToolEvent{
-		CallID: update.ToolCallID,
-		Name:   update.Title,
-		Title:  update.Title,
-		Input:  update.RawInput,
+		PartID:    partID,
+		MessageID: msgID,
+		CallID:    update.ToolCallID,
+		Name:      update.Title,
+		Title:     update.Title,
+		Input:     update.RawInput,
 	}
 
 	var eventType domain.EventType
@@ -535,4 +671,47 @@ func extractTextFromContent(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+func (c *Client) ensureSessionMsgStateLocked(sessionID string) *sessionMsgState {
+	state := c.sessionMsg[sessionID]
+	if state != nil {
+		return state
+	}
+	state = &sessionMsgState{}
+	c.sessionMsg[sessionID] = state
+	return state
+}
+
+func (c *Client) cancelPendingPermissions(sessionID string) error {
+	c.permMu.Lock()
+	toCancel := make([]*pendingPermission, 0)
+	for id, perm := range c.pendingPerm {
+		if perm.request.SessionID != sessionID {
+			continue
+		}
+		toCancel = append(toCancel, perm)
+		delete(c.pendingPerm, id)
+	}
+	c.permMu.Unlock()
+
+	var firstErr error
+	for _, perm := range toCancel {
+		err := c.transport.Respond(perm.rpcID, domain.PermissionResponse{
+			Outcome: domain.PermOutcome{
+				Outcome: "cancelled",
+			},
+		})
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func validateAbsoluteCWD(cwd string) error {
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return fmt.Errorf("cwd must be an absolute path")
+	}
+	return nil
 }

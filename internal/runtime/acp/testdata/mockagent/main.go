@@ -117,7 +117,7 @@ func handlePrompt(id int64, params json.RawMessage) {
 
 	if needsPermission {
 		// Send permission request (agent→client)
-		agentRequest(9000, "session/requestPermission", map[string]any{
+		agentRequest(9000, "session/request_permission", map[string]any{
 			"sessionId": sid,
 			"toolCall": map[string]any{
 				"toolCallId": "call-001",
@@ -226,6 +226,14 @@ func main() {
 
 			// Replay history
 			sessionUpdate(sid, map[string]any{
+				"sessionUpdate": "user_message_chunk",
+				"content":       map[string]any{"type": "text", "text": "Hi "},
+			})
+			sessionUpdate(sid, map[string]any{
+				"sessionUpdate": "user_message_chunk",
+				"content":       map[string]any{"type": "text", "text": "there"},
+			})
+			sessionUpdate(sid, map[string]any{
 				"sessionUpdate": "agent_message_chunk",
 				"content":       map[string]any{"type": "text", "text": "History: "},
 			})
@@ -249,6 +257,24 @@ func main() {
 			})
 
 			respond(id, map[string]any{"ok": true})
+
+		case "session/list":
+			respond(id, map[string]any{
+				"sessions": []map[string]any{
+					{
+						"sessionId": "test-session-001",
+						"cwd":       "/tmp",
+						"title":     "Mock Session One",
+						"updatedAt": "2026-02-25T00:00:00Z",
+					},
+					{
+						"sessionId": "test-session-002",
+						"cwd":       "/workspace/mock-project",
+						"title":     "Mock Session Two",
+						"updatedAt": "2026-02-25T01:00:00Z",
+					},
+				},
+			})
 
 		case "session/prompt":
 			// Handle in goroutine so read loop can continue to

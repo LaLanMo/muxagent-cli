@@ -25,6 +25,14 @@ type Session struct {
 	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
+// SessionSummary is a lightweight ACP session list entry.
+type SessionSummary struct {
+	SessionID string    `json:"sessionId"`
+	CWD       string    `json:"cwd"`
+	Title     string    `json:"title"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // --- Cost ---
 
 type CostInfo struct {
@@ -173,7 +181,7 @@ type PermissionResponse struct {
 // PermOutcome describes the selected permission outcome.
 type PermOutcome struct {
 	Outcome  string `json:"outcome"`
-	OptionID string `json:"optionId"`
+	OptionID string `json:"optionId,omitempty"`
 }
 
 // --- Events ---
@@ -198,11 +206,12 @@ const (
 )
 
 type MessagePartEvent struct {
-	PartID    string `json:"partId"`
-	MessageID string `json:"messageId"`
-	Delta     string `json:"delta"`
-	PartType  string `json:"partType"`
-	FullText  string `json:"fullText"`
+	PartID    string      `json:"partId"`
+	MessageID string      `json:"messageId"`
+	Role      MessageRole `json:"role,omitempty"`
+	Delta     string      `json:"delta"`
+	PartType  string      `json:"partType"`
+	FullText  string      `json:"fullText"`
 }
 
 type ToolEvent struct {
