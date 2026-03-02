@@ -13,7 +13,6 @@ type Client interface {
 
 	NewSession(ctx context.Context, cwd string) (string, error)
 	LoadSession(ctx context.Context, sessionID, cwd string) error
-	ListSessions(ctx context.Context) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
 	Cancel(ctx context.Context, sessionID string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error

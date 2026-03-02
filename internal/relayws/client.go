@@ -19,15 +19,21 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
+const (
+	pingInterval = 15 * time.Second
+	pongTimeout  = 10 * time.Second
+	writeWait    = 5 * time.Second
+)
+
 // RuntimeClient is the subset of runtime.Client that the relay needs.
 // Defined here to avoid a circular import with the runtime package.
 type RuntimeClient interface {
 	NewSession(ctx context.Context, cwd string) (string, error)
 	LoadSession(ctx context.Context, sessionID, cwd string) error
-	ListSessions(ctx context.Context) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
 	Cancel(ctx context.Context, sessionID string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error
+	PendingApprovals() []domain.ApprovalRequest
 }
 
 type Client struct {
@@ -47,6 +53,9 @@ type Client struct {
 
 	runtime  RuntimeClient
 	eventBuf *EventBuffer
+
+	sessionCWDMu sync.RWMutex
+	sessionCWD   map[string]string // sessionID → cwd
 }
 
 func NewMachineClient(
@@ -75,6 +84,7 @@ func NewMachineClient(
 		keyring:         keyringMgr,
 		runtime:         rt,
 		eventBuf:        eventBuf,
+		sessionCWD:      make(map[string]string),
 	}, nil
 }
 
@@ -85,6 +95,15 @@ func (c *Client) HasSession() bool {
 }
 
 func (c *Client) Connect(ctx context.Context) error {
+	// Clean up previous connection state for reconnect.
+	if c.conn != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+	}
+	c.sessionMu.Lock()
+	c.session = nil
+	c.sessionMu.Unlock()
+
 	conn, _, err := websocket.DefaultDialer.Dial(c.relayURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial relay: %w", err)
@@ -128,6 +147,13 @@ func (c *Client) Connect(ctx context.Context) error {
 				return fmt.Errorf("send challenge response: %w", err)
 			}
 		case MessageTypeRegistered:
+			// Relay sends pings; we reply with pongs and reset the read deadline.
+			// Overriding the default ping handler means we must send the pong ourselves.
+			conn.SetPingHandler(func(appData string) error {
+				_ = conn.SetReadDeadline(time.Now().Add(pingInterval + pongTimeout))
+				return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeWait))
+			})
+			_ = conn.SetReadDeadline(time.Now().Add(pingInterval + pongTimeout))
 			return nil
 		case MessageTypeError:
 			var msg ErrorMessage
@@ -179,7 +205,10 @@ func (c *Client) Run(ctx context.Context) error {
 			if err := json.Unmarshal(raw, &enc); err != nil {
 				continue
 			}
-			c.handleRPC(enc)
+			// RPCs like session.prompt can block for a long time while the agent runs.
+			// Handle them off the read loop so follow-up requests like session.cancel
+			// and session.load are still processed promptly.
+			go c.handleRPC(enc)
 		case MessageTypeResponse:
 			var enc EncryptedMessage
 			if err := json.Unmarshal(raw, &enc); err != nil {
@@ -284,8 +313,8 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 		result, respErr = c.rpcCreateSession(ctx, payload.Params)
 	case "session.load":
 		result, respErr = c.rpcLoadSession(ctx, payload.Params)
-	case "session.list":
-		result, respErr = c.rpcListSessions(ctx)
+	case "session.resolve":
+		result, respErr = c.rpcResolveSessions(ctx, payload.Params)
 	case "session.prompt":
 		result, respErr = c.rpcPrompt(ctx, payload.Params)
 	case "session.cancel":
@@ -294,6 +323,8 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 		result, respErr = c.rpcReplyPermission(ctx, payload.Params)
 	case "events.resync":
 		result, respErr = c.rpcResyncEvents(ctx, payload.Params)
+	case "approvals.pending":
+		result, respErr = c.rpcPendingApprovals(ctx, payload.Params)
 	case "echo":
 		log.Printf("echo request from client: %v", payload.Params)
 		result = payload.Params
@@ -331,6 +362,9 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 	if err != nil {
 		return nil, err.Error()
 	}
+	c.sessionCWDMu.Lock()
+	c.sessionCWD[sessionID] = cwd
+	c.sessionCWDMu.Unlock()
 	return map[string]string{"sessionId": sessionID}, ""
 }
 
@@ -349,28 +383,27 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	if err := c.runtime.LoadSession(ctx, sessionID, cwd); err != nil {
 		return nil, err.Error()
 	}
+	c.sessionCWDMu.Lock()
+	c.sessionCWD[sessionID] = cwd
+	c.sessionCWDMu.Unlock()
 	return map[string]bool{"ok": true}, ""
 }
 
-func (c *Client) rpcListSessions(ctx context.Context) (any, string) {
-	if c.runtime == nil {
-		return nil, "runtime not available"
+func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) (any, string) {
+	rawIDs, _ := params["sessionIds"].([]any)
+	sessionIDs := make([]string, 0, len(rawIDs))
+	for _, item := range rawIDs {
+		id, _ := item.(string)
+		if id == "" {
+			continue
+		}
+		sessionIDs = append(sessionIDs, id)
 	}
-	sessions, err := c.runtime.ListSessions(ctx)
+	sessions, err := resolveSessionSummaries(ctx, sessionIDs)
 	if err != nil {
 		return nil, err.Error()
 	}
-
-	result := make([]map[string]any, 0, len(sessions))
-	for _, session := range sessions {
-		result = append(result, map[string]any{
-			"sessionId": session.SessionID,
-			"cwd":       session.CWD,
-			"title":     session.Title,
-			"updatedAt": session.UpdatedAt.Format(time.RFC3339Nano),
-		})
-	}
-	return map[string]any{"sessions": result}, ""
+	return map[string]any{"sessions": sessions}, ""
 }
 
 func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, string) {
@@ -401,6 +434,11 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		}
 	}
 
+	// Look up the CWD for this session (saved during create/load)
+	c.sessionCWDMu.RLock()
+	cwd := c.sessionCWD[sessionID]
+	c.sessionCWDMu.RUnlock()
+
 	stopReason, err := c.runtime.Prompt(ctx, sessionID, content)
 	now := time.Now()
 	if err != nil {
@@ -410,6 +448,7 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 			At:        now,
 			Error:     &domain.SessionError{Code: "prompt_error", Message: err.Error()},
 		})
+		c.syncSessionStatus(ctx, sessionID, cwd)
 		return nil, err.Error()
 	}
 	_ = c.SendEvent(domain.Event{
@@ -418,6 +457,7 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		At:        now,
 		Data:      map[string]any{"stopReason": stopReason},
 	})
+	c.syncSessionStatus(ctx, sessionID, cwd)
 	return map[string]string{"stopReason": stopReason}, ""
 }
 
@@ -454,7 +494,21 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 	if err := c.runtime.ReplyPermission(ctx, sessionID, requestID, optionID); err != nil {
 		return nil, err.Error()
 	}
+	_ = c.SendEvent(domain.Event{
+		Type:      domain.EventApprovalReplied,
+		SessionID: sessionID,
+		At:        time.Now(),
+		Approval:  &domain.ApprovalRequest{ID: requestID, SessionID: sessionID},
+	})
 	return map[string]bool{"ok": true}, ""
+}
+
+func (c *Client) rpcPendingApprovals(ctx context.Context, params map[string]any) (any, string) {
+	if c.runtime == nil {
+		return nil, "runtime not available"
+	}
+	approvals := c.runtime.PendingApprovals()
+	return map[string]any{"approvals": approvals}, ""
 }
 
 func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (any, string) {
@@ -472,6 +526,32 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (an
 		"complete": complete,
 		"seq":      c.eventBuf.Seq(),
 	}, ""
+}
+
+func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
+	sessions, err := resolveSessionSummaries(ctx, []string{sessionID})
+	if err != nil {
+		log.Printf("syncSessionStatus: resolve session %s: %v", sessionID, err)
+		return
+	}
+	for _, s := range sessions {
+		if s.SessionID == sessionID {
+			_ = c.SendEvent(domain.Event{
+				Type:      domain.EventSessionStatus,
+				SessionID: sessionID,
+				At:        s.UpdatedAt,
+				Session: &domain.Session{
+					ID:        s.SessionID,
+					Title:     s.Title,
+					Status:    domain.SessionStatusDone,
+					CreatedAt: s.UpdatedAt,
+					UpdatedAt: s.UpdatedAt,
+					Metadata:  map[string]any{"cwd": s.CWD},
+				},
+			})
+			return
+		}
+	}
 }
 
 // --- Event forwarding ---

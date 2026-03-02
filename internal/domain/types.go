@@ -57,6 +57,7 @@ const (
 type ToolActivity struct {
 	ID       string         `json:"id"`
 	Name     string         `json:"name"`
+	Kind     string         `json:"kind,omitempty"`
 	Status   ToolStatus     `json:"status"`
 	Title    string         `json:"title,omitempty"`
 	Input    map[string]any `json:"input,omitempty"`
@@ -114,14 +115,15 @@ type Message struct {
 // --- Approval ---
 
 type ApprovalRequest struct {
-	ID        string         `json:"id"`
-	SessionID string         `json:"sessionId"`
-	ToolName  string         `json:"toolName"`
-	Title     string         `json:"title"`
-	Kind      string         `json:"kind,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	Options   []PermOption   `json:"options,omitempty"`
-	CreatedAt time.Time      `json:"createdAt"`
+	ID         string         `json:"id"`
+	SessionID  string         `json:"sessionId"`
+	ToolCallID string         `json:"toolCallId,omitempty"`
+	ToolName   string         `json:"toolName"`
+	Title      string         `json:"title"`
+	Kind       string         `json:"kind,omitempty"`
+	Input      map[string]any `json:"input,omitempty"`
+	Options    []PermOption   `json:"options,omitempty"`
+	CreatedAt  time.Time      `json:"createdAt"`
 }
 
 // --- ACP types ---
@@ -219,6 +221,7 @@ type ToolEvent struct {
 	MessageID string         `json:"messageId"`
 	CallID    string         `json:"callId"`
 	Name      string         `json:"name"`
+	Kind      string         `json:"kind,omitempty"`
 	Title     string         `json:"title,omitempty"`
 	Status    ToolStatus     `json:"status"`
 	Input     map[string]any `json:"input,omitempty"`

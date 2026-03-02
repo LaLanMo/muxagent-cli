@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,11 +106,12 @@ func (c *Client) Stop() error {
 
 // NewSession creates a new ACP session.
 func (c *Client) NewSession(ctx context.Context, cwd string) (string, error) {
-	if err := validateAbsoluteCWD(cwd); err != nil {
+	resolved, err := expandAndValidateCWD(cwd)
+	if err != nil {
 		return "", err
 	}
 	params := map[string]any{
-		"cwd":        cwd,
+		"cwd":        resolved,
 		"mcpServers": []any{},
 	}
 	result, err := c.transport.Call(ctx, "session/new", params)
@@ -127,7 +130,8 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (string, error) {
 
 // LoadSession loads an existing session. History is replayed via session/update notifications.
 func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) error {
-	if err := validateAbsoluteCWD(cwd); err != nil {
+	resolved, err := expandAndValidateCWD(cwd)
+	if err != nil {
 		return err
 	}
 
@@ -137,53 +141,14 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) error {
 
 	params := map[string]any{
 		"sessionId":  sessionID,
-		"cwd":        cwd,
+		"cwd":        resolved,
 		"mcpServers": []any{},
 	}
-	_, err := c.transport.Call(ctx, "session/load", params)
+	_, err = c.transport.Call(ctx, "session/load", params)
 	if err != nil {
 		return fmt.Errorf("session/load: %w", err)
 	}
 	return nil
-}
-
-// ListSessions lists available sessions from ACP runtime.
-func (c *Client) ListSessions(ctx context.Context) ([]domain.SessionSummary, error) {
-	result, err := c.transport.Call(ctx, "session/list", map[string]any{})
-	if err != nil {
-		return nil, fmt.Errorf("session/list: %w", err)
-	}
-
-	var resp struct {
-		Sessions []struct {
-			SessionID string `json:"sessionId"`
-			CWD       string `json:"cwd"`
-			Title     string `json:"title"`
-			UpdatedAt string `json:"updatedAt"`
-		} `json:"sessions"`
-	}
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, fmt.Errorf("parse session/list result: %w", err)
-	}
-
-	summaries := make([]domain.SessionSummary, 0, len(resp.Sessions))
-	for _, item := range resp.Sessions {
-		updatedAt := time.Now()
-		if item.UpdatedAt != "" {
-			if parsed, err := time.Parse(time.RFC3339Nano, item.UpdatedAt); err == nil {
-				updatedAt = parsed
-			} else if parsed, err := time.Parse(time.RFC3339, item.UpdatedAt); err == nil {
-				updatedAt = parsed
-			}
-		}
-		summaries = append(summaries, domain.SessionSummary{
-			SessionID: item.SessionID,
-			CWD:       item.CWD,
-			Title:     item.Title,
-			UpdatedAt: updatedAt,
-		})
-	}
-	return summaries, nil
 }
 
 // Prompt sends a prompt to the agent. Returns the stop reason when the agent finishes.
@@ -248,6 +213,17 @@ func (c *Client) ReplyPermission(ctx context.Context, sessionID, requestID, opti
 	return c.transport.Respond(perm.rpcID, resp)
 }
 
+// PendingApprovals returns a snapshot of all pending approval requests.
+func (c *Client) PendingApprovals() []domain.ApprovalRequest {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	result := make([]domain.ApprovalRequest, 0, len(c.pendingPerm))
+	for _, perm := range c.pendingPerm {
+		result = append(result, perm.request)
+	}
+	return result
+}
+
 // Events returns the channel for receiving domain events.
 func (c *Client) Events() <-chan domain.Event {
 	return c.events
@@ -308,6 +284,7 @@ func (c *Client) handlePermissionRequest(req *IncomingMessage) {
 	}
 
 	if permReq.ToolCall != nil {
+		approval.ToolCallID = permReq.ToolCall.ToolCallID
 		approval.ToolName = permReq.ToolCall.Title
 		approval.Title = permReq.ToolCall.Title
 		approval.Kind = permReq.ToolCall.Kind
@@ -372,6 +349,7 @@ func (c *Client) handleSessionUpdate(params json.RawMessage) {
 		c.handlePlan(sessionID, full.Update)
 	default:
 		// available_commands_update, current_mode_update, config_option_update — ignore
+		log.Printf("[acp] ignored session/update type: %s", updateType)
 	}
 }
 
@@ -442,6 +420,9 @@ func (c *Client) handleAgentThoughtChunk(sessionID string, raw json.RawMessage) 
 		state.agentMsgID = uuid.NewString()
 	}
 	msgID := state.agentMsgID
+	// Clear agentPartID so any text chunk after a thought chunk creates
+	// a new message part instead of appending to pre-thought text.
+	state.agentPartID = ""
 	c.msgMu.Unlock()
 
 	c.emit(domain.Event{
@@ -527,11 +508,12 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 	if state.agentMsgID == "" {
 		state.agentMsgID = uuid.NewString()
 	}
-	if state.agentPartID == "" {
-		state.agentPartID = uuid.NewString()
-	}
 	msgID := state.agentMsgID
-	partID := state.agentPartID
+	// Each tool gets its own partID and clears agentPartID so the next
+	// text chunk after a tool call creates a fresh message part instead
+	// of appending to the pre-tool text.
+	partID := uuid.NewString()
+	state.agentPartID = ""
 	c.msgMu.Unlock()
 
 	c.emit(domain.Event{
@@ -543,6 +525,7 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 			MessageID: msgID,
 			CallID:    update.ToolCallID,
 			Name:      update.Title,
+			Kind:      update.Kind,
 			Title:     update.Title,
 			Status:    domain.ToolStatusPending,
 		},
@@ -567,11 +550,9 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	if state.agentMsgID == "" {
 		state.agentMsgID = uuid.NewString()
 	}
-	if state.agentPartID == "" {
-		state.agentPartID = uuid.NewString()
-	}
 	msgID := state.agentMsgID
-	partID := state.agentPartID
+	partID := uuid.NewString()
+	state.agentPartID = ""
 	c.msgMu.Unlock()
 
 	toolEvent := domain.ToolEvent{
@@ -579,6 +560,7 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		MessageID: msgID,
 		CallID:    update.ToolCallID,
 		Name:      update.Title,
+		Kind:      update.Kind,
 		Title:     update.Title,
 		Input:     update.RawInput,
 	}
@@ -709,9 +691,16 @@ func (c *Client) cancelPendingPermissions(sessionID string) error {
 	return firstErr
 }
 
-func validateAbsoluteCWD(cwd string) error {
-	if cwd == "" || !filepath.IsAbs(cwd) {
-		return fmt.Errorf("cwd must be an absolute path")
+func expandAndValidateCWD(cwd string) (string, error) {
+	if strings.HasPrefix(cwd, "~/") || cwd == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve home directory: %w", err)
+		}
+		cwd = filepath.Join(home, cwd[1:])
 	}
-	return nil
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return "", fmt.Errorf("cwd must be an absolute path")
+	}
+	return cwd, nil
 }

@@ -98,24 +98,6 @@ func TestClient_InitializeAndNewSession(t *testing.T) {
 	assert.Equal(t, "test-session-001", sessionID)
 }
 
-func TestClient_ListSessions(t *testing.T) {
-	bin := buildMockAgent(t)
-	client := newTestClient(t, bin)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	sessions, err := client.ListSessions(ctx)
-	require.NoError(t, err)
-	require.Len(t, sessions, 2)
-	assert.Equal(t, "test-session-001", sessions[0].SessionID)
-	assert.Equal(t, "/tmp", sessions[0].CWD)
-	assert.Equal(t, "Mock Session One", sessions[0].Title)
-	assert.Equal(t, "test-session-002", sessions[1].SessionID)
-	assert.Equal(t, "/workspace/mock-project", sessions[1].CWD)
-	assert.Equal(t, "Mock Session Two", sessions[1].Title)
-}
-
 func TestClient_PromptStreamsEvents(t *testing.T) {
 	bin := buildMockAgent(t)
 	client := newTestClient(t, bin)

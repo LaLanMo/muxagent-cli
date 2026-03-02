@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
+	"github.com/LaLanMo/muxagent-cli/internal/relayws"
 	"github.com/spf13/cobra"
 )
 
@@ -31,6 +33,28 @@ func newStartCmd() *cobra.Command {
 				if err := config.CleanStaleLock(); err != nil {
 					return fmt.Errorf("clean stale lock: %w", err)
 				}
+			}
+
+			if !auth.HasCredentials() {
+				fmt.Println("No credentials found. Starting authentication...")
+				cfg, err := config.LoadEffective()
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				httpURL := relayws.HTTPURLFromWS(cfg.RelayURL)
+				flow := auth.NewAuthFlow(httpURL)
+				if _, err := flow.RunAuthFlow(cmd.Context(), func(qrURL string) error {
+					fmt.Println("Scan this QR code with the muxagent mobile app:")
+					if err := auth.QRTerminalOutput(os.Stdout, qrURL); err != nil {
+						fmt.Println("(Could not display QR code)")
+					}
+					fmt.Printf("\nOr open this URL manually:\n%s\n\n", qrURL)
+					fmt.Println("Waiting for approval...")
+					return nil
+				}); err != nil {
+					return fmt.Errorf("authentication failed: %w", err)
+				}
+				fmt.Println("Authentication successful!")
 			}
 
 			exe, err := os.Executable()

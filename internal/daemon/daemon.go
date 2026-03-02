@@ -133,13 +133,20 @@ func (d *Daemon) Start() error {
 	go d.runEventBridge(context.Background(), relayClient)
 
 	go func() {
-		if err := relayClient.Connect(context.Background()); err != nil {
-			log.Printf("Relay connect failed: %v", err)
-			return
-		}
+		backoff := time.Second
+		const maxBackoff = 30 * time.Second
+		for {
+			if err := relayClient.Connect(context.Background()); err != nil {
+				log.Printf("Relay connect failed: %v (retry in %v)", err, backoff)
+				time.Sleep(backoff)
+				backoff = min(backoff*2, maxBackoff)
+				continue
+			}
+			backoff = time.Second // reset on successful connect
 
-		if err := relayClient.Run(context.Background()); err != nil {
-			log.Printf("Relay run error: %v", err)
+			if err := relayClient.Run(context.Background()); err != nil {
+				log.Printf("Relay connection lost: %v (reconnecting...)", err)
+			}
 		}
 	}()
 
