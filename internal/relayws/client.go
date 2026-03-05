@@ -33,6 +33,7 @@ type RuntimeClient interface {
 	ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
 	Cancel(ctx context.Context, sessionID string) error
+	SetMode(ctx context.Context, sessionID, modeID string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error
 	PendingApprovals() []domain.ApprovalRequest
 }
@@ -322,6 +323,8 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 		result, respErr = c.rpcPrompt(ctx, payload.Params)
 	case "session.cancel":
 		result, respErr = c.rpcCancel(ctx, payload.Params)
+	case "session.setMode":
+		result, respErr = c.rpcSetMode(ctx, payload.Params)
 	case "approval.reply":
 		result, respErr = c.rpcReplyPermission(ctx, payload.Params)
 	case "events.resync":
@@ -493,6 +496,24 @@ func (c *Client) rpcCancel(ctx context.Context, params map[string]any) (any, str
 		return nil, "missing sessionId"
 	}
 	if err := c.runtime.Cancel(ctx, sessionID); err != nil {
+		return nil, err.Error()
+	}
+	return map[string]bool{"ok": true}, ""
+}
+
+func (c *Client) rpcSetMode(ctx context.Context, params map[string]any) (any, string) {
+	if c.runtime == nil {
+		return nil, "runtime not available"
+	}
+	sessionID, _ := params["sessionId"].(string)
+	if sessionID == "" {
+		return nil, "missing sessionId"
+	}
+	modeID, _ := params["permissionMode"].(string)
+	if modeID == "" {
+		return nil, "missing permissionMode"
+	}
+	if err := c.runtime.SetMode(ctx, sessionID, modeID); err != nil {
 		return nil, err.Error()
 	}
 	return map[string]bool{"ok": true}, ""

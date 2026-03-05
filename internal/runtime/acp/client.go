@@ -281,6 +281,24 @@ func (c *Client) Cancel(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// SetMode changes the permission mode for the given session.
+func (c *Client) SetMode(ctx context.Context, sessionID, modeID string) error {
+	_, err := c.transport.Call(ctx, "session/set_mode", map[string]any{
+		"sessionId": sessionID,
+		"modeId":    modeID,
+	})
+	if err != nil {
+		return fmt.Errorf("session/set_mode: %w", err)
+	}
+	c.emit(domain.Event{
+		Type:      domain.EventModeChanged,
+		SessionID: sessionID,
+		At:        time.Now(),
+		Data:      map[string]any{"currentModeId": modeID},
+	})
+	return nil
+}
+
 // ReplyPermission responds to a pending permission request from the agent.
 func (c *Client) ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error {
 	c.permMu.Lock()

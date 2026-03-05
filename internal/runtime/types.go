@@ -16,6 +16,7 @@ type Client interface {
 	ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
 	Cancel(ctx context.Context, sessionID string) error
+	SetMode(ctx context.Context, sessionID, modeID string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error
 
 	Events() <-chan domain.Event
