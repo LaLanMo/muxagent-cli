@@ -28,8 +28,9 @@ const (
 // RuntimeClient is the subset of runtime.Client that the relay needs.
 // Defined here to avoid a circular import with the runtime package.
 type RuntimeClient interface {
-	NewSession(ctx context.Context, cwd string) (string, error)
-	LoadSession(ctx context.Context, sessionID, cwd string) error
+	NewSession(ctx context.Context, cwd string, permissionMode string) (string, error)
+	LoadSession(ctx context.Context, sessionID, cwd, permissionMode string) error
+	ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
 	Cancel(ctx context.Context, sessionID string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error
@@ -40,6 +41,7 @@ type Client struct {
 	relayURL  string
 	machineID string
 	hostname  string
+	runtimeID string
 
 	creds           *auth.Credentials
 	machineSignPriv ed25519.PrivateKey
@@ -59,7 +61,7 @@ type Client struct {
 }
 
 func NewMachineClient(
-	relayURL, hostname string,
+	relayURL, hostname, runtimeID string,
 	creds *auth.Credentials,
 	machineSignPriv ed25519.PrivateKey,
 	keyringMgr *keyring.Manager,
@@ -79,6 +81,7 @@ func NewMachineClient(
 		relayURL:        relayURL,
 		machineID:       creds.MachineID,
 		hostname:        hostname,
+		runtimeID:       runtimeID,
 		creds:           creds,
 		machineSignPriv: machineSignPriv,
 		keyring:         keyringMgr,
@@ -358,14 +361,15 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
-	sessionID, err := c.runtime.NewSession(ctx, cwd)
+	permissionMode, _ := params["permissionMode"].(string)
+	sessionID, err := c.runtime.NewSession(ctx, cwd, permissionMode)
 	if err != nil {
 		return nil, err.Error()
 	}
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = cwd
 	c.sessionCWDMu.Unlock()
-	return map[string]string{"sessionId": sessionID}, ""
+	return map[string]string{"sessionId": sessionID, "runtime": c.runtimeID}, ""
 }
 
 func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any, string) {
@@ -380,7 +384,8 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
-	if err := c.runtime.LoadSession(ctx, sessionID, cwd); err != nil {
+	permissionMode, _ := params["permissionMode"].(string)
+	if err := c.runtime.LoadSession(ctx, sessionID, cwd, permissionMode); err != nil {
 		return nil, err.Error()
 	}
 	c.sessionCWDMu.Lock()
@@ -390,20 +395,32 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 }
 
 func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) (any, string) {
+	if c.runtime == nil {
+		return nil, "runtime not available"
+	}
 	rawIDs, _ := params["sessionIds"].([]any)
-	sessionIDs := make([]string, 0, len(rawIDs))
+	wanted := make(map[string]struct{}, len(rawIDs))
 	for _, item := range rawIDs {
 		id, _ := item.(string)
-		if id == "" {
-			continue
+		if id != "" {
+			wanted[id] = struct{}{}
 		}
-		sessionIDs = append(sessionIDs, id)
 	}
-	sessions, err := resolveSessionSummaries(ctx, sessionIDs)
+	all, err := c.runtime.ListSessions(ctx, "")
 	if err != nil {
 		return nil, err.Error()
 	}
-	return map[string]any{"sessions": sessions}, ""
+	// If caller provided specific IDs, filter to those only.
+	if len(wanted) > 0 {
+		filtered := make([]domain.SessionSummary, 0, len(wanted))
+		for _, s := range all {
+			if _, ok := wanted[s.SessionID]; ok {
+				filtered = append(filtered, s)
+			}
+		}
+		all = filtered
+	}
+	return map[string]any{"sessions": all}, ""
 }
 
 func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, string) {
@@ -439,26 +456,32 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 	cwd := c.sessionCWD[sessionID]
 	c.sessionCWDMu.RUnlock()
 
-	stopReason, err := c.runtime.Prompt(ctx, sessionID, content)
-	now := time.Now()
-	if err != nil {
+	// Run the prompt asynchronously — return ACK immediately so the
+	// Flutter client's RPC timeout doesn't fire.  Use context.Background()
+	// because the handleRPC ctx lifetime ends when we return.
+	go func() {
+		stopReason, err := c.runtime.Prompt(context.Background(), sessionID, content)
+		now := time.Now()
+		if err != nil {
+			_ = c.SendEvent(domain.Event{
+				Type:      domain.EventRunFailed,
+				SessionID: sessionID,
+				At:        now,
+				Error:     &domain.SessionError{Code: "prompt_error", Message: err.Error()},
+			})
+			// Don't call syncSessionStatus — run.failed already signals the error state.
+			return
+		}
 		_ = c.SendEvent(domain.Event{
-			Type:      domain.EventRunFailed,
+			Type:      domain.EventRunFinished,
 			SessionID: sessionID,
 			At:        now,
-			Error:     &domain.SessionError{Code: "prompt_error", Message: err.Error()},
+			Data:      map[string]any{"stopReason": stopReason},
 		})
-		c.syncSessionStatus(ctx, sessionID, cwd)
-		return nil, err.Error()
-	}
-	_ = c.SendEvent(domain.Event{
-		Type:      domain.EventRunFinished,
-		SessionID: sessionID,
-		At:        now,
-		Data:      map[string]any{"stopReason": stopReason},
-	})
-	c.syncSessionStatus(ctx, sessionID, cwd)
-	return map[string]string{"stopReason": stopReason}, ""
+		c.syncSessionStatus(context.Background(), sessionID, cwd)
+	}()
+
+	return map[string]any{"accepted": true}, ""
 }
 
 func (c *Client) rpcCancel(ctx context.Context, params map[string]any) (any, string) {
@@ -529,12 +552,15 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (an
 }
 
 func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
-	sessions, err := resolveSessionSummaries(ctx, []string{sessionID})
-	if err != nil {
-		log.Printf("syncSessionStatus: resolve session %s: %v", sessionID, err)
+	if c.runtime == nil {
 		return
 	}
-	for _, s := range sessions {
+	all, err := c.runtime.ListSessions(ctx, "")
+	if err != nil {
+		log.Printf("syncSessionStatus: list sessions: %v", err)
+		return
+	}
+	for _, s := range all {
 		if s.SessionID == sessionID {
 			_ = c.SendEvent(domain.Event{
 				Type:      domain.EventSessionStatus,

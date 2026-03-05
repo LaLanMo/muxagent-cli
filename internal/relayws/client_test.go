@@ -19,11 +19,11 @@ type blockingRuntime struct {
 	unblock     chan struct{}
 }
 
-func (r *blockingRuntime) NewSession(ctx context.Context, cwd string) (string, error) {
+func (r *blockingRuntime) NewSession(ctx context.Context, cwd string, permissionMode string) (string, error) {
 	return "sid", nil
 }
 
-func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd string) error {
+func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd, permissionMode string) error {
 	select {
 	case r.loadStarted <- struct{}{}:
 	default:
@@ -47,6 +47,10 @@ func (r *blockingRuntime) Cancel(ctx context.Context, sessionID string) error {
 
 func (r *blockingRuntime) ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error {
 	return nil
+}
+
+func (r *blockingRuntime) ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error) {
+	return nil, nil
 }
 
 func (r *blockingRuntime) PendingApprovals() []domain.ApprovalRequest { return nil }
@@ -134,6 +138,16 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 	}
 }
 
+// listingRuntime is a runtime mock that returns a fixed session list.
+type listingRuntime struct {
+	blockingRuntime
+	sessions []domain.SessionSummary
+}
+
+func (r *listingRuntime) ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error) {
+	return r.sessions, nil
+}
+
 func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverConn := make(chan *websocket.Conn, 1)
@@ -155,9 +169,19 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	var key [32]byte
 	key[0] = 1
 	session := newSession("machine-1", key)
-	rt := &blockingRuntime{
-		loadStarted: make(chan struct{}, 1),
-		unblock:     make(chan struct{}),
+	rt := &listingRuntime{
+		blockingRuntime: blockingRuntime{
+			loadStarted: make(chan struct{}, 1),
+			unblock:     make(chan struct{}),
+		},
+		sessions: []domain.SessionSummary{
+			{
+				SessionID: "sid-1",
+				CWD:       "/tmp/project",
+				Title:     "Generated title",
+				UpdatedAt: time.Date(2026, time.March, 2, 12, 0, 0, 0, time.UTC),
+			},
+		},
 	}
 	client := &Client{
 		conn:       clientConn,
@@ -171,19 +195,6 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	go func() {
 		runErr <- client.Run(context.Background())
 	}()
-
-	previousResolve := resolveSessionSummaries
-	resolveSessionSummaries = func(ctx context.Context, sessionIDs []string) ([]domain.SessionSummary, error) {
-		return []domain.SessionSummary{
-			{
-				SessionID: "sid-1",
-				CWD:       "/tmp/project",
-				Title:     "Generated title",
-				UpdatedAt: time.Date(2026, time.March, 2, 12, 0, 0, 0, time.UTC),
-			},
-		}, nil
-	}
-	defer func() { resolveSessionSummaries = previousResolve }()
 
 	require.NoError(t, relayConn.WriteJSON(encryptRPC(t, session, "machine-1", "msg-list", "session.resolve", map[string]any{
 		"sessionIds": []string{"sid-1"},

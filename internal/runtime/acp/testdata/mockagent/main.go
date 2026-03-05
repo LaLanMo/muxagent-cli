@@ -102,7 +102,7 @@ func handlePrompt(id int64, params json.RawMessage) {
 		"sessionUpdate": "tool_call",
 		"toolCallId":    "call-001",
 		"title":         "Bash",
-		"kind":          "bash",
+		"kind":          "execute",
 		"status":        "pending",
 	})
 
@@ -123,7 +123,7 @@ func handlePrompt(id int64, params json.RawMessage) {
 				"toolCallId": "call-001",
 				"title":      "Bash",
 				"status":     "pending",
-				"kind":       "bash",
+				"kind":       "execute",
 				"rawInput":   map[string]any{"command": "rm -rf /"},
 			},
 			"options": []map[string]any{
@@ -245,7 +245,7 @@ func main() {
 				"sessionUpdate": "tool_call",
 				"toolCallId":    "hist-tool-1",
 				"title":         "Bash",
-				"kind":          "bash",
+				"kind":          "execute",
 				"status":        "pending",
 			})
 			sessionUpdate(sid, map[string]any{

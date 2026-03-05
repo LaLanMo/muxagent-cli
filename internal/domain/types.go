@@ -141,6 +141,7 @@ const (
 	UpdateAvailableCommands SessionUpdateType = "available_commands_update"
 	UpdateCurrentMode       SessionUpdateType = "current_mode_update"
 	UpdateConfigOption      SessionUpdateType = "config_option_update"
+	UpdateSessionInfo       SessionUpdateType = "session_info_update"
 )
 
 // ContentBlock is an ACP prompt input block.
@@ -205,6 +206,7 @@ const (
 	EventRunFinished       EventType = "run.finished"
 	EventConnectionState   EventType = "connection.state"
 	EventPlanUpdated       EventType = "plan.updated"
+	EventModeChanged       EventType = "mode.changed"
 )
 
 type MessagePartEvent struct {
@@ -214,6 +216,17 @@ type MessagePartEvent struct {
 	Delta     string      `json:"delta"`
 	PartType  string      `json:"partType"`
 	FullText  string      `json:"fullText"`
+}
+
+type ToolDiff struct {
+	Path    string  `json:"path"`
+	OldText *string `json:"oldText,omitempty"`
+	NewText string  `json:"newText"`
+}
+
+type ToolLocation struct {
+	Path string `json:"path"`
+	Line *int   `json:"line,omitempty"`
 }
 
 type ToolEvent struct {
@@ -227,6 +240,9 @@ type ToolEvent struct {
 	Input     map[string]any `json:"input,omitempty"`
 	Output    string         `json:"output,omitempty"`
 	Error     string         `json:"error,omitempty"`
+	Diffs     []ToolDiff     `json:"diffs,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	Locations []ToolLocation `json:"locations,omitempty"`
 }
 
 type SessionError struct {

@@ -104,8 +104,10 @@ func (c *Client) Stop() error {
 	return nil
 }
 
-// NewSession creates a new ACP session.
-func (c *Client) NewSession(ctx context.Context, cwd string) (string, error) {
+// NewSession creates a new ACP session. If permissionMode is non-empty and
+// differs from "default", the mode is applied via the standard ACP
+// session/set_mode RPC immediately after creation.
+func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode string) (string, error) {
 	resolved, err := expandAndValidateCWD(cwd)
 	if err != nil {
 		return "", err
@@ -121,15 +123,45 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (string, error) {
 
 	var resp struct {
 		SessionID string `json:"sessionId"`
+		Modes     *struct {
+			CurrentModeID string `json:"currentModeId"`
+		} `json:"modes"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return "", fmt.Errorf("parse session/new result: %w", err)
 	}
+
+	// Apply permission mode if requested and different from default.
+	if domain.IsNonDefaultMode(permissionMode) {
+		_, err := c.transport.Call(ctx, "session/set_mode", map[string]any{
+			"sessionId": resp.SessionID,
+			"modeId":    permissionMode,
+		})
+		if err != nil {
+			log.Printf("[acp] failed to set permission mode %q: %v", permissionMode, err)
+		}
+	}
+
+	// Emit initial mode — use the requested mode if set, otherwise the one from response.
+	modeID := permissionMode
+	if modeID == "" && resp.Modes != nil {
+		modeID = resp.Modes.CurrentModeID
+	}
+	if modeID != "" {
+		c.emit(domain.Event{
+			Type:      domain.EventModeChanged,
+			SessionID: resp.SessionID,
+			At:        time.Now(),
+			Data:      map[string]any{"currentModeId": modeID},
+		})
+	}
+
 	return resp.SessionID, nil
 }
 
 // LoadSession loads an existing session. History is replayed via session/update notifications.
-func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) error {
+// If permissionMode is non-default, it calls session/set_mode after loading.
+func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode string) error {
 	resolved, err := expandAndValidateCWD(cwd)
 	if err != nil {
 		return err
@@ -148,7 +180,65 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string) error {
 	if err != nil {
 		return fmt.Errorf("session/load: %w", err)
 	}
+
+	// Re-apply permission mode if requested and different from default.
+	if domain.IsNonDefaultMode(permissionMode) {
+		_, err := c.transport.Call(ctx, "session/set_mode", map[string]any{
+			"sessionId": sessionID,
+			"modeId":    permissionMode,
+		})
+		if err != nil {
+			log.Printf("[acp] failed to restore permission mode %q on load: %v", permissionMode, err)
+		}
+
+		c.emit(domain.Event{
+			Type:      domain.EventModeChanged,
+			SessionID: sessionID,
+			At:        time.Now(),
+			Data:      map[string]any{"currentModeId": permissionMode},
+		})
+	}
+
 	return nil
+}
+
+// ListSessions calls session/list on the ACP agent and returns session summaries.
+func (c *Client) ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error) {
+	params := map[string]any{}
+	if cwd != "" {
+		params["cwd"] = cwd
+	}
+	result, err := c.transport.Call(ctx, "session/list", params)
+	if err != nil {
+		return nil, fmt.Errorf("session/list: %w", err)
+	}
+
+	var resp struct {
+		Sessions []struct {
+			SessionID string `json:"sessionId"`
+			CWD       string `json:"cwd"`
+			Title     string `json:"title"`
+			UpdatedAt string `json:"updatedAt"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("parse session/list result: %w", err)
+	}
+
+	summaries := make([]domain.SessionSummary, 0, len(resp.Sessions))
+	for _, s := range resp.Sessions {
+		updatedAt, _ := time.Parse(time.RFC3339Nano, s.UpdatedAt)
+		if updatedAt.IsZero() {
+			updatedAt = time.Now()
+		}
+		summaries = append(summaries, domain.SessionSummary{
+			SessionID: s.SessionID,
+			CWD:       s.CWD,
+			Title:     s.Title,
+			UpdatedAt: updatedAt,
+		})
+	}
+	return summaries, nil
 }
 
 // Prompt sends a prompt to the agent. Returns the stop reason when the agent finishes.
@@ -342,13 +432,20 @@ func (c *Client) handleSessionUpdate(params json.RawMessage) {
 	case domain.UpdateUserMessageChunk:
 		c.handleUserMessageChunk(sessionID, full.Update)
 	case domain.UpdateToolCall:
+		log.Printf("[acp] tool_call: %s", string(full.Update))
 		c.handleToolCall(sessionID, full.Update)
 	case domain.UpdateToolCallUpdate:
+		log.Printf("[acp] tool_call_update: %s", string(full.Update))
 		c.handleToolCallUpdate(sessionID, full.Update)
 	case domain.UpdatePlan:
 		c.handlePlan(sessionID, full.Update)
+	case domain.UpdateCurrentMode:
+		c.handleCurrentModeUpdate(sessionID, full.Update)
+	case domain.UpdateSessionInfo:
+		// Future-proof: ready for session_info_update when runtimes emit it.
+		log.Printf("[acp] session_info_update for %s (no-op)", sessionID)
 	default:
-		// available_commands_update, current_mode_update, config_option_update — ignore
+		// available_commands_update, config_option_update — ignore
 		log.Printf("[acp] ignored session/update type: %s", updateType)
 	}
 }
@@ -495,10 +592,16 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 
 func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 	var update struct {
-		ToolCallID string `json:"toolCallId"`
-		Title      string `json:"title"`
-		Kind       string `json:"kind"`
-		Status     string `json:"status"`
+		ToolCallID string         `json:"toolCallId"`
+		Title      string         `json:"title"`
+		Kind       string         `json:"kind"`
+		Status     string         `json:"status"`
+		RawInput   map[string]any `json:"rawInput"`
+		Locations  []struct {
+			Path string `json:"path"`
+			Line *int   `json:"line"`
+		} `json:"locations"`
+		Meta map[string]any `json:"_meta"`
 	}
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
@@ -516,6 +619,11 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
+	var locations []domain.ToolLocation
+	for _, loc := range update.Locations {
+		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: loc.Line})
+	}
+
 	c.emit(domain.Event{
 		Type:      domain.EventToolStarted,
 		SessionID: sessionID,
@@ -528,6 +636,9 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 			Kind:      update.Kind,
 			Title:     update.Title,
 			Status:    domain.ToolStatusPending,
+			Input:     update.RawInput,
+			Metadata:  update.Meta,
+			Locations: locations,
 		},
 	})
 }
@@ -539,12 +650,23 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		Kind       string          `json:"kind"`
 		Title      string          `json:"title"`
 		RawInput   map[string]any  `json:"rawInput"`
-		RawOutput  map[string]any  `json:"rawOutput"`
+		RawOutput  json.RawMessage `json:"rawOutput"`
 		Content    json.RawMessage `json:"content"`
+		Locations  []struct {
+			Path string `json:"path"`
+			Line *int   `json:"line"`
+		} `json:"locations"`
+		Meta map[string]any `json:"_meta"`
 	}
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
+
+	// Skip updates that carry no actionable fields (e.g. only _meta).
+	if update.Status == "" && update.Title == "" && update.RawInput == nil {
+		return
+	}
+
 	c.msgMu.Lock()
 	state := c.ensureSessionMsgStateLocked(sessionID)
 	if state.agentMsgID == "" {
@@ -555,6 +677,11 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
+	var locations []domain.ToolLocation
+	for _, loc := range update.Locations {
+		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: loc.Line})
+	}
+
 	toolEvent := domain.ToolEvent{
 		PartID:    partID,
 		MessageID: msgID,
@@ -563,6 +690,8 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		Kind:      update.Kind,
 		Title:     update.Title,
 		Input:     update.RawInput,
+		Metadata:  update.Meta,
+		Locations: locations,
 	}
 
 	var eventType domain.EventType
@@ -574,24 +703,16 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	case "completed":
 		eventType = domain.EventToolCompleted
 		toolEvent.Status = domain.ToolStatusCompleted
-		// Extract output from rawOutput or content
-		if update.RawOutput != nil {
-			if output, ok := update.RawOutput["output"].(string); ok {
-				toolEvent.Output = output
-			}
-		}
+		// rawOutput can be a string or an object — handle both.
+		toolEvent.Output = extractRawOutput(update.RawOutput)
 		if toolEvent.Output == "" {
 			toolEvent.Output = extractTextFromContent(update.Content)
 		}
+		toolEvent.Diffs = extractDiffsFromContent(update.Content)
 	case "failed":
 		eventType = domain.EventToolFailed
 		toolEvent.Status = domain.ToolStatusFailed
-		// Extract error from rawOutput or content
-		if update.RawOutput != nil {
-			if errStr, ok := update.RawOutput["error"].(string); ok {
-				toolEvent.Error = errStr
-			}
-		}
+		toolEvent.Error = extractRawOutput(update.RawOutput)
 		if toolEvent.Error == "" {
 			toolEvent.Error = extractTextFromContent(update.Content)
 		}
@@ -608,6 +729,30 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	})
 }
 
+// extractRawOutput handles rawOutput that may be a JSON string or an object
+// with an "output" (or "error") key.
+func extractRawOutput(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try as a plain string first (e.g. "hello world").
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	// Try as an object with "output" or "error" key.
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		if output, ok := obj["output"].(string); ok {
+			return output
+		}
+		if errStr, ok := obj["error"].(string); ok {
+			return errStr
+		}
+	}
+	return ""
+}
+
 func (c *Client) handlePlan(sessionID string, raw json.RawMessage) {
 	var update struct {
 		Entries json.RawMessage `json:"entries"`
@@ -620,6 +765,25 @@ func (c *Client) handlePlan(sessionID string, raw json.RawMessage) {
 		SessionID: sessionID,
 		At:        time.Now(),
 		Data:      map[string]any{"entries": json.RawMessage(update.Entries)},
+	})
+}
+
+func (c *Client) handleCurrentModeUpdate(sessionID string, raw json.RawMessage) {
+	var update struct {
+		CurrentModeID string `json:"currentModeId"`
+	}
+	if err := json.Unmarshal(raw, &update); err != nil {
+		log.Printf("[acp] failed to parse current_mode_update: %v", err)
+		return
+	}
+	if update.CurrentModeID == "" {
+		return
+	}
+	c.emit(domain.Event{
+		Type:      domain.EventModeChanged,
+		SessionID: sessionID,
+		At:        time.Now(),
+		Data:      map[string]any{"currentModeId": update.CurrentModeID},
 	})
 }
 
@@ -653,6 +817,54 @@ func extractTextFromContent(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// extractDiffsFromContent parses diff entries from an ACP content array.
+// Each diff entry is: {"type":"diff","path":"...","oldText":"...","newText":"..."}
+func extractDiffsFromContent(raw json.RawMessage) []domain.ToolDiff {
+	if len(raw) == 0 {
+		return nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	var diffs []domain.ToolDiff
+	for _, item := range items {
+		var entry struct {
+			Type    string  `json:"type"`
+			Path    string  `json:"path"`
+			OldText *string `json:"oldText"`
+			NewText string  `json:"newText"`
+			// Also check nested content.content for wrapped diffs
+			Content *struct {
+				Type    string  `json:"type"`
+				Path    string  `json:"path"`
+				OldText *string `json:"oldText"`
+				NewText string  `json:"newText"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(item, &entry); err != nil {
+			continue
+		}
+		if entry.Type == "diff" && entry.Path != "" {
+			diffs = append(diffs, domain.ToolDiff{
+				Path:    entry.Path,
+				OldText: entry.OldText,
+				NewText: entry.NewText,
+			})
+		} else if entry.Content != nil && entry.Content.Type == "diff" && entry.Content.Path != "" {
+			diffs = append(diffs, domain.ToolDiff{
+				Path:    entry.Content.Path,
+				OldText: entry.Content.OldText,
+				NewText: entry.Content.NewText,
+			})
+		}
+	}
+	if len(diffs) == 0 {
+		return nil
+	}
+	return diffs
 }
 
 func (c *Client) ensureSessionMsgStateLocked(sessionID string) *sessionMsgState {

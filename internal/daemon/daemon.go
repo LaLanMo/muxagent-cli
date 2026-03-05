@@ -124,7 +124,7 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to sync keyring: %w", err)
 	}
 
-	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, creds, machineSignPriv, keyringMgr, rtClient, d.eventBuf)
+	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, string(cfg.ActiveRuntime), creds, machineSignPriv, keyringMgr, rtClient, d.eventBuf)
 	if err != nil {
 		return fmt.Errorf("failed to create relay client: %w", err)
 	}
