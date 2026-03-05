@@ -72,6 +72,9 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		}
 
 		fmt.Printf("Or open this URL manually:\n%s\n\n", qrURL)
+		if err := auth.CopyToClipboard(qrURL); err == nil {
+			fmt.Println("(Copied to clipboard)")
+		}
 		fmt.Println("Waiting for approval...")
 
 		return nil

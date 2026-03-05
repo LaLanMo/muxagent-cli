@@ -49,6 +49,9 @@ func newStartCmd() *cobra.Command {
 						fmt.Println("(Could not display QR code)")
 					}
 					fmt.Printf("\nOr open this URL manually:\n%s\n\n", qrURL)
+					if err := auth.CopyToClipboard(qrURL); err == nil {
+						fmt.Println("(Copied to clipboard)")
+					}
 					fmt.Println("Waiting for approval...")
 					return nil
 				}); err != nil {
