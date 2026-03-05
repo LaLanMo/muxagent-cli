@@ -549,6 +549,13 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 		return
 	}
 
+	// For image content during session replay, emit a placeholder instead of
+	// sending the full base64 data back to the mobile client.
+	delta := update.Content.Text
+	if update.Content.Type == "image" {
+		delta = "[Image]"
+	}
+
 	c.msgMu.Lock()
 	state := c.ensureSessionMsgStateLocked(sessionID)
 	msgID := update.MessageID
@@ -584,7 +591,7 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 			MessageID: msgID,
 			PartID:    partID,
 			Role:      domain.MessageRoleUser,
-			Delta:     update.Content.Text,
+			Delta:     delta,
 			PartType:  "text",
 		},
 	})
