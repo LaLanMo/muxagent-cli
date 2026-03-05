@@ -11,7 +11,8 @@ import (
 type RuntimeID string
 
 const (
-	RuntimeACP RuntimeID = "acp"
+	RuntimeOpenCode   RuntimeID = "opencode"
+	RuntimeClaudeCode RuntimeID = "claude-code"
 )
 
 type Config struct {
@@ -31,12 +32,16 @@ type RuntimeSettings struct {
 // exists or when callers want to seed a new config.
 func Default() Config {
 	return Config{
-		ActiveRuntime: RuntimeACP,
+		ActiveRuntime: RuntimeOpenCode,
 		RelayURL:      "ws://localhost:8080/ws",
 		Runtimes: map[RuntimeID]RuntimeSettings{
-			RuntimeACP: {
+			RuntimeOpenCode: {
 				Command: "opencode",
 				Args:    []string{"acp"},
+			},
+			RuntimeClaudeCode: {
+				Command: "claude-agent-acp",
+				Env:     map[string]string{"CLAUDECODE": ""},
 			},
 		},
 	}

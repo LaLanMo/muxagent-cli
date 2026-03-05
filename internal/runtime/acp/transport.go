@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -43,7 +44,7 @@ func NewTransport(command string, args []string, cwd string, env map[string]stri
 		cwd:           cwd,
 		env:           env,
 		pending:       make(map[int64]chan *Response),
-		notifications: make(chan *Notification, 64),
+		notifications: make(chan *Notification, 4096),
 		requests:      make(chan *IncomingMessage, 16),
 		done:          make(chan struct{}),
 	}
@@ -55,7 +56,7 @@ func (t *Transport) Start(ctx context.Context) error {
 	if t.cwd != "" {
 		t.cmd.Dir = t.cwd
 	}
-	t.cmd.Env = append(t.cmd.Environ(), formatEnv(t.env)...)
+	t.cmd.Env = buildEnv(t.cmd.Environ(), t.env)
 
 	var err error
 	t.stdin, err = t.cmd.StdinPipe()
@@ -227,7 +228,7 @@ func (t *Transport) send(msg any) error {
 
 func (t *Transport) readLoop() {
 	scanner := bufio.NewScanner(t.stdout)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB buffer
+	scanner.Buffer(make([]byte, 0, 5*1024*1024), 5*1024*1024) // 5MB buffer for image payloads
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -281,10 +282,37 @@ func (t *Transport) readLoop() {
 	}
 }
 
-func formatEnv(env map[string]string) []string {
-	result := make([]string, 0, len(env))
-	for k, v := range env {
-		result = append(result, k+"="+v)
+// buildEnv merges overrides into a base environ slice. An override with an
+// empty-string value removes the variable from the child environment (used to
+// strip inherited vars like CLAUDECODE that trigger anti-nesting guards).
+func buildEnv(base []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return base
 	}
-	return result
+
+	// Partition overrides into removals and additions.
+	removals := make(map[string]struct{})
+	additions := make([]string, 0, len(overrides))
+	for k, v := range overrides {
+		if v == "" {
+			removals[k] = struct{}{}
+		} else {
+			additions = append(additions, k+"="+v)
+		}
+	}
+
+	// Fast path: no removals — just append.
+	if len(removals) == 0 {
+		return append(base, additions...)
+	}
+
+	// Filter base to strip removal keys.
+	filtered := make([]string, 0, len(base))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, remove := removals[key]; !remove {
+			filtered = append(filtered, entry)
+		}
+	}
+	return append(filtered, additions...)
 }
