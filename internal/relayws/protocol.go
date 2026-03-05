@@ -71,12 +71,17 @@ type SessionEndMessage struct {
 	MachineID string      `json:"machine_id"`
 }
 
+type EventHint struct {
+	Event string `json:"event"`
+}
+
 type EncryptedMessage struct {
 	Type       MessageType `json:"type"`
 	MachineID  string      `json:"machine_id"`
 	MsgID      string      `json:"msg_id"`
 	Nonce      string      `json:"nonce"`
 	Ciphertext string      `json:"ciphertext"`
+	Hint       *EventHint  `json:"hint,omitempty"`
 }
 
 type ErrorMessage struct {

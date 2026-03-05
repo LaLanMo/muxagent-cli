@@ -598,13 +598,18 @@ func (c *Client) SendEvent(event domain.Event) error {
 	if err != nil {
 		return err
 	}
-	return c.writeJSON(EncryptedMessage{
+	msg := EncryptedMessage{
 		Type:       MessageTypeEvent,
 		MachineID:  c.machineID,
 		MsgID:      msgID,
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
-	})
+	}
+	switch event.Type {
+	case domain.EventApprovalRequested, domain.EventRunFailed, domain.EventRunFinished:
+		msg.Hint = &EventHint{Event: string(event.Type)}
+	}
+	return c.writeJSON(msg)
 }
 
 // --- Response handling ---
