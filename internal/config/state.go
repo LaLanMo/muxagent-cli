@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -76,43 +75,7 @@ func (s *DaemonState) GetToken() (string, error) {
 
 // deriveLocalKey derives a machine-specific encryption key from system entropy.
 func deriveLocalKey() (*[32]byte, error) {
-	entropy := collectSystemEntropy()
-	return crypto.DeriveKeyFromBytes(entropy, []byte(localKeyInfo))
-}
-
-// collectSystemEntropy gathers machine-specific data for key derivation.
-func collectSystemEntropy() []byte {
-	var parts [][]byte
-
-	// Hostname
-	hostname, _ := os.Hostname()
-	parts = append(parts, []byte(hostname))
-
-	// User home directory
-	home, _ := os.UserHomeDir()
-	parts = append(parts, []byte(home))
-
-	// Machine ID (Linux) or similar
-	if data, err := os.ReadFile("/etc/machine-id"); err == nil {
-		parts = append(parts, data)
-	}
-
-	// macOS: use a combination of user and hostname
-	if runtime.GOOS == "darwin" {
-		parts = append(parts, []byte("darwin"))
-	}
-
-	// Current user
-	parts = append(parts, []byte(os.Getenv("USER")))
-
-	// Combine all parts
-	var combined []byte
-	for _, p := range parts {
-		combined = append(combined, p...)
-		combined = append(combined, 0) // separator
-	}
-
-	return combined
+	return crypto.DeriveKeyFromBytes(crypto.CollectSystemEntropy(), []byte(localKeyInfo))
 }
 
 func StatePath() (string, error) {
