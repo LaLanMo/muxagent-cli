@@ -115,6 +115,15 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 	params := map[string]any{
 		"cwd":        resolved,
 		"mcpServers": []any{},
+		"_meta": map[string]any{
+			"claudeCode": map[string]any{
+				"options": map[string]any{
+					"env": map[string]any{
+						"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+					},
+				},
+			},
+		},
 	}
 	result, err := c.transport.Call(ctx, "session/new", params)
 	if err != nil {
