@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
@@ -18,6 +19,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/relayws"
 	"github.com/LaLanMo/muxagent-cli/internal/runtime"
 	"github.com/LaLanMo/muxagent-cli/internal/runtime/acp"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 )
 
 type Daemon struct {
@@ -124,7 +126,16 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to sync keyring: %w", err)
 	}
 
-	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, string(cfg.ActiveRuntime), creds, machineSignPriv, keyringMgr, rtClient, d.eventBuf)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home dir: %w", err)
+	}
+	wtStore := worktree.NewStore(filepath.Join(home, ".muxagent", "worktrees.json"))
+	if err := wtStore.Load(); err != nil {
+		return fmt.Errorf("failed to load worktree store: %w", err)
+	}
+
+	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, string(cfg.ActiveRuntime), creds, machineSignPriv, keyringMgr, rtClient, d.eventBuf, wtStore)
 	if err != nil {
 		return fmt.Errorf("failed to create relay client: %w", err)
 	}

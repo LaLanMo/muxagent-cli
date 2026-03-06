@@ -3,10 +3,14 @@ package relayws
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,6 +18,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/LaLanMo/muxagent-cli/internal/keyring"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/curve25519"
@@ -56,6 +61,7 @@ type Client struct {
 
 	runtime  RuntimeClient
 	eventBuf *EventBuffer
+	wtStore  *worktree.Store
 
 	sessionCWDMu sync.RWMutex
 	sessionCWD   map[string]string // sessionID → cwd
@@ -68,6 +74,7 @@ func NewMachineClient(
 	keyringMgr *keyring.Manager,
 	rt RuntimeClient,
 	eventBuf *EventBuffer,
+	wtStore *worktree.Store,
 ) (*Client, error) {
 	if creds == nil {
 		return nil, fmt.Errorf("credentials required")
@@ -88,6 +95,7 @@ func NewMachineClient(
 		keyring:         keyringMgr,
 		runtime:         rt,
 		eventBuf:        eventBuf,
+		wtStore:         wtStore,
 		sessionCWD:      make(map[string]string),
 	}, nil
 }
@@ -342,18 +350,25 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 		"result": result,
 		"error":  respErr,
 	}
-	respBytes, _ := json.Marshal(respPayload)
-	nonce, ciphertext, err := session.encrypt(string(MessageTypeResponse), enc.MsgID, respBytes)
+	respBytes, err := json.Marshal(respPayload)
 	if err != nil {
+		log.Printf("rpc marshal response: %v", err)
 		return
 	}
-	_ = c.writeJSON(EncryptedMessage{
+	nonce, ciphertext, err := session.encrypt(string(MessageTypeResponse), enc.MsgID, respBytes)
+	if err != nil {
+		log.Printf("rpc encrypt response: %v", err)
+		return
+	}
+	if err := c.writeJSON(EncryptedMessage{
 		Type:       MessageTypeResponse,
 		MachineID:  c.machineID,
 		MsgID:      enc.MsgID,
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
-	})
+	}); err != nil {
+		log.Printf("rpc write response: %v", err)
+	}
 }
 
 func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (any, string) {
@@ -365,14 +380,60 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		return nil, "missing cwd"
 	}
 	permissionMode, _ := params["permissionMode"].(string)
-	sessionID, err := c.runtime.NewSession(ctx, cwd, permissionMode)
+	var useWorktree bool
+	if v, exists := params["useWorktree"]; exists {
+		var ok bool
+		if useWorktree, ok = v.(bool); !ok {
+			return nil, "useWorktree must be a boolean"
+		}
+	}
+
+	actualCWD := cwd
+	var wtMapping *worktree.Mapping
+
+	if useWorktree {
+		repoRoot, err := worktree.FindRepoRoot(cwd)
+		if err != nil {
+			return nil, "worktree requires a git repository"
+		}
+		wtID, err := randomHex(8)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to generate worktree id: %v", err)
+		}
+		wtPath, err := worktree.Create(repoRoot, wtID)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to create worktree: %v", err)
+		}
+		// Preserve subdirectory offset within the repo.
+		relPath, err := filepath.Rel(repoRoot, cwd)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to compute relative path: %v", err)
+		}
+		actualCWD = filepath.Join(wtPath, relPath)
+		wtMapping = &worktree.Mapping{
+			WorktreeID:   wtID,
+			WorktreePath: wtPath,
+			RepoRoot:     repoRoot,
+			BranchName:   "muxagent/" + wtID,
+		}
+	}
+
+	sessionID, err := c.runtime.NewSession(ctx, actualCWD, permissionMode)
 	if err != nil {
 		return nil, err.Error()
 	}
 	c.sessionCWDMu.Lock()
-	c.sessionCWD[sessionID] = cwd
+	c.sessionCWD[sessionID] = actualCWD
 	c.sessionCWDMu.Unlock()
-	return map[string]string{"sessionId": sessionID, "runtime": c.runtimeID}, ""
+
+	if wtMapping != nil && c.wtStore != nil {
+		c.wtStore.Set(sessionID, *wtMapping)
+		if err := c.wtStore.Save(); err != nil {
+			log.Printf("worktree store save: %v", err)
+		}
+	}
+
+	return map[string]string{"sessionId": sessionID, "runtime": c.runtimeID, "cwd": actualCWD}, ""
 }
 
 func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any, string) {
@@ -387,6 +448,18 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
+
+	// If this session was created with a worktree, use that path instead.
+	if c.wtStore != nil {
+		if wt := c.wtStore.Get(sessionID); wt != nil {
+			if _, err := os.Stat(wt.WorktreePath); err == nil {
+				cwd = wt.WorktreePath
+			} else {
+				log.Printf("worktree path gone for session %s, using original cwd", sessionID)
+			}
+		}
+	}
+
 	permissionMode, _ := params["permissionMode"].(string)
 	if err := c.runtime.LoadSession(ctx, sessionID, cwd, permissionMode); err != nil {
 		return nil, err.Error()
@@ -466,21 +539,25 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		stopReason, err := c.runtime.Prompt(context.Background(), sessionID, content)
 		now := time.Now()
 		if err != nil {
-			_ = c.SendEvent(domain.Event{
+			if evErr := c.SendEvent(domain.Event{
 				Type:      domain.EventRunFailed,
 				SessionID: sessionID,
 				At:        now,
 				Error:     &domain.SessionError{Code: "prompt_error", Message: err.Error()},
-			})
+			}); evErr != nil {
+				log.Printf("send run.failed event: %v", evErr)
+			}
 			// Don't call syncSessionStatus — run.failed already signals the error state.
 			return
 		}
-		_ = c.SendEvent(domain.Event{
+		if evErr := c.SendEvent(domain.Event{
 			Type:      domain.EventRunFinished,
 			SessionID: sessionID,
 			At:        now,
 			Data:      map[string]any{"stopReason": stopReason},
-		})
+		}); evErr != nil {
+			log.Printf("send run.finished event: %v", evErr)
+		}
 		c.syncSessionStatus(context.Background(), sessionID, cwd)
 	}()
 
@@ -538,12 +615,14 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 	if err := c.runtime.ReplyPermission(ctx, sessionID, requestID, optionID); err != nil {
 		return nil, err.Error()
 	}
-	_ = c.SendEvent(domain.Event{
+	if err := c.SendEvent(domain.Event{
 		Type:      domain.EventApprovalReplied,
 		SessionID: sessionID,
 		At:        time.Now(),
 		Approval:  &domain.ApprovalRequest{ID: requestID, SessionID: sessionID},
-	})
+	}); err != nil {
+		log.Printf("send approval.replied event: %v", err)
+	}
 	return map[string]bool{"ok": true}, ""
 }
 
@@ -583,7 +662,7 @@ func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
 	}
 	for _, s := range all {
 		if s.SessionID == sessionID {
-			_ = c.SendEvent(domain.Event{
+			if err := c.SendEvent(domain.Event{
 				Type:      domain.EventSessionStatus,
 				SessionID: sessionID,
 				At:        s.UpdatedAt,
@@ -595,7 +674,9 @@ func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
 					UpdatedAt: s.UpdatedAt,
 					Metadata:  map[string]any{"cwd": s.CWD},
 				},
-			})
+			}); err != nil {
+				log.Printf("send session.status event: %v", err)
+			}
 			return
 		}
 	}
@@ -686,6 +767,14 @@ func (c *Client) SendEcho(params map[string]any) error {
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
 	})
+}
+
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("random bytes: %w", err)
+	}
+	return hex.EncodeToString(b)[:n], nil
 }
 
 func (c *Client) Close() error {
