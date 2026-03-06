@@ -3,8 +3,11 @@ package relayws
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +45,10 @@ func (r *blockingRuntime) Prompt(ctx context.Context, sessionID string, content 
 }
 
 func (r *blockingRuntime) Cancel(ctx context.Context, sessionID string) error {
+	return nil
+}
+
+func (r *blockingRuntime) SetMode(ctx context.Context, sessionID, modeID string) error {
 	return nil
 }
 
@@ -274,4 +281,257 @@ func decryptResponse(t *testing.T, session *Session, msg EncryptedMessage) map[s
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	return payload
+}
+
+// --- fs.list tests ---
+
+func TestRpcFsList(t *testing.T) {
+	root := t.TempDir()
+	// Create project structure: src/, src/main.go, README.md, empty/
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src", "main.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "README.md"), []byte("# hi"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "empty"), 0o755))
+
+	client := &Client{
+		sessionCWD: map[string]string{"sid": root},
+	}
+	ctx := context.Background()
+
+	t.Run("list root directory", func(t *testing.T) {
+		result, errStr := client.rpcFsList(ctx, map[string]any{
+			"sessionId": "sid",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		entries := m["entries"].([]fsEntry)
+
+		// Should contain src (dir), empty (dir), README.md (file)
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name
+		}
+		require.Contains(t, names, "src")
+		require.Contains(t, names, "README.md")
+
+		// Dirs before files
+		firstFileIdx := -1
+		lastDirIdx := -1
+		for i, e := range entries {
+			if e.IsDir && i > lastDirIdx {
+				lastDirIdx = i
+			}
+			if !e.IsDir && (firstFileIdx == -1 || i < firstFileIdx) {
+				firstFileIdx = i
+			}
+		}
+		if firstFileIdx >= 0 && lastDirIdx >= 0 {
+			require.Greater(t, firstFileIdx, lastDirIdx, "dirs should come before files")
+		}
+	})
+
+	t.Run("list subdirectory", func(t *testing.T) {
+		result, errStr := client.rpcFsList(ctx, map[string]any{
+			"sessionId": "sid",
+			"path":      "src",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		entries := m["entries"].([]fsEntry)
+
+		require.Len(t, entries, 1)
+		require.Equal(t, "main.go", entries[0].Name)
+		require.Equal(t, filepath.Join("src", "main.go"), entries[0].Path)
+		require.False(t, entries[0].IsDir)
+	})
+
+	t.Run("path traversal rejected", func(t *testing.T) {
+		_, errStr := client.rpcFsList(ctx, map[string]any{
+			"sessionId": "sid",
+			"path":      "../../etc",
+		})
+		require.Equal(t, "path outside project", errStr)
+	})
+
+	t.Run("symlink escape rejected", func(t *testing.T) {
+		symPath := filepath.Join(root, "escape")
+		require.NoError(t, os.Symlink(os.TempDir(), symPath))
+		t.Cleanup(func() { os.Remove(symPath) })
+
+		_, errStr := client.rpcFsList(ctx, map[string]any{
+			"sessionId": "sid",
+			"path":      "escape",
+		})
+		require.Equal(t, "symlink escape detected", errStr)
+	})
+
+	t.Run("empty directory", func(t *testing.T) {
+		result, errStr := client.rpcFsList(ctx, map[string]any{
+			"sessionId": "sid",
+			"path":      "empty",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		entries := m["entries"].([]fsEntry)
+		require.Empty(t, entries)
+	})
+
+	t.Run("unknown session", func(t *testing.T) {
+		_, errStr := client.rpcFsList(ctx, map[string]any{
+			"sessionId": "nonexistent",
+		})
+		require.Equal(t, "unknown session", errStr)
+	})
+
+	t.Run("max entries limit", func(t *testing.T) {
+		bigRoot := t.TempDir()
+		for i := 0; i < 250; i++ {
+			require.NoError(t, os.WriteFile(
+				filepath.Join(bigRoot, fmt.Sprintf("file_%03d.txt", i)),
+				[]byte("x"), 0o644,
+			))
+		}
+		c := &Client{sessionCWD: map[string]string{"sid": bigRoot}}
+		result, errStr := c.rpcFsList(ctx, map[string]any{
+			"sessionId": "sid",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		entries := m["entries"].([]fsEntry)
+		require.LessOrEqual(t, len(entries), 200)
+	})
+}
+
+// --- fs.search tests ---
+
+func TestRpcFsSearch(t *testing.T) {
+	root := t.TempDir()
+	// Create project structure for search tests
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src", "util"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src", "controllers"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src", "models"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "cmd", "main"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src", "main.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src", "util", "helper.go"), []byte("package util"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src", "main_test.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "README.md"), []byte("# hi"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Makefile"), []byte("all:"), 0o644))
+
+	client := &Client{
+		sessionCWD: map[string]string{"sid": root},
+	}
+	ctx := context.Background()
+
+	t.Run("match file name", func(t *testing.T) {
+		result, errStr := client.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "sid",
+			"query":     "helper",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		results := m["results"].([]fsSearchResult)
+
+		require.Len(t, results, 1)
+		require.Equal(t, filepath.Join("src", "util", "helper.go"), results[0].Path)
+		require.False(t, results[0].IsDir)
+	})
+
+	t.Run("match directory name", func(t *testing.T) {
+		result, errStr := client.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "sid",
+			"query":     "model",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		results := m["results"].([]fsSearchResult)
+
+		paths := make([]string, len(results))
+		for i, r := range results {
+			paths[i] = r.Path
+		}
+		require.Contains(t, paths, filepath.Join("src", "models"))
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		result, errStr := client.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "sid",
+			"query":     "makefile",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		results := m["results"].([]fsSearchResult)
+
+		paths := make([]string, len(results))
+		for i, r := range results {
+			paths[i] = r.Path
+		}
+		require.Contains(t, paths, "Makefile")
+	})
+
+	t.Run("sort dirs first then short paths", func(t *testing.T) {
+		result, errStr := client.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "sid",
+			"query":     "main",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		results := m["results"].([]fsSearchResult)
+
+		require.GreaterOrEqual(t, len(results), 3)
+		// First result should be a directory (cmd/main)
+		require.True(t, results[0].IsDir, "first result should be a directory")
+		// Among files, shorter path comes first
+		fileResults := make([]fsSearchResult, 0)
+		for _, r := range results {
+			if !r.IsDir {
+				fileResults = append(fileResults, r)
+			}
+		}
+		require.GreaterOrEqual(t, len(fileResults), 2)
+		require.LessOrEqual(t, len(fileResults[0].Path), len(fileResults[1].Path),
+			"shorter path should come first among files")
+	})
+
+	t.Run("max 50 results", func(t *testing.T) {
+		bigRoot := t.TempDir()
+		for i := 0; i < 100; i++ {
+			require.NoError(t, os.WriteFile(
+				filepath.Join(bigRoot, fmt.Sprintf("test_%03d.go", i)),
+				[]byte("x"), 0o644,
+			))
+		}
+		c := &Client{sessionCWD: map[string]string{"sid": bigRoot}}
+		result, errStr := c.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "sid",
+			"query":     "test",
+		})
+		require.Empty(t, errStr)
+		m := result.(map[string]any)
+		results := m["results"].([]fsSearchResult)
+		require.LessOrEqual(t, len(results), 50)
+	})
+
+	t.Run("empty query error", func(t *testing.T) {
+		_, errStr := client.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "sid",
+			"query":     "",
+		})
+		require.Equal(t, "missing query", errStr)
+	})
+
+	t.Run("missing query error", func(t *testing.T) {
+		_, errStr := client.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "sid",
+		})
+		require.Equal(t, "missing query", errStr)
+	})
+
+	t.Run("unknown session", func(t *testing.T) {
+		_, errStr := client.rpcFsSearch(ctx, map[string]any{
+			"sessionId": "nonexistent",
+			"query":     "main",
+		})
+		require.Equal(t, "unknown session", errStr)
+	})
 }

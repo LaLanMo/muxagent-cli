@@ -8,9 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -339,6 +342,10 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 		result, respErr = c.rpcResyncEvents(ctx, payload.Params)
 	case "approvals.pending":
 		result, respErr = c.rpcPendingApprovals(ctx, payload.Params)
+	case "fs.list":
+		result, respErr = c.rpcFsList(ctx, payload.Params)
+	case "fs.search":
+		result, respErr = c.rpcFsSearch(ctx, payload.Params)
 	case "echo":
 		log.Printf("echo request from client: %v", payload.Params)
 		result = payload.Params
@@ -649,6 +656,159 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (an
 		"complete": complete,
 		"seq":      c.eventBuf.Seq(),
 	}, ""
+}
+
+// --- Filesystem RPCs ---
+
+type fsEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	IsDir bool   `json:"isDir"`
+}
+
+type fsSearchResult struct {
+	Path  string `json:"path"`
+	IsDir bool   `json:"isDir"`
+}
+
+// safePath resolves relPath under cwd and rejects traversal / symlink escapes.
+func safePath(cwd, relPath string) (string, error) {
+	if relPath == "" || relPath == "." {
+		return filepath.EvalSymlinks(cwd)
+	}
+	target := filepath.Clean(filepath.Join(cwd, relPath))
+	if !strings.HasPrefix(target, cwd+string(filepath.Separator)) && target != cwd {
+		return "", fmt.Errorf("path outside project")
+	}
+	realTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", err
+	}
+	realCWD, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(realTarget, realCWD+string(filepath.Separator)) && realTarget != realCWD {
+		return "", fmt.Errorf("symlink escape detected")
+	}
+	return realTarget, nil
+}
+
+func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, string) {
+	sessionID, _ := params["sessionId"].(string)
+	if sessionID == "" {
+		return nil, "missing sessionId"
+	}
+	c.sessionCWDMu.RLock()
+	cwd, ok := c.sessionCWD[sessionID]
+	c.sessionCWDMu.RUnlock()
+	if !ok || cwd == "" {
+		return nil, "unknown session"
+	}
+
+	relPath, _ := params["path"].(string)
+	target, err := safePath(cwd, relPath)
+	if err != nil {
+		if strings.Contains(err.Error(), "path outside project") || strings.Contains(err.Error(), "symlink escape") {
+			return nil, err.Error()
+		}
+		return nil, err.Error()
+	}
+
+	dirEntries, err := os.ReadDir(target)
+	if err != nil {
+		return nil, err.Error()
+	}
+
+	sort.Slice(dirEntries, func(i, j int) bool {
+		di, dj := dirEntries[i].IsDir(), dirEntries[j].IsDir()
+		if di != dj {
+			return di
+		}
+		return dirEntries[i].Name() < dirEntries[j].Name()
+	})
+
+	const maxEntries = 200
+	entries := make([]fsEntry, 0, min(len(dirEntries), maxEntries))
+	// Normalize relPath so entry paths are clean.
+	if relPath == "." {
+		relPath = ""
+	}
+	for _, e := range dirEntries {
+		if len(entries) >= maxEntries {
+			break
+		}
+		entryPath := e.Name()
+		if relPath != "" {
+			entryPath = filepath.Join(relPath, e.Name())
+		}
+		entries = append(entries, fsEntry{
+			Name:  e.Name(),
+			Path:  entryPath,
+			IsDir: e.IsDir(),
+		})
+	}
+	return map[string]any{"entries": entries}, ""
+}
+
+func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, string) {
+	sessionID, _ := params["sessionId"].(string)
+	if sessionID == "" {
+		return nil, "missing sessionId"
+	}
+	query, _ := params["query"].(string)
+	if query == "" {
+		return nil, "missing query"
+	}
+	c.sessionCWDMu.RLock()
+	cwd, ok := c.sessionCWD[sessionID]
+	c.sessionCWDMu.RUnlock()
+	if !ok || cwd == "" {
+		return nil, "unknown session"
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	const maxResults = 50
+	lowerQuery := strings.ToLower(query)
+	var results []fsSearchResult
+
+	_ = filepath.WalkDir(cwd, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if path == cwd {
+			return nil
+		}
+		if strings.Contains(strings.ToLower(d.Name()), lowerQuery) {
+			rel, _ := filepath.Rel(cwd, path)
+			results = append(results, fsSearchResult{
+				Path:  rel,
+				IsDir: d.IsDir(),
+			})
+		}
+		return nil
+	})
+
+	sort.Slice(results, func(i, j int) bool {
+		di, dj := results[i].IsDir, results[j].IsDir
+		if di != dj {
+			return di
+		}
+		return len(results[i].Path) < len(results[j].Path)
+	})
+
+	if len(results) > maxResults {
+		results = results[:maxResults]
+	}
+	return map[string]any{"results": results}, ""
 }
 
 func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
