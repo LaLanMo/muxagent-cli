@@ -107,10 +107,10 @@ func (c *Client) Stop() error {
 // NewSession creates a new ACP session. If permissionMode is non-empty and
 // differs from "default", the mode is applied via the standard ACP
 // session/set_mode RPC immediately after creation.
-func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode string) (string, error) {
+func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode string) (string, []domain.ConfigOption, error) {
 	resolved, err := expandAndValidateCWD(cwd)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	params := map[string]any{
 		"cwd":        resolved,
@@ -127,17 +127,19 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 	}
 	result, err := c.transport.Call(ctx, "session/new", params)
 	if err != nil {
-		return "", fmt.Errorf("session/new: %w", err)
+		return "", nil, fmt.Errorf("session/new: %w", err)
 	}
+	log.Printf("[acp] session/new raw result: %s", string(result))
 
 	var resp struct {
 		SessionID string `json:"sessionId"`
 		Modes     *struct {
 			CurrentModeID string `json:"currentModeId"`
 		} `json:"modes"`
+		ConfigOptions []domain.ConfigOption `json:"configOptions"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return "", fmt.Errorf("parse session/new result: %w", err)
+		return "", nil, fmt.Errorf("parse session/new result: %w", err)
 	}
 
 	// Apply permission mode if requested and different from default.
@@ -165,15 +167,24 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 		})
 	}
 
-	return resp.SessionID, nil
+	// Emit initial model info from configOptions.
+	if ev := configOptionEvent(resp.SessionID, resp.ConfigOptions, "model", domain.EventModelChanged); ev != nil {
+		c.emit(*ev)
+	}
+
+	log.Printf("[acp] NewSession configOptions: %d items", len(resp.ConfigOptions))
+	for _, opt := range resp.ConfigOptions {
+		log.Printf("[acp]   option: id=%s category=%s currentValue=%s options=%d", opt.ID, opt.Category, opt.CurrentValue, len(opt.Options))
+	}
+	return resp.SessionID, resp.ConfigOptions, nil
 }
 
 // LoadSession loads an existing session. History is replayed via session/update notifications.
 // If permissionMode is non-default, it calls session/set_mode after loading.
-func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode string) error {
+func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) ([]domain.ConfigOption, error) {
 	resolved, err := expandAndValidateCWD(cwd)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	c.msgMu.Lock()
@@ -185,10 +196,11 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		"cwd":        resolved,
 		"mcpServers": []any{},
 	}
-	_, err = c.transport.Call(ctx, "session/load", params)
+	loadResult, err := c.transport.Call(ctx, "session/load", params)
 	if err != nil {
-		return fmt.Errorf("session/load: %w", err)
+		return nil, fmt.Errorf("session/load: %w", err)
 	}
+	log.Printf("[acp] session/load raw result: %s", string(loadResult))
 
 	// Re-apply permission mode if requested and different from default.
 	if domain.IsNonDefaultMode(permissionMode) {
@@ -208,7 +220,41 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		})
 	}
 
-	return nil
+	// Re-apply model if non-default.
+	if model != "" && model != "default" {
+		_, err := c.transport.Call(ctx, "session/set_config_option", map[string]any{
+			"sessionId": sessionID,
+			"configId":  "model",
+			"value":     model,
+		})
+		if err != nil {
+			log.Printf("[acp] failed to restore model %q on load: %v", model, err)
+		}
+	}
+
+	// Parse configOptions from load response.
+	var loadResp struct {
+		ConfigOptions []domain.ConfigOption `json:"configOptions"`
+	}
+	if loadResult != nil {
+		_ = json.Unmarshal(loadResult, &loadResp)
+	}
+
+	// If model was re-applied, override the currentValue in configOptions.
+	if model != "" && model != "default" {
+		for i, opt := range loadResp.ConfigOptions {
+			if opt.Category == "model" {
+				loadResp.ConfigOptions[i].CurrentValue = model
+				break
+			}
+		}
+	}
+
+	if ev := configOptionEvent(sessionID, loadResp.ConfigOptions, "model", domain.EventModelChanged); ev != nil {
+		c.emit(*ev)
+	}
+
+	return loadResp.ConfigOptions, nil
 }
 
 // ListSessions calls session/list on the ACP agent and returns session summaries.
@@ -305,6 +351,31 @@ func (c *Client) SetMode(ctx context.Context, sessionID, modeID string) error {
 		At:        time.Now(),
 		Data:      map[string]any{"currentModeId": modeID},
 	})
+	return nil
+}
+
+// SetConfigOption changes a config option (e.g. model) for the given session.
+func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value string) error {
+	log.Printf("[acp] SetConfigOption: sessionID=%s configID=%s value=%s", sessionID, configID, value)
+	result, err := c.transport.Call(ctx, "session/set_config_option", map[string]any{
+		"sessionId": sessionID,
+		"configId":  configID,
+		"value":     value,
+	})
+	if err != nil {
+		return fmt.Errorf("session/set_config_option: %w", err)
+	}
+	log.Printf("[acp] SetConfigOption raw result: %s", string(result))
+	// Parse response configOptions and emit events.
+	var resp struct {
+		ConfigOptions []domain.ConfigOption `json:"configOptions"`
+	}
+	if result != nil {
+		_ = json.Unmarshal(result, &resp)
+	}
+	if ev := configOptionEvent(sessionID, resp.ConfigOptions, "model", domain.EventModelChanged); ev != nil {
+		c.emit(*ev)
+	}
 	return nil
 }
 
@@ -471,8 +542,10 @@ func (c *Client) handleSessionUpdate(params json.RawMessage) {
 	case domain.UpdateSessionInfo:
 		// Future-proof: ready for session_info_update when runtimes emit it.
 		log.Printf("[acp] session_info_update for %s (no-op)", sessionID)
+	case domain.UpdateConfigOption:
+		c.handleConfigOptionUpdate(sessionID, full.Update)
 	default:
-		// available_commands_update, config_option_update — ignore
+		// available_commands_update etc — ignore
 		log.Printf("[acp] ignored session/update type: %s", updateType)
 	}
 }
@@ -821,6 +894,22 @@ func (c *Client) handleCurrentModeUpdate(sessionID string, raw json.RawMessage) 
 	})
 }
 
+func (c *Client) handleConfigOptionUpdate(sessionID string, raw json.RawMessage) {
+	var update struct {
+		ConfigOptions []domain.ConfigOption `json:"configOptions"`
+	}
+	if err := json.Unmarshal(raw, &update); err != nil {
+		log.Printf("[acp] failed to parse config_option_update: %v", err)
+		return
+	}
+	if ev := configOptionEvent(sessionID, update.ConfigOptions, "model", domain.EventModelChanged); ev != nil {
+		c.emit(*ev)
+	}
+	if ev := configOptionEvent(sessionID, update.ConfigOptions, "mode", domain.EventModeChanged); ev != nil {
+		c.emit(*ev)
+	}
+}
+
 func (c *Client) emit(ev domain.Event) {
 	select {
 	case c.events <- ev:
@@ -935,6 +1024,39 @@ func (c *Client) cancelPendingPermissions(sessionID string) error {
 		}
 	}
 	return firstErr
+}
+
+// configOptionEvent builds an event for a config option matching the given category.
+// Returns nil if no matching option is found.
+func configOptionEvent(sessionID string, opts []domain.ConfigOption, category string, eventType domain.EventType) *domain.Event {
+	for _, opt := range opts {
+		if opt.Category != category {
+			continue
+		}
+		values := make([]map[string]any, 0, len(opt.Options))
+		for _, v := range opt.Options {
+			m := map[string]any{"value": v.Value, "name": v.Name}
+			if v.Description != "" {
+				m["description"] = v.Description
+			}
+			values = append(values, m)
+		}
+		data := map[string]any{
+			"configId":     opt.ID,
+			"currentValue": opt.CurrentValue,
+			"values":       values,
+		}
+		if eventType == domain.EventModeChanged {
+			data["currentModeId"] = opt.CurrentValue
+		}
+		return &domain.Event{
+			Type:      eventType,
+			SessionID: sessionID,
+			At:        time.Now(),
+			Data:      data,
+		}
+	}
+	return nil
 }
 
 func expandAndValidateCWD(cwd string) (string, error) {

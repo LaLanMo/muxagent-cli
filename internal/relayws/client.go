@@ -36,12 +36,13 @@ const (
 // RuntimeClient is the subset of runtime.Client that the relay needs.
 // Defined here to avoid a circular import with the runtime package.
 type RuntimeClient interface {
-	NewSession(ctx context.Context, cwd string, permissionMode string) (string, error)
-	LoadSession(ctx context.Context, sessionID, cwd, permissionMode string) error
+	NewSession(ctx context.Context, cwd string, permissionMode string) (string, []domain.ConfigOption, error)
+	LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) ([]domain.ConfigOption, error)
 	ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
 	Cancel(ctx context.Context, sessionID string) error
 	SetMode(ctx context.Context, sessionID, modeID string) error
+	SetConfigOption(ctx context.Context, sessionID, configID, value string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error
 	PendingApprovals() []domain.ApprovalRequest
 }
@@ -336,6 +337,8 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 		result, respErr = c.rpcCancel(ctx, payload.Params)
 	case "session.setMode":
 		result, respErr = c.rpcSetMode(ctx, payload.Params)
+	case "session.setConfigOption":
+		result, respErr = c.rpcSetConfigOption(ctx, payload.Params)
 	case "approval.reply":
 		result, respErr = c.rpcReplyPermission(ctx, payload.Params)
 	case "events.resync":
@@ -425,7 +428,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	sessionID, err := c.runtime.NewSession(ctx, actualCWD, permissionMode)
+	sessionID, configOpts, err := c.runtime.NewSession(ctx, actualCWD, permissionMode)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -440,7 +443,14 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	return map[string]string{"sessionId": sessionID, "runtime": c.runtimeID, "cwd": actualCWD}, ""
+	resp := map[string]any{"sessionId": sessionID, "runtime": c.runtimeID, "cwd": actualCWD}
+	if len(configOpts) > 0 {
+		resp["configOptions"] = configOpts
+		log.Printf("[relay] session.create response includes %d configOptions", len(configOpts))
+	} else {
+		log.Printf("[relay] session.create response has NO configOptions")
+	}
+	return resp, ""
 }
 
 func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any, string) {
@@ -467,14 +477,30 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 		}
 	}
 
-	permissionMode, _ := params["permissionMode"].(string)
-	if err := c.runtime.LoadSession(ctx, sessionID, cwd, permissionMode); err != nil {
+	var permissionMode string
+	if v, ok := params["permissionMode"].(string); ok {
+		permissionMode = v
+	} else if params["permissionMode"] != nil {
+		log.Printf("[relay] rpcLoadSession: permissionMode has unexpected type %T", params["permissionMode"])
+	}
+	var model string
+	if v, ok := params["model"].(string); ok {
+		model = v
+	} else if params["model"] != nil {
+		log.Printf("[relay] rpcLoadSession: model has unexpected type %T", params["model"])
+	}
+	configOpts, err := c.runtime.LoadSession(ctx, sessionID, cwd, permissionMode, model)
+	if err != nil {
 		return nil, err.Error()
 	}
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = cwd
 	c.sessionCWDMu.Unlock()
-	return map[string]bool{"ok": true}, ""
+	resp := map[string]any{"ok": true}
+	if len(configOpts) > 0 {
+		resp["configOptions"] = configOpts
+	}
+	return resp, ""
 }
 
 func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) (any, string) {
@@ -598,6 +624,28 @@ func (c *Client) rpcSetMode(ctx context.Context, params map[string]any) (any, st
 		return nil, "missing permissionMode"
 	}
 	if err := c.runtime.SetMode(ctx, sessionID, modeID); err != nil {
+		return nil, err.Error()
+	}
+	return map[string]bool{"ok": true}, ""
+}
+
+func (c *Client) rpcSetConfigOption(ctx context.Context, params map[string]any) (any, string) {
+	if c.runtime == nil {
+		return nil, "runtime not available"
+	}
+	sessionID, _ := params["sessionId"].(string)
+	if sessionID == "" {
+		return nil, "missing sessionId"
+	}
+	configID, _ := params["configId"].(string)
+	if configID == "" {
+		return nil, "missing configId"
+	}
+	value, _ := params["value"].(string)
+	if value == "" {
+		return nil, "missing value"
+	}
+	if err := c.runtime.SetConfigOption(ctx, sessionID, configID, value); err != nil {
 		return nil, err.Error()
 	}
 	return map[string]bool{"ok": true}, ""

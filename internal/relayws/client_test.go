@@ -22,11 +22,11 @@ type blockingRuntime struct {
 	unblock     chan struct{}
 }
 
-func (r *blockingRuntime) NewSession(ctx context.Context, cwd string, permissionMode string) (string, error) {
-	return "sid", nil
+func (r *blockingRuntime) NewSession(ctx context.Context, cwd string, permissionMode string) (string, []domain.ConfigOption, error) {
+	return "sid", nil, nil
 }
 
-func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd, permissionMode string) error {
+func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) ([]domain.ConfigOption, error) {
 	select {
 	case r.loadStarted <- struct{}{}:
 	default:
@@ -34,9 +34,9 @@ func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd, permi
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-r.unblock:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -49,6 +49,10 @@ func (r *blockingRuntime) Cancel(ctx context.Context, sessionID string) error {
 }
 
 func (r *blockingRuntime) SetMode(ctx context.Context, sessionID, modeID string) error {
+	return nil
+}
+
+func (r *blockingRuntime) SetConfigOption(ctx context.Context, sessionID, configID, value string) error {
 	return nil
 }
 

@@ -93,7 +93,7 @@ func TestClient_InitializeAndNewSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, err := client.NewSession(ctx, "/tmp", "")
+	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 	assert.Equal(t, "test-session-001", sessionID)
 }
@@ -105,7 +105,7 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sessionID, err := client.NewSession(ctx, "/tmp", "")
+	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Start collecting events before prompt
@@ -172,7 +172,7 @@ func TestClient_PermissionFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sessionID, err := client.NewSession(ctx, "/tmp", "")
+	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Monitor events for approval request
@@ -215,7 +215,7 @@ func TestClient_Cancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, err := client.NewSession(ctx, "/tmp", "")
+	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Cancel should not hang or error (it's a notification)
@@ -230,7 +230,7 @@ func TestClient_CancelRespondsPendingPermission(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	sessionID, err := client.NewSession(ctx, "/tmp", "")
+	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	approvalSeen := make(chan struct{}, 1)
@@ -282,7 +282,7 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 		done <- collectEvents(client.Events(), 3*time.Second)
 	}()
 
-	err := client.LoadSession(ctx, "test-session-001", "/tmp", "")
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
 	require.NoError(t, err)
 
 	// Give events time to propagate
@@ -337,7 +337,7 @@ func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() { client.Stop() })
 
-	sessionID, err := client.NewSession(ctx, "/tmp", "")
+	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, sessionID)
 }
@@ -345,15 +345,15 @@ func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {
 func TestClient_RequiresAbsoluteCWD(t *testing.T) {
 	client := acp.NewClient(acp.Config{})
 
-	_, err := client.NewSession(context.Background(), "", "")
+	_, _, err := client.NewSession(context.Background(), "", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 
-	_, err = client.NewSession(context.Background(), "relative/path", "")
+	_, _, err = client.NewSession(context.Background(), "relative/path", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 
-	err = client.LoadSession(context.Background(), "sid", "", "")
+	_, err = client.LoadSession(context.Background(), "sid", "", "", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 
-	err = client.LoadSession(context.Background(), "sid", "relative/path", "")
+	_, err = client.LoadSession(context.Background(), "sid", "relative/path", "", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 }
