@@ -381,15 +381,27 @@ func (c *Client) handleRPC(enc EncryptedMessage) {
 	}
 }
 
+// stringParam extracts a string from params with explicit type checking.
+// Logs a warning if the key is present but has a non-string type.
+func stringParam(params map[string]any, key string) string {
+	if v, ok := params[key].(string); ok {
+		return v
+	}
+	if params[key] != nil {
+		log.Printf("[relay] param %q: expected string, got %T", key, params[key])
+	}
+	return ""
+}
+
 func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	cwd, _ := params["cwd"].(string)
+	cwd := stringParam(params, "cwd")
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
-	permissionMode, _ := params["permissionMode"].(string)
+	permissionMode := stringParam(params, "permissionMode")
 	var useWorktree bool
 	if v, exists := params["useWorktree"]; exists {
 		var ok bool
@@ -457,11 +469,11 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-	cwd, _ := params["cwd"].(string)
+	cwd := stringParam(params, "cwd")
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
@@ -477,18 +489,8 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 		}
 	}
 
-	var permissionMode string
-	if v, ok := params["permissionMode"].(string); ok {
-		permissionMode = v
-	} else if params["permissionMode"] != nil {
-		log.Printf("[relay] rpcLoadSession: permissionMode has unexpected type %T", params["permissionMode"])
-	}
-	var model string
-	if v, ok := params["model"].(string); ok {
-		model = v
-	} else if params["model"] != nil {
-		log.Printf("[relay] rpcLoadSession: model has unexpected type %T", params["model"])
-	}
+	permissionMode := stringParam(params, "permissionMode")
+	model := stringParam(params, "model")
 	configOpts, err := c.runtime.LoadSession(ctx, sessionID, cwd, permissionMode, model)
 	if err != nil {
 		return nil, err.Error()
@@ -507,7 +509,12 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	rawIDs, _ := params["sessionIds"].([]any)
+	var rawIDs []any
+	if v, ok := params["sessionIds"].([]any); ok {
+		rawIDs = v
+	} else if params["sessionIds"] != nil {
+		log.Printf("[relay] param %q: expected []any, got %T", "sessionIds", params["sessionIds"])
+	}
 	wanted := make(map[string]struct{}, len(rawIDs))
 	for _, item := range rawIDs {
 		id, _ := item.(string)
@@ -536,7 +543,7 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
@@ -601,7 +608,7 @@ func (c *Client) rpcCancel(ctx context.Context, params map[string]any) (any, str
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
@@ -615,11 +622,11 @@ func (c *Client) rpcSetMode(ctx context.Context, params map[string]any) (any, st
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-	modeID, _ := params["permissionMode"].(string)
+	modeID := stringParam(params, "permissionMode")
 	if modeID == "" {
 		return nil, "missing permissionMode"
 	}
@@ -633,15 +640,15 @@ func (c *Client) rpcSetConfigOption(ctx context.Context, params map[string]any) 
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-	configID, _ := params["configId"].(string)
+	configID := stringParam(params, "configId")
 	if configID == "" {
 		return nil, "missing configId"
 	}
-	value, _ := params["value"].(string)
+	value := stringParam(params, "value")
 	if value == "" {
 		return nil, "missing value"
 	}
@@ -655,15 +662,15 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-	requestID, _ := params["requestId"].(string)
+	requestID := stringParam(params, "requestId")
 	if requestID == "" {
 		return nil, "missing requestId"
 	}
-	optionID, _ := params["optionId"].(string)
+	optionID := stringParam(params, "optionId")
 	if optionID == "" {
 		return nil, "missing optionId"
 	}
@@ -743,7 +750,7 @@ func safePath(cwd, relPath string) (string, error) {
 }
 
 func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, string) {
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
@@ -754,7 +761,7 @@ func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, strin
 		return nil, "unknown session"
 	}
 
-	relPath, _ := params["path"].(string)
+	relPath := stringParam(params, "path")
 	target, err := safePath(cwd, relPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "path outside project") || strings.Contains(err.Error(), "symlink escape") {
@@ -800,11 +807,11 @@ func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, strin
 }
 
 func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, string) {
-	sessionID, _ := params["sessionId"].(string)
+	sessionID := stringParam(params, "sessionId")
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-	query, _ := params["query"].(string)
+	query := stringParam(params, "query")
 	if query == "" {
 		return nil, "missing query"
 	}
