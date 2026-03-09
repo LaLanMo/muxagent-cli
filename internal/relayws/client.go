@@ -401,6 +401,12 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
+	// Expand ~ before any path operations (worktree, git, etc.)
+	if strings.HasPrefix(cwd, "~/") || cwd == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			cwd = filepath.Join(home, cwd[1:])
+		}
+	}
 	permissionMode := stringParam(params, "permissionMode")
 	var useWorktree bool
 	if v, exists := params["useWorktree"]; exists {
