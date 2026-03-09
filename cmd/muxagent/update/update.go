@@ -1,7 +1,14 @@
 package update
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,14 +17,50 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/version"
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 )
 
-const cliRepo = "LaLanMo/muxagent-cli"
+const (
+	cliRepo                   = "LaLanMo/muxagent-cli"
+	releaseManifestName       = "SHA256SUMS"
+	releaseManifestSigName    = "SHA256SUMS.sig"
+	releaseLatestMaxBytes     = 1 << 20
+	releaseManifestMaxBytes   = 1 << 20
+	releaseSignatureMaxBytes  = 64 << 10
+	releaseBinaryMaxBytes     = 100 << 20
+	updateHTTPTimeout         = 5 * time.Minute
+	maxRedirects              = 10
+	updatedBackupEnvVar       = "MUXAGENT_UPDATED_BACKUP"
+	releaseManifestHeaderBase = "# muxagent "
+)
+
+var releaseSigningPublicKeyStrings = []string{
+	// Replace this key before the first public release.
+	"7cFuofQWv74pbJYeyyeGfBw1Bk3YKX2uZwAlPp4n3AE=",
+}
+
+type releaseManifest struct {
+	Version string
+	Entries map[string]string
+}
+
+type updater struct {
+	client                 *http.Client
+	latestReleaseURL       string
+	releaseDownloadBaseURL string
+	releaseSigningKeys     []ed25519.PublicKey
+	resolveExecutablePath  func() (string, error)
+	exec                   func(string, []string, []string) error
+	environ                func() []string
+	goos                   string
+	goarch                 string
+}
 
 func NewCmd() *cobra.Command {
 	var checkOnly bool
@@ -41,22 +84,38 @@ func NewCmd() *cobra.Command {
 }
 
 func run(checkOnly bool) error {
-	current := version.Version
-	if current == "dev" {
+	u, err := newDefaultUpdater()
+	if err != nil {
+		return err
+	}
+	return runWithUpdater(u, checkOnly, version.Version)
+}
+
+func runWithUpdater(u *updater, checkOnly bool, currentVersion string) error {
+	if currentVersion == "dev" {
 		fmt.Println("Running development build. Skipping update.")
 		return nil
 	}
+	if u.goos == "windows" {
+		return fmt.Errorf("self-update is not supported on windows")
+	}
 
-	latest, err := latestRelease()
+	current, err := normalizeVersion(currentVersion)
+	if err != nil {
+		return fmt.Errorf("invalid current version: %w", err)
+	}
+
+	latest, err := u.latestRelease(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %w", err)
 	}
 
-	latestClean := strings.TrimPrefix(latest, "v")
-	currentClean := strings.TrimPrefix(current, "v")
+	currentClean := displayVersion(current)
+	latestClean := displayVersion(latest)
+	cmp := semver.Compare(latest, current)
 
 	if checkOnly {
-		if latestClean == currentClean {
+		if cmp <= 0 {
 			fmt.Printf("muxagent is up to date (v%s)\n", currentClean)
 		} else {
 			fmt.Printf("Update available: v%s → v%s\nRun \"muxagent update\" to install.\n", currentClean, latestClean)
@@ -64,29 +123,16 @@ func run(checkOnly bool) error {
 		return nil
 	}
 
-	if latestClean == currentClean {
+	if cmp <= 0 {
 		fmt.Printf("muxagent is up to date (v%s)\n", currentClean)
-		// Still ensure runtime is resolved
 		return ensureRuntime()
 	}
 
 	fmt.Printf("Updating muxagent... (v%s → v%s)\n", currentClean, latestClean)
-
-	if err := downloadCLI(latest); err != nil {
+	if err := u.install(context.Background(), latest); err != nil {
 		return err
 	}
-
-	// Re-exec the new binary to resolve the runtime with its embedded ACPVersion.
-	// This ensures CLI + runtime are both updated in one shot.
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("updated CLI but failed to resolve executable: %w", err)
-	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return fmt.Errorf("updated CLI but failed to resolve executable: %w", err)
-	}
-	return syscall.Exec(exe, []string{exe, "update", "--ensure-runtime"}, os.Environ())
+	return nil
 }
 
 func ensureRuntime() error {
@@ -114,38 +160,306 @@ func ensureRuntime() error {
 	return nil
 }
 
-func latestRelease() (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", cliRepo)
-	resp, err := http.Get(url)
+func CleanupUpdatedBackup() {
+	backupPath := os.Getenv(updatedBackupEnvVar)
+	if backupPath == "" {
+		return
+	}
+
+	_ = os.Unsetenv(updatedBackupEnvVar)
+	exePath, err := currentExecutablePath()
+	if err != nil {
+		return
+	}
+	if backupPath != exePath+".bak" {
+		return
+	}
+	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+}
+
+func newDefaultUpdater() (*updater, error) {
+	signingKeys, err := decodeSigningPublicKeys(releaseSigningPublicKeyStrings)
+	if err != nil {
+		return nil, fmt.Errorf("invalid embedded release signing keys: %w", err)
+	}
+
+	return &updater{
+		client:                 newUpdateHTTPClient(),
+		latestReleaseURL:       fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", cliRepo),
+		releaseDownloadBaseURL: fmt.Sprintf("https://github.com/%s/releases/download", cliRepo),
+		releaseSigningKeys:     signingKeys,
+		resolveExecutablePath:  currentExecutablePath,
+		exec:                   syscall.Exec,
+		environ:                os.Environ,
+		goos:                   runtime.GOOS,
+		goarch:                 runtime.GOARCH,
+	}, nil
+}
+
+func newUpdateHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       updateHTTPTimeout,
+		CheckRedirect: httpsOnlyRedirectPolicy,
+	}
+}
+
+func httpsOnlyRedirectPolicy(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect to non-https URL %q", req.URL.String())
+	}
+	return nil
+}
+
+func currentExecutablePath() (string, error) {
+	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	return filepath.EvalSymlinks(exe)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
+func decodeSigningPublicKeys(keys []string) ([]ed25519.PublicKey, error) {
+	decoded := make([]ed25519.PublicKey, 0, len(keys))
+	for _, key := range keys {
+		raw, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("invalid public key length")
+		}
+		decoded = append(decoded, ed25519.PublicKey(raw))
+	}
+	return decoded, nil
+}
+
+func normalizeVersion(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("empty version")
+	}
+	normalized := raw
+	if !strings.HasPrefix(normalized, "v") {
+		normalized = "v" + normalized
+	}
+	if !semver.IsValid(normalized) {
+		return "", fmt.Errorf("invalid semver %q", raw)
+	}
+	return normalized, nil
+}
+
+func displayVersion(v string) string {
+	return strings.TrimPrefix(v, "v")
+}
+
+func (u *updater) latestRelease(ctx context.Context) (string, error) {
+	body, err := u.fetchBytes(ctx, u.latestReleaseURL, releaseLatestMaxBytes, "latest release metadata")
+	if err != nil {
+		return "", err
 	}
 
 	var release struct {
 		TagName string `json:"tag_name"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
+	if err := json.Unmarshal(body, &release); err != nil {
+		return "", fmt.Errorf("decode latest release metadata: %w", err)
 	}
-	return release.TagName, nil
+	return normalizeVersion(release.TagName)
 }
 
-func downloadCLI(tag string) error {
-	arch := runtime.GOARCH
-	goos := runtime.GOOS
-
-	assetName := fmt.Sprintf("muxagent-%s-%s", goos, arch)
-	if goos == "windows" {
-		assetName += ".exe"
+func (u *updater) install(ctx context.Context, latest string) error {
+	exePath, err := u.resolveExecutablePath()
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", cliRepo, tag, assetName)
-	resp, err := http.Get(url)
+	lock, err := acquireUpdateLock(exePath + ".lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+
+	manifest, err := u.fetchAndVerifyManifest(ctx, latest)
+	if err != nil {
+		return err
+	}
+
+	assetName := u.assetName()
+	expectedHash, ok := manifest.Entries[assetName]
+	if !ok {
+		return fmt.Errorf("release manifest missing asset %q", assetName)
+	}
+
+	tmpPath := exePath + ".tmp"
+	bakPath := exePath + ".bak"
+	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
+
+	if err := u.downloadVerifiedBinary(ctx, u.releaseAssetURL(latest, assetName), tmpPath, expectedHash); err != nil {
+		return err
+	}
+	if err := copyFile(exePath, bakPath); err != nil {
+		_ = os.Remove(bakPath)
+		return fmt.Errorf("create rollback backup: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, exePath); err != nil {
+		_ = os.Remove(bakPath)
+		return fmt.Errorf("replace executable: %w", err)
+	}
+
+	env := setEnv(u.environ(), updatedBackupEnvVar, bakPath)
+	if err := u.exec(exePath, []string{exePath, "update", "--ensure-runtime"}, env); err != nil {
+		if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
+			return fmt.Errorf("re-exec failed: %v (rollback failed: %w)", err, restoreErr)
+		}
+		return fmt.Errorf("re-exec updated binary: %w", err)
+	}
+	return nil
+}
+
+func (u *updater) fetchAndVerifyManifest(ctx context.Context, latest string) (*releaseManifest, error) {
+	manifestBytes, err := u.fetchBytes(ctx, u.releaseAssetURL(latest, releaseManifestName), releaseManifestMaxBytes, "release manifest")
+	if err != nil {
+		return nil, err
+	}
+	signatureBytes, err := u.fetchBytes(ctx, u.releaseAssetURL(latest, releaseManifestSigName), releaseSignatureMaxBytes, "release manifest signature")
+	if err != nil {
+		return nil, err
+	}
+
+	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(signatureBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("decode release manifest signature: %w", err)
+	}
+	if !verifyManifestSignature(manifestBytes, signature, u.releaseSigningKeys) {
+		return nil, fmt.Errorf("release manifest signature verification failed")
+	}
+
+	manifest, err := parseReleaseManifest(manifestBytes)
+	if err != nil {
+		return nil, err
+	}
+	if manifest.Version != latest {
+		return nil, fmt.Errorf("release manifest version %q does not match latest release %q", manifest.Version, latest)
+	}
+	return manifest, nil
+}
+
+func (u *updater) fetchBytes(ctx context.Context, url string, maxBytes int64, label string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := u.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", label, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s: unexpected HTTP %d", label, resp.StatusCode)
+	}
+	body, err := readAllLimited(resp.Body, maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", label, err)
+	}
+	return body, nil
+}
+
+func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	limited := io.LimitReader(r, maxBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("response exceeds %d bytes", maxBytes)
+	}
+	return body, nil
+}
+
+func verifyManifestSignature(manifest, signature []byte, keys []ed25519.PublicKey) bool {
+	for _, key := range keys {
+		if ed25519.Verify(key, manifest, signature) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseReleaseManifest(manifestBytes []byte) (*releaseManifest, error) {
+	normalized := strings.ReplaceAll(string(manifestBytes), "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
+		return nil, fmt.Errorf("release manifest missing version header")
+	}
+
+	header := strings.TrimSpace(lines[0])
+	if !strings.HasPrefix(header, releaseManifestHeaderBase) {
+		return nil, fmt.Errorf("release manifest missing version header")
+	}
+	versionText := strings.TrimSpace(strings.TrimPrefix(header, releaseManifestHeaderBase))
+	versionValue, err := normalizeVersion(versionText)
+	if err != nil {
+		return nil, fmt.Errorf("release manifest has invalid version header: %w", err)
+	}
+
+	entries := make(map[string]string)
+	for _, line := range lines[1:] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("invalid release manifest line %q", line)
+		}
+		hashValue := strings.ToLower(fields[0])
+		if len(hashValue) != sha256.Size*2 {
+			return nil, fmt.Errorf("invalid release manifest hash %q", fields[0])
+		}
+		if _, err := hex.DecodeString(hashValue); err != nil {
+			return nil, fmt.Errorf("invalid release manifest hash %q", fields[0])
+		}
+		if _, exists := entries[fields[1]]; exists {
+			return nil, fmt.Errorf("duplicate release manifest entry for %q", fields[1])
+		}
+		entries[fields[1]] = hashValue
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("release manifest has no asset entries")
+	}
+
+	return &releaseManifest{
+		Version: versionValue,
+		Entries: entries,
+	}, nil
+}
+
+func (u *updater) assetName() string {
+	assetName := fmt.Sprintf("muxagent-%s-%s", u.goos, u.goarch)
+	if u.goos == "windows" {
+		assetName += ".exe"
+	}
+	return assetName
+}
+
+func (u *updater) releaseAssetURL(tag, assetName string) string {
+	return strings.TrimRight(u.releaseDownloadBaseURL, "/") + "/" + tag + "/" + assetName
+}
+
+func (u *updater) downloadVerifiedBinary(ctx context.Context, url, destPath, expectedHash string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := u.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download update: %w", err)
 	}
@@ -154,38 +468,109 @@ func downloadCLI(tag string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to download update (HTTP %d)", resp.StatusCode)
 	}
-
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return err
+	if resp.ContentLength > releaseBinaryMaxBytes {
+		return fmt.Errorf("update binary exceeds %d bytes", releaseBinaryMaxBytes)
 	}
 
-	tmpPath := exe + ".tmp"
-	f, err := os.Create(tmpPath)
+	f, err := os.Create(destPath)
 	if err != nil {
 		return fmt.Errorf("cannot write update: %w", err)
 	}
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+	hasher := sha256.New()
+	reader := io.LimitReader(resp.Body, releaseBinaryMaxBytes+1)
+	written, err := io.Copy(io.MultiWriter(f, hasher), reader)
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(destPath)
 		return fmt.Errorf("failed to download update: %w", err)
 	}
-	f.Close()
-
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
-		os.Remove(tmpPath)
-		return err
+	if written == 0 {
+		_ = f.Close()
+		_ = os.Remove(destPath)
+		return fmt.Errorf("update binary is empty")
 	}
-
-	if err := os.Rename(tmpPath, exe); err != nil {
-		os.Remove(tmpPath)
-		return err
+	if written > releaseBinaryMaxBytes {
+		_ = f.Close()
+		_ = os.Remove(destPath)
+		return fmt.Errorf("update binary exceeds %d bytes", releaseBinaryMaxBytes)
 	}
-
+	expectedHashBytes, err := hex.DecodeString(expectedHash)
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(destPath)
+		return fmt.Errorf("invalid expected update checksum: %w", err)
+	}
+	actualHashBytes := hasher.Sum(nil)
+	if subtle.ConstantTimeCompare(actualHashBytes, expectedHashBytes) != 1 {
+		_ = f.Close()
+		_ = os.Remove(destPath)
+		return fmt.Errorf("update binary checksum mismatch")
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(destPath)
+		return fmt.Errorf("failed to close update binary: %w", err)
+	}
+	if err := os.Chmod(destPath, 0o755); err != nil {
+		_ = os.Remove(destPath)
+		return fmt.Errorf("chmod update binary: %w", err)
+	}
 	return nil
+}
+
+func copyFile(srcPath, dstPath string) error {
+	_ = os.Remove(dstPath)
+
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		return err
+	}
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, srcInfo.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		_ = os.Remove(dstPath)
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(dstPath)
+		return err
+	}
+	return nil
+}
+
+func restoreExecutable(exePath, bakPath string) error {
+	if err := os.Rename(bakPath, exePath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	replaced := false
+	updated := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			if !replaced {
+				updated = append(updated, prefix+value)
+				replaced = true
+			}
+			continue
+		}
+		updated = append(updated, entry)
+	}
+	if !replaced {
+		updated = append(updated, prefix+value)
+	}
+	return updated
 }

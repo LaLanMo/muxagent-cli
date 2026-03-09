@@ -13,7 +13,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+const (
+	httpTimeout             = 5 * time.Minute
+	maxRedirects            = 10
+	maxArchiveDownloadBytes = 500 << 20
+	maxExtractedBinaryBytes = 500 << 20
+)
+
+var downloadHTTPClient = &http.Client{
+	Timeout:       httpTimeout,
+	CheckRedirect: httpsOnlyRedirectPolicy,
+}
 
 // ProgressEvent reports download/verify/extract progress.
 type ProgressEvent struct {
@@ -47,7 +60,7 @@ func Download(progressFn func(ProgressEvent)) (string, error) {
 	defer os.Remove(tmpArchive)
 
 	// Download
-	if err := httpDownload(url, tmpArchive, progressFn); err != nil {
+	if err := httpDownload(downloadHTTPClient, url, tmpArchive, maxArchiveDownloadBytes, progressFn); err != nil {
 		return "", err
 	}
 
@@ -71,9 +84,9 @@ func Download(progressFn func(ProgressEvent)) (string, error) {
 	defer os.Remove(tmpBin)
 
 	if strings.Contains(platform, "linux") {
-		err = extractTarGz(tmpArchive, tmpBin)
+		err = extractTarGz(tmpArchive, tmpBin, maxExtractedBinaryBytes)
 	} else {
-		err = extractZip(tmpArchive, tmpBin)
+		err = extractZip(tmpArchive, tmpBin, maxExtractedBinaryBytes)
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to extract agent runtime: %w", err)
@@ -91,8 +104,18 @@ func Download(progressFn func(ProgressEvent)) (string, error) {
 	return dest, nil
 }
 
-func httpDownload(url, dest string, progressFn func(ProgressEvent)) error {
-	resp, err := http.Get(url)
+func httpsOnlyRedirectPolicy(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect to non-https URL %q", req.URL.String())
+	}
+	return nil
+}
+
+func httpDownload(client *http.Client, url, dest string, maxBytes int64, progressFn func(ProgressEvent)) error {
+	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to download agent runtime: %w", err)
 	}
@@ -101,12 +124,14 @@ func httpDownload(url, dest string, progressFn func(ProgressEvent)) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to download agent runtime (HTTP %d). Run \"muxagent update\" to retry", resp.StatusCode)
 	}
+	if resp.ContentLength > maxBytes {
+		return fmt.Errorf("agent runtime download exceeds %d bytes", maxBytes)
+	}
 
 	f, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
 	var reader io.Reader = resp.Body
 	if progressFn != nil {
@@ -116,10 +141,22 @@ func httpDownload(url, dest string, progressFn func(ProgressEvent)) error {
 			progressFn: progressFn,
 		}
 	}
+	reader = io.LimitReader(reader, maxBytes+1)
 
-	if _, err := io.Copy(f, reader); err != nil {
+	written, err := io.Copy(f, reader)
+	if err != nil {
+		_ = f.Close()
 		os.Remove(dest)
 		return fmt.Errorf("failed to download agent runtime: %w", err)
+	}
+	if written > maxBytes {
+		_ = f.Close()
+		os.Remove(dest)
+		return fmt.Errorf("agent runtime download exceeds %d bytes", maxBytes)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(dest)
+		return err
 	}
 	return nil
 }
@@ -159,7 +196,7 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func extractTarGz(archivePath, destPath string) error {
+func extractTarGz(archivePath, destPath string, maxBytes int64) error {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -182,19 +219,16 @@ func extractTarGz(archivePath, destPath string) error {
 			return err
 		}
 		if filepath.Base(hdr.Name) == "claude-agent-acp" && hdr.Typeflag == tar.TypeReg {
-			out, err := os.Create(destPath)
-			if err != nil {
-				return err
+			if hdr.Size > maxBytes {
+				return fmt.Errorf("extracted agent runtime exceeds %d bytes", maxBytes)
 			}
-			defer out.Close()
-			_, err = io.Copy(out, tr)
-			return err
+			return copyReaderToFile(destPath, tr, maxBytes)
 		}
 	}
 	return fmt.Errorf("claude-agent-acp not found in archive")
 }
 
-func extractZip(archivePath, destPath string) error {
+func extractZip(archivePath, destPath string, maxBytes int64) error {
 	r, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return err
@@ -203,20 +237,39 @@ func extractZip(archivePath, destPath string) error {
 
 	for _, f := range r.File {
 		if filepath.Base(f.Name) == "claude-agent-acp" || filepath.Base(f.Name) == "claude-agent-acp.exe" {
+			if int64(f.UncompressedSize64) > maxBytes {
+				return fmt.Errorf("extracted agent runtime exceeds %d bytes", maxBytes)
+			}
 			rc, err := f.Open()
 			if err != nil {
 				return err
 			}
 			defer rc.Close()
-
-			out, err := os.Create(destPath)
-			if err != nil {
-				return err
-			}
-			defer out.Close()
-			_, err = io.Copy(out, rc)
-			return err
+			return copyReaderToFile(destPath, rc, maxBytes)
 		}
 	}
 	return fmt.Errorf("claude-agent-acp not found in archive")
+}
+
+func copyReaderToFile(destPath string, src io.Reader, maxBytes int64) error {
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+
+	written, copyErr := io.Copy(out, io.LimitReader(src, maxBytes+1))
+	closeErr := out.Close()
+	if copyErr != nil {
+		os.Remove(destPath)
+		return copyErr
+	}
+	if written > maxBytes {
+		os.Remove(destPath)
+		return fmt.Errorf("extracted agent runtime exceeds %d bytes", maxBytes)
+	}
+	if closeErr != nil {
+		os.Remove(destPath)
+		return closeErr
+	}
+	return nil
 }
