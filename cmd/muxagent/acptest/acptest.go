@@ -84,7 +84,7 @@ func run(cmd *cobra.Command, promptText, cwd string) error {
 	content := []domain.ContentBlock{{Type: "text", Text: promptText}}
 	fmt.Fprintf(cmd.OutOrStdout(), "[prompt] sending: %q\n", promptText)
 
-	stopReason, err := client.Prompt(ctx, sessionID, content)
+	stopReason, _, err := client.Prompt(ctx, sessionID, content)
 	if err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}

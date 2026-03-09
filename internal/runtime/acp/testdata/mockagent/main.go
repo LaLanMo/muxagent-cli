@@ -159,6 +159,13 @@ func handlePrompt(id int64, params json.RawMessage) {
 
 	respond(id, map[string]any{
 		"stopReason": "end_turn",
+		"usage": map[string]any{
+			"inputTokens":       1200,
+			"outputTokens":      350,
+			"cachedReadTokens":  800,
+			"cachedWriteTokens": 100,
+			"totalTokens":       2450,
+		},
 	})
 
 }

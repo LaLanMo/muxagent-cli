@@ -114,7 +114,7 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 		done <- collectEvents(client.Events(), 5*time.Second)
 	}()
 
-	stopReason, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+	stopReason, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
 		{Type: "text", Text: "hello"},
 	})
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestClient_PermissionFlow(t *testing.T) {
 	}()
 
 	// Send prompt that triggers permission flow
-	stopReason, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+	stopReason, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
 		{Type: "text", Text: "test permission flow"},
 	})
 	require.NoError(t, err)
@@ -237,7 +237,7 @@ func TestClient_CancelRespondsPendingPermission(t *testing.T) {
 	promptDone := make(chan error, 1)
 
 	go func() {
-		_, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+		_, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
 			{Type: "text", Text: "trigger permission"},
 		})
 		promptDone <- err

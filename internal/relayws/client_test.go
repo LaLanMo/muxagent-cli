@@ -40,8 +40,8 @@ func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd, permi
 	}
 }
 
-func (r *blockingRuntime) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error) {
-	return "stop", nil
+func (r *blockingRuntime) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error) {
+	return "stop", nil, nil
 }
 
 func (r *blockingRuntime) Cancel(ctx context.Context, sessionID string) error {

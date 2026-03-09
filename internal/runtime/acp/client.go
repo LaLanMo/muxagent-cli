@@ -296,8 +296,8 @@ func (c *Client) ListSessions(ctx context.Context, cwd string) ([]domain.Session
 	return summaries, nil
 }
 
-// Prompt sends a prompt to the agent. Returns the stop reason when the agent finishes.
-func (c *Client) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error) {
+// Prompt sends a prompt to the agent. Returns the stop reason and usage when the agent finishes.
+func (c *Client) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error) {
 	// Assign fresh IDs for this agent response turn.
 	c.msgMu.Lock()
 	state := c.ensureSessionMsgStateLocked(sessionID)
@@ -311,16 +311,17 @@ func (c *Client) Prompt(ctx context.Context, sessionID string, content []domain.
 	}
 	result, err := c.transport.Call(ctx, "session/prompt", params)
 	if err != nil {
-		return "", fmt.Errorf("session/prompt: %w", err)
+		return "", nil, fmt.Errorf("session/prompt: %w", err)
 	}
 
 	var resp struct {
-		StopReason string `json:"stopReason"`
+		StopReason string              `json:"stopReason"`
+		Usage      *domain.PromptUsage `json:"usage"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return "", fmt.Errorf("parse session/prompt result: %w", err)
+		return "", nil, fmt.Errorf("parse session/prompt result: %w", err)
 	}
-	return resp.StopReason, nil
+	return resp.StopReason, resp.Usage, nil
 }
 
 // Cancel sends a cancel notification for the given session.
@@ -539,6 +540,8 @@ func (c *Client) handleSessionUpdate(params json.RawMessage) {
 		c.handlePlan(sessionID, full.Update)
 	case domain.UpdateCurrentMode:
 		c.handleCurrentModeUpdate(sessionID, full.Update)
+	case domain.UpdateUsageUpdate:
+		c.handleUsageUpdate(sessionID, full.Update)
 	case domain.UpdateSessionInfo:
 		// Future-proof: ready for session_info_update when runtimes emit it.
 		log.Printf("[acp] session_info_update for %s (no-op)", sessionID)
@@ -908,6 +911,34 @@ func (c *Client) handleConfigOptionUpdate(sessionID string, raw json.RawMessage)
 	if ev := configOptionEvent(sessionID, update.ConfigOptions, "mode", domain.EventModeChanged); ev != nil {
 		c.emit(*ev)
 	}
+}
+
+func (c *Client) handleUsageUpdate(sessionID string, raw json.RawMessage) {
+	var update struct {
+		Used int64 `json:"used"`
+		Size int64 `json:"size"`
+		Cost *struct {
+			Amount   float64 `json:"amount"`
+			Currency string  `json:"currency"`
+		} `json:"cost"`
+	}
+	if err := json.Unmarshal(raw, &update); err != nil {
+		return
+	}
+	data := map[string]any{
+		"contextUsed": update.Used,
+		"contextSize": update.Size,
+	}
+	if update.Cost != nil {
+		data["costAmount"] = update.Cost.Amount
+		data["costCurrency"] = update.Cost.Currency
+	}
+	c.emit(domain.Event{
+		Type:      domain.EventUsageUpdate,
+		SessionID: sessionID,
+		At:        time.Now(),
+		Data:      data,
+	})
 }
 
 func (c *Client) emit(ev domain.Event) {

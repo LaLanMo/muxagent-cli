@@ -36,11 +36,18 @@ type SessionSummary struct {
 // --- Cost ---
 
 type CostInfo struct {
-	TotalUSD     float64 `json:"totalUsd,omitempty"`
-	InputTokens  int64   `json:"inputTokens,omitempty"`
-	OutputTokens int64   `json:"outputTokens,omitempty"`
-	CacheRead    int64   `json:"cacheRead,omitempty"`
-	CacheWrite   int64   `json:"cacheWrite,omitempty"`
+	CostAmount   float64 `json:"costAmount,omitempty"`
+	CostCurrency string  `json:"costCurrency,omitempty"`
+	TotalTokens  int64   `json:"totalTokens,omitempty"`
+}
+
+// PromptUsage holds cumulative token usage returned by ACP PromptResponse.
+type PromptUsage struct {
+	InputTokens       int64 `json:"inputTokens"`
+	OutputTokens      int64 `json:"outputTokens"`
+	CachedReadTokens  int64 `json:"cachedReadTokens"`
+	CachedWriteTokens int64 `json:"cachedWriteTokens"`
+	TotalTokens       int64 `json:"totalTokens"`
 }
 
 // --- Tool ---
@@ -142,6 +149,7 @@ const (
 	UpdateCurrentMode       SessionUpdateType = "current_mode_update"
 	UpdateConfigOption      SessionUpdateType = "config_option_update"
 	UpdateSessionInfo       SessionUpdateType = "session_info_update"
+	UpdateUsageUpdate       SessionUpdateType = "usage_update"
 )
 
 // ContentBlock is an ACP prompt input block.
@@ -208,6 +216,7 @@ const (
 	EventPlanUpdated       EventType = "plan.updated"
 	EventModeChanged       EventType = "mode.changed"
 	EventModelChanged      EventType = "model.changed"
+	EventUsageUpdate       EventType = "usage.update"
 )
 
 type MessagePartEvent struct {

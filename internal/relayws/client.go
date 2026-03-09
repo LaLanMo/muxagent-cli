@@ -39,7 +39,7 @@ type RuntimeClient interface {
 	NewSession(ctx context.Context, cwd string, permissionMode string) (string, []domain.ConfigOption, error)
 	LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) ([]domain.ConfigOption, error)
 	ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error)
-	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, error)
+	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error)
 	Cancel(ctx context.Context, sessionID string) error
 	SetMode(ctx context.Context, sessionID, modeID string) error
 	SetConfigOption(ctx context.Context, sessionID, configID, value string) error
@@ -582,7 +582,7 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 	// Flutter client's RPC timeout doesn't fire.  Use context.Background()
 	// because the handleRPC ctx lifetime ends when we return.
 	go func() {
-		stopReason, err := c.runtime.Prompt(context.Background(), sessionID, content)
+		stopReason, usage, err := c.runtime.Prompt(context.Background(), sessionID, content)
 		now := time.Now()
 		if err != nil {
 			if evErr := c.SendEvent(domain.Event{
@@ -596,11 +596,19 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 			// Don't call syncSessionStatus — run.failed already signals the error state.
 			return
 		}
+		data := map[string]any{"stopReason": stopReason}
+		if usage != nil {
+			data["totalTokens"] = usage.TotalTokens
+			data["inputTokens"] = usage.InputTokens
+			data["outputTokens"] = usage.OutputTokens
+			data["cachedReadTokens"] = usage.CachedReadTokens
+			data["cachedWriteTokens"] = usage.CachedWriteTokens
+		}
 		if evErr := c.SendEvent(domain.Event{
 			Type:      domain.EventRunFinished,
 			SessionID: sessionID,
 			At:        now,
-			Data:      map[string]any{"stopReason": stopReason},
+			Data:      data,
 		}); evErr != nil {
 			log.Printf("send run.finished event: %v", evErr)
 		}
