@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/control"
@@ -51,6 +52,18 @@ func (d *Daemon) Start() error {
 	runtimeSettings, err := cfg.ActiveRuntimeSettings()
 	if err != nil {
 		return fmt.Errorf("failed to get runtime settings: %w", err)
+	}
+
+	// Resolve agent runtime binary (may trigger download on first run)
+	if cfg.ActiveRuntime == config.RuntimeClaudeCode {
+		resolved, err := acpbin.Resolve(cfg, func(ev acpbin.ProgressEvent) {
+			log.Printf("[runtime] %s: %d/%d bytes", ev.Phase, ev.BytesRead, ev.TotalBytes)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to set up agent runtime: %w", err)
+		}
+		runtimeSettings.Command = resolved
+		log.Printf("[runtime] resolved: %s", resolved)
 	}
 
 	rtClient := acp.NewClient(acp.Config{

@@ -8,6 +8,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/config"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/daemon"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/health"
+	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/update"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,7 @@ func NewRootCmd() *cobra.Command {
 		config.NewCmd(),
 		daemon.NewCmd(),
 		health.NewCmd(),
+		update.NewCmd(),
 	)
 
 	return rootCmd

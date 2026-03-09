@@ -32,7 +32,7 @@ type RuntimeSettings struct {
 // exists or when callers want to seed a new config.
 func Default() Config {
 	return Config{
-		ActiveRuntime: RuntimeOpenCode,
+		ActiveRuntime: RuntimeClaudeCode,
 		RelayURL:      "ws://localhost:8080/ws",
 		Runtimes: map[RuntimeID]RuntimeSettings{
 			RuntimeOpenCode: {
@@ -40,8 +40,7 @@ func Default() Config {
 				Args:    []string{"acp"},
 			},
 			RuntimeClaudeCode: {
-				Command: "claude-agent-acp",
-				Env:     map[string]string{"CLAUDECODE": ""},
+				Env: map[string]string{"CLAUDECODE": ""},
 			},
 		},
 	}
@@ -158,6 +157,35 @@ func SaveTo(cfg Config, path string) (string, error) {
 	}
 
 	return path, nil
+}
+
+// IsRuntimeCommandOverridden returns true if the user has explicitly set
+// the Command for the given runtime via config files or environment variable.
+// When true, acpbin.Resolve skips auto-download and uses the user's value.
+func IsRuntimeCommandOverridden(id RuntimeID) bool {
+	// Check environment variable first (highest priority)
+	envKey := "MUXAGENT_RUNTIMES_" + strings.ToUpper(string(id)) + "_COMMAND"
+	if os.Getenv(envKey) != "" {
+		return true
+	}
+
+	// Check user config
+	if userPath, err := UserConfigPath(); err == nil {
+		if userCfg, err := loadFile(userPath); err == nil {
+			if s, ok := userCfg.Runtimes[id]; ok && s.Command != "" {
+				return true
+			}
+		}
+	}
+
+	// Check project config
+	if projectCfg, err := loadFile(ProjectConfigPath()); err == nil {
+		if s, ok := projectCfg.Runtimes[id]; ok && s.Command != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Exists checks if a config file exists at the given path.

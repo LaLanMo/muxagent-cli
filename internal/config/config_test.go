@@ -24,8 +24,8 @@ func TestDefault_ContainsBothRuntimes(t *testing.T) {
 	if !ok {
 		t.Fatal("default config missing claude-code runtime")
 	}
-	if cc.Command != "claude-agent-acp" {
-		t.Errorf("claude-code command = %q, want %q", cc.Command, "claude-agent-acp")
+	if cc.Command != "" {
+		t.Errorf("claude-code command = %q, want empty (resolved at runtime)", cc.Command)
 	}
 	if v, exists := cc.Env["CLAUDECODE"]; !exists || v != "" {
 		t.Errorf("claude-code Env[CLAUDECODE] = %q (exists=%v), want empty-string sentinel", v, exists)
@@ -40,8 +40,8 @@ func TestActiveRuntimeSettings_ClaudeCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActiveRuntimeSettings: %v", err)
 	}
-	if settings.Command != "claude-agent-acp" {
-		t.Errorf("command = %q, want %q", settings.Command, "claude-agent-acp")
+	if settings.Command != "" {
+		t.Errorf("command = %q, want empty (resolved at runtime)", settings.Command)
 	}
 	if v, ok := settings.Env["CLAUDECODE"]; !ok || v != "" {
 		t.Errorf("Env[CLAUDECODE] = %q (ok=%v), want empty-string", v, ok)
