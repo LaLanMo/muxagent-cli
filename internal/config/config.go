@@ -1,8 +1,11 @@
 package config
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,9 +19,10 @@ const (
 )
 
 type Config struct {
-	ActiveRuntime RuntimeID                     `json:"active_runtime"`
-	Runtimes      map[RuntimeID]RuntimeSettings `json:"runtimes"`
-	RelayURL      string                        `json:"relay_url,omitempty"`
+	ActiveRuntime         RuntimeID                     `json:"active_runtime"`
+	Runtimes              map[RuntimeID]RuntimeSettings `json:"runtimes"`
+	RelayURL              string                        `json:"relay_url,omitempty"`
+	RelaySigningPublicKey string                        `json:"relay_signing_public_key,omitempty"`
 }
 
 type RuntimeSettings struct {
@@ -123,6 +127,10 @@ func LoadEffective() (Config, error) {
 	// Layer 4: Environment overrides
 	cfg = applyEnvOverrides(cfg)
 
+	if err := validateConfig(cfg); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
 }
 
@@ -216,6 +224,9 @@ func mergeConfig(base, overlay Config) Config {
 	if overlay.RelayURL != "" {
 		result.RelayURL = overlay.RelayURL
 	}
+	if overlay.RelaySigningPublicKey != "" {
+		result.RelaySigningPublicKey = overlay.RelaySigningPublicKey
+	}
 
 	// Merge runtimes map
 	for name, settings := range overlay.Runtimes {
@@ -252,11 +263,15 @@ func mergeConfig(base, overlay Config) Config {
 //
 // Supported env vars:
 //   - MUXAGENT_RELAY_URL
+//   - MUXAGENT_RELAY_SIGNING_PUBLIC_KEY
 //   - MUXAGENT_RUNTIMES_<RUNTIME>_COMMAND
 //   - MUXAGENT_RUNTIMES_<RUNTIME>_CWD
 func applyEnvOverrides(cfg Config) Config {
 	if val := os.Getenv("MUXAGENT_RELAY_URL"); val != "" {
 		cfg.RelayURL = val
+	}
+	if val := os.Getenv("MUXAGENT_RELAY_SIGNING_PUBLIC_KEY"); val != "" {
+		cfg.RelaySigningPublicKey = val
 	}
 
 	for name, settings := range cfg.Runtimes {
@@ -273,4 +288,56 @@ func applyEnvOverrides(cfg Config) Config {
 	}
 
 	return cfg
+}
+
+// ResolveRelaySigningPublicKey enforces the relay trust policy for auth flows.
+// Remote relays require a configured Ed25519 relay signing public key. Loopback
+// relays may omit it for local development.
+func ResolveRelaySigningPublicKey(relayURL, relaySigningPublicKey string) (ed25519.PublicKey, error) {
+	loopback, err := IsLoopbackRelayURL(relayURL)
+	if err != nil {
+		return nil, err
+	}
+	if relaySigningPublicKey == "" {
+		if loopback {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("pairing with remote relay requires relay_signing_public_key")
+	}
+
+	return decodeRelaySigningPublicKey(relaySigningPublicKey)
+}
+
+// IsLoopbackRelayURL reports whether relayURL points to a local loopback host.
+func IsLoopbackRelayURL(relayURL string) (bool, error) {
+	parsed, err := url.Parse(relayURL)
+	if err != nil {
+		return false, fmt.Errorf("invalid relay URL %q: %w", relayURL, err)
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func validateConfig(cfg Config) error {
+	if cfg.RelaySigningPublicKey == "" {
+		return nil
+	}
+	_, err := decodeRelaySigningPublicKey(cfg.RelaySigningPublicKey)
+	return err
+}
+
+func decodeRelaySigningPublicKey(relaySigningPublicKey string) (ed25519.PublicKey, error) {
+	decoded, err := base64.StdEncoding.DecodeString(relaySigningPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid relay_signing_public_key: %w", err)
+	}
+	if len(decoded) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid relay_signing_public_key length")
+	}
+	return ed25519.PublicKey(decoded), nil
 }

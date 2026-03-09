@@ -42,7 +42,11 @@ func newStartCmd() *cobra.Command {
 					return fmt.Errorf("load config: %w", err)
 				}
 				httpURL := relayws.HTTPURLFromWS(cfg.RelayURL)
-				flow := auth.NewAuthFlow(httpURL)
+				relaySignPub, err := config.ResolveRelaySigningPublicKey(httpURL, cfg.RelaySigningPublicKey)
+				if err != nil {
+					return err
+				}
+				flow := auth.NewAuthFlow(httpURL, relaySignPub)
 				if _, err := flow.RunAuthFlow(cmd.Context(), func(qrURL string) error {
 					fmt.Println("Scan this QR code with the muxagent mobile app:")
 					if err := auth.QRTerminalOutput(os.Stdout, qrURL); err != nil {

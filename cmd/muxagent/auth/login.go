@@ -54,11 +54,16 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	relayURL = strings.Replace(relayURL, "wss://", "https://", 1)
 	relayURL = strings.TrimSuffix(relayURL, "/ws")
 
+	relaySignPub, err := config.ResolveRelaySigningPublicKey(relayURL, cfg.RelaySigningPublicKey)
+	if err != nil {
+		return err
+	}
+
 	fmt.Println("Starting authentication flow...")
 	fmt.Printf("Relay server: %s\n\n", relayURL)
 
 	// Create auth flow handler
-	flow := auth.NewAuthFlow(relayURL)
+	flow := auth.NewAuthFlow(relayURL, relaySignPub)
 
 	// Run the auth flow
 	creds, err := flow.RunAuthFlow(cmd.Context(), func(qrURL string) error {

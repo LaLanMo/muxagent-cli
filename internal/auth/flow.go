@@ -95,8 +95,10 @@ var (
 
 // AuthFlow handles the authentication request/poll flow.
 type AuthFlow struct {
-	relayURL string
-	client   *http.Client
+	relayURL        string
+	relaySignPub    ed25519.PublicKey
+	relaySignPubB64 string
+	client          *http.Client
 
 	machineID       string
 	machineSignPub  ed25519.PublicKey
@@ -106,9 +108,15 @@ type AuthFlow struct {
 }
 
 // NewAuthFlow creates a new auth flow handler.
-func NewAuthFlow(relayURL string) *AuthFlow {
+func NewAuthFlow(relayURL string, relaySignPub ed25519.PublicKey) *AuthFlow {
+	relaySignPubB64 := ""
+	if len(relaySignPub) == ed25519.PublicKeySize {
+		relaySignPubB64 = base64.StdEncoding.EncodeToString(relaySignPub)
+	}
 	return &AuthFlow{
-		relayURL: relayURL,
+		relayURL:        relayURL,
+		relaySignPub:    relaySignPub,
+		relaySignPubB64: relaySignPubB64,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -247,6 +255,9 @@ func (f *AuthFlow) processApproval(requestID string, status *AuthStatusOutput) (
 	if status.Keyring == nil {
 		return nil, fmt.Errorf("missing keyring in approval response")
 	}
+	if err := f.verifyRelayApprovalStatus(requestID, status); err != nil {
+		return nil, err
+	}
 	if status.MasterID == "" {
 		return nil, fmt.Errorf("missing master_id in approval response")
 	}
@@ -286,28 +297,44 @@ func (f *AuthFlow) processApproval(requestID string, status *AuthStatusOutput) (
 		return nil, fmt.Errorf("invalid master approval signature")
 	}
 
-	if status.RelaySignature == "" || status.RelayPubKey == "" {
-		return nil, fmt.Errorf("missing relay signature")
-	}
-	payload := buildAuthStatusSignaturePayload(status, requestID)
-	relaySig, err := base64.StdEncoding.DecodeString(status.RelaySignature)
-	if err != nil {
-		return nil, fmt.Errorf("invalid relay signature")
-	}
-	relayPub, err := base64.StdEncoding.DecodeString(status.RelayPubKey)
-	if err != nil || len(relayPub) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid relay public key")
-	}
-	if !crypto.Verify(ed25519.PublicKey(relayPub), payload, relaySig) {
-		return nil, fmt.Errorf("invalid relay signature")
-	}
-
 	creds, err := NewCredentials(status.MachineID, status.MasterID, *status.Keyring, f.machineSignPub, f.machineEncPub)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build credentials: %w", err)
 	}
 
 	return creds, nil
+}
+
+func (f *AuthFlow) verifyRelayApprovalStatus(requestID string, status *AuthStatusOutput) error {
+	if status.RelaySignature == "" {
+		return fmt.Errorf("missing relay signature")
+	}
+	payload := buildAuthStatusSignaturePayload(status, requestID)
+	relaySig, err := base64.StdEncoding.DecodeString(status.RelaySignature)
+	if err != nil {
+		return fmt.Errorf("invalid relay signature")
+	}
+
+	relayPub := f.relaySignPub
+	if len(relayPub) == ed25519.PublicKeySize {
+		if status.RelayPubKey != "" && status.RelayPubKey != f.relaySignPubB64 {
+			return fmt.Errorf("relay public key mismatch")
+		}
+	} else {
+		if status.RelayPubKey == "" {
+			return fmt.Errorf("missing relay public key")
+		}
+		decoded, err := base64.StdEncoding.DecodeString(status.RelayPubKey)
+		if err != nil || len(decoded) != ed25519.PublicKeySize {
+			return fmt.Errorf("invalid relay public key")
+		}
+		relayPub = ed25519.PublicKey(decoded)
+	}
+
+	if !crypto.Verify(relayPub, payload, relaySig) {
+		return fmt.Errorf("invalid relay signature")
+	}
+	return nil
 }
 
 // RunAuthFlow executes the complete auth flow: request, display QR, poll, save.
