@@ -13,6 +13,13 @@ import (
 func TestDefault_ContainsBothRuntimes(t *testing.T) {
 	cfg := Default()
 
+	if cfg.RelayURL != defaultRelayURL {
+		t.Fatalf("RelayURL = %q, want %q", cfg.RelayURL, defaultRelayURL)
+	}
+	if cfg.RelaySigningPublicKey != defaultRelaySigningPublicKey {
+		t.Fatalf("RelaySigningPublicKey = %q, want %q", cfg.RelaySigningPublicKey, defaultRelaySigningPublicKey)
+	}
+
 	oc, ok := cfg.Runtimes[RuntimeOpenCode]
 	if !ok {
 		t.Fatal("default config missing opencode runtime")

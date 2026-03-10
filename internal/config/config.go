@@ -18,6 +18,9 @@ type RuntimeID string
 const (
 	RuntimeOpenCode   RuntimeID = "opencode"
 	RuntimeClaudeCode RuntimeID = "claude-code"
+
+	defaultRelayURL              = "wss://relay.muxagent.com/ws"
+	defaultRelaySigningPublicKey = "xpUiBnvnwOKe8tsXL7LgLmeTcog7hJXA+RrVERC+QqU="
 )
 
 type Config struct {
@@ -39,7 +42,8 @@ type RuntimeSettings struct {
 func Default() Config {
 	return Config{
 		ActiveRuntime: RuntimeClaudeCode,
-		RelayURL:      "ws://localhost:8080/ws",
+		RelayURL:      defaultRelayURL,
+		RelaySigningPublicKey: defaultRelaySigningPublicKey,
 		Runtimes: map[RuntimeID]RuntimeSettings{
 			RuntimeOpenCode: {
 				Command: "opencode",
