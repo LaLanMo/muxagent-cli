@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -10,6 +12,8 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/spf13/cobra"
 )
+
+const daemonStopTimeout = 10 * time.Second
 
 func newStopCmd() *cobra.Command {
 	return &cobra.Command{
@@ -54,19 +58,21 @@ func newStopCmd() *cobra.Command {
 			client := &http.Client{Timeout: 5 * time.Second}
 			resp, err := client.Do(req)
 			if err != nil {
-				// Daemon may be dead but state file exists, clean up
-				config.ClearState()
-				cleanupLockFile()
-				fmt.Fprintln(cmd.OutOrStdout(), "Daemon not responding, cleaned up state")
-				return nil
+				return handleStopTransportFailure(state, cmd.OutOrStdout())
 			}
 			defer resp.Body.Close()
 
-			// Clean up state and lock files after successful stop
-			if err := config.ClearState(); err != nil {
-				return fmt.Errorf("clear state: %w", err)
+			if !waitForProcessExit(state.PID, daemonStopTimeout) {
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"Daemon acknowledged stop but process %d did not exit within %s.\n"+
+						"State retained to prevent a second daemon from starting.\n",
+					state.PID, daemonStopTimeout)
+				return nil
 			}
-			cleanupLockFile()
+
+			if err := clearStateAndLock(); err != nil {
+				return err
+			}
 
 			fmt.Fprintln(cmd.OutOrStdout(), "Daemon stopped")
 			return nil
@@ -74,10 +80,61 @@ func newStopCmd() *cobra.Command {
 	}
 }
 
-func cleanupLockFile() {
+func handleStopTransportFailure(state config.DaemonState, out io.Writer) error {
+	if isPIDAlive(state.PID) {
+		fmt.Fprintf(out,
+			"Daemon is not responding (pid %d).\n"+
+				"State retained to prevent a second daemon from starting.\n",
+			state.PID)
+		return nil
+	}
+
+	if err := clearStateAndLock(); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Daemon not responding, cleaned up stale state")
+	return nil
+}
+
+func waitForProcessExit(pid int, timeout time.Duration) bool {
+	if pid <= 0 {
+		return true
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !isPIDAlive(pid) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return !isPIDAlive(pid)
+}
+
+func clearStateAndLock() error {
+	var errs bytes.Buffer
+
+	if err := config.ClearState(); err != nil && !os.IsNotExist(err) {
+		errs.WriteString(fmt.Sprintf("clear state: %v", err))
+	}
+	if err := cleanupLockFile(); err != nil && !os.IsNotExist(err) {
+		if errs.Len() > 0 {
+			errs.WriteString("; ")
+		}
+		errs.WriteString(fmt.Sprintf("clear lock: %v", err))
+	}
+
+	if errs.Len() > 0 {
+		return fmt.Errorf(errs.String())
+	}
+	return nil
+}
+
+func cleanupLockFile() error {
 	path, err := config.StateLockPath()
 	if err != nil {
-		return
+		return err
 	}
-	os.Remove(path)
+	return os.Remove(path)
 }

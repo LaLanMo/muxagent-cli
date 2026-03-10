@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
@@ -32,10 +33,16 @@ type Daemon struct {
 	relayURL string
 	rt       runtime.Client
 	eventBuf *relayws.EventBuffer
+	stopOnce sync.Once
+	stopErr  error
+	done     chan struct{}
 }
 
 func New(relayURL string) *Daemon {
-	return &Daemon{relayURL: relayURL}
+	return &Daemon{
+		relayURL: relayURL,
+		done:     make(chan struct{}),
+	}
 }
 
 func (d *Daemon) Start() error {
@@ -209,18 +216,26 @@ func (d *Daemon) runEventBridge(ctx context.Context, relay *relayws.Client) {
 }
 
 func (d *Daemon) Stop(ctx context.Context) error {
-	if d.rt != nil {
-		d.rt.Stop()
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if d.relay != nil {
-		d.relay.Close()
-	}
-	if d.control == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	return d.control.Shutdown(ctx)
+
+	d.stopOnce.Do(func() {
+		if d.rt != nil {
+			d.rt.Stop()
+		}
+		if d.relay != nil {
+			d.relay.Close()
+		}
+		if d.control != nil {
+			shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			d.stopErr = d.control.Shutdown(shutdownCtx)
+		}
+		close(d.done)
+	})
+
+	return d.stopErr
 }
 
 func (d *Daemon) Address() string {
@@ -229,6 +244,10 @@ func (d *Daemon) Address() string {
 
 func (d *Daemon) Token() string {
 	return d.token
+}
+
+func (d *Daemon) Done() <-chan struct{} {
+	return d.done
 }
 
 func randomToken() (string, error) {
