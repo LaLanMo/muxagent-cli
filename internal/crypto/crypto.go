@@ -199,29 +199,8 @@ func XChaChaOpen(sealed []byte, key *[32]byte, aad []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// DeriveSharedKey computes a shared secret from a Diffie-Hellman key exchange.
-// The result is the same whether computed as DH(myPriv, theirPub) or DH(theirPriv, myPub).
-func DeriveSharedKey(myPrivate, theirPublic *[32]byte) (*[32]byte, error) {
-	var sharedKey [32]byte
-	box.Precompute(&sharedKey, theirPublic, myPrivate)
-	return &sharedKey, nil
-}
-
-// DeriveSessionKey derives a session key from a shared secret using HKDF.
-// The info parameter provides domain separation (e.g., "muxagent-session-v1").
-func DeriveSessionKey(sharedSecret *[32]byte, info []byte) (*[32]byte, error) {
-	reader := hkdf.New(sha256.New, sharedSecret[:], nil, info)
-
-	var sessionKey [32]byte
-	if _, err := io.ReadFull(reader, sessionKey[:]); err != nil {
-		return nil, err
-	}
-
-	return &sessionKey, nil
-}
-
 // DeriveKeyFromBytes derives a 32-byte key from arbitrary input using HKDF.
-// This is useful for deriving local encryption keys from system entropy.
+// The input should be high-entropy (e.g., a 32-byte master key from the OS keychain).
 func DeriveKeyFromBytes(input []byte, info []byte) (*[32]byte, error) {
 	reader := hkdf.New(sha256.New, input, nil, info)
 
