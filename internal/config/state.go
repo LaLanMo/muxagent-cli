@@ -13,6 +13,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/localkey"
+	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 )
 
 const localKeyInfo = "muxagent-daemon-state-v1"
@@ -96,7 +97,7 @@ func SaveState(state DaemonState) (string, error) {
 		return "", err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := privdir.Ensure(filepath.Dir(path)); err != nil {
 		return "", err
 	}
 
@@ -151,7 +152,7 @@ func AcquireLock(pid int) (*os.File, error) {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := privdir.Ensure(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 

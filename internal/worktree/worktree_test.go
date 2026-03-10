@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -149,6 +150,27 @@ func TestCreate_DuplicateID(t *testing.T) {
 
 	_, err = Create(repo, "abc12345")
 	require.Error(t, err, "second call with same ID should fail (branch already exists)")
+}
+
+func TestCreate_TightensMuxagentDirectories(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions are not portable on windows")
+	}
+
+	repo := initRepoWithCommit(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	muxagentDir := filepath.Join(home, ".muxagent")
+	worktreesDir := filepath.Join(muxagentDir, "worktrees")
+	require.NoError(t, os.MkdirAll(worktreesDir, 0o755))
+
+	wtPath, err := Create(repo, "perm-check")
+	require.NoError(t, err)
+
+	assertDirPerm(t, muxagentDir, 0o700)
+	assertDirPerm(t, worktreesDir, 0o700)
+	assertDirPerm(t, filepath.Dir(wtPath), 0o700)
 }
 
 func gitHead(t *testing.T, dir string) string {

@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -126,7 +127,7 @@ func clearStateAndLock() error {
 	}
 
 	if errs.Len() > 0 {
-		return fmt.Errorf(errs.String())
+		return errors.New(errs.String())
 	}
 	return nil
 }

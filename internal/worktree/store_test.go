@@ -2,7 +2,9 @@ package worktree
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -97,4 +99,29 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 		require.NotNil(t, got, "missing %s", id)
 		assert.Equal(t, fmt.Sprintf("wt-%d", i), got.WorktreeID)
 	}
+}
+
+func TestStore_SaveTightensParentDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions are not portable on windows")
+	}
+
+	root := t.TempDir()
+	dir := filepath.Join(root, ".muxagent", "worktrees")
+	path := filepath.Join(dir, "worktrees.json")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	s := NewStore(path)
+	s.Set("session-1", Mapping{WorktreeID: "abc"})
+	require.NoError(t, s.Save())
+
+	assertDirPerm(t, dir, 0o700)
+}
+
+func assertDirPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, want, info.Mode().Perm())
 }

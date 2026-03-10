@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -120,6 +121,26 @@ func TestSaveAndLoad_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveTo_TightensParentDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions are not portable on windows")
+	}
+
+	root := t.TempDir()
+	dir := filepath.Join(root, ".muxagent")
+	path := filepath.Join(dir, "config.json")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	_, err := SaveTo(Default(), path)
+	if err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+
+	assertDirPerm(t, dir, 0o700)
+}
+
 func TestApplyEnvOverrides_ClaudeCodeCommand(t *testing.T) {
 	cfg := Default()
 
@@ -225,6 +246,67 @@ func TestIsLoopbackRelayURL(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_RelayURLPolicy(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	validKey := base64.StdEncoding.EncodeToString(pub)
+
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "remote ws rejected",
+			cfg: Config{
+				RelayURL:              "ws://relay.example/ws",
+				RelaySigningPublicKey: validKey,
+			},
+			wantErr: "non-loopback relay_url must use wss://",
+		},
+		{
+			name: "remote wss accepted",
+			cfg: Config{
+				RelayURL:              "wss://relay.example/ws",
+				RelaySigningPublicKey: validKey,
+			},
+		},
+		{
+			name: "loopback ws accepted",
+			cfg: Config{
+				RelayURL: "ws://localhost:8080/ws",
+			},
+		},
+		{
+			name: "remote relay requires signing key",
+			cfg: Config{
+				RelayURL: "wss://relay.example/ws",
+			},
+			wantErr: "pairing with remote relay requires relay_signing_public_key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateConfig(tt.cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateConfig: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error %q", tt.wantErr)
+			}
+			if err.Error() != tt.wantErr {
+				t.Fatalf("error = %q, want %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadEffective_ValidatesRelaySigningPublicKeyFormat(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -253,5 +335,17 @@ func TestLoadEffective_ValidatesRelaySigningPublicKeyFormat(t *testing.T) {
 
 	if _, err := LoadEffective(); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func assertDirPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("permissions for %q = %04o, want %04o", path, got, want)
 	}
 }

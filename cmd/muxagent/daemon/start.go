@@ -13,6 +13,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
+	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 	"github.com/LaLanMo/muxagent-cli/internal/relayws"
 	"github.com/spf13/cobra"
 )
@@ -118,7 +119,7 @@ func openDaemonLogFile() (string, *os.File, error) {
 		return "", nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 	logPath := filepath.Join(home, ".muxagent", "daemon.log")
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+	if err := privdir.Ensure(filepath.Dir(logPath)); err != nil {
 		return "", nil, fmt.Errorf("create daemon log dir: %w", err)
 	}
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)

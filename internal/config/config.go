@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 )
 
 type RuntimeID string
@@ -151,7 +153,11 @@ func Save(cfg Config) (string, error) {
 // owner-only permissions. SaveTo always overwrites the entire file rather than
 // merging fields, so the on-disk contents match the provided cfg.
 func SaveTo(cfg Config, path string) (string, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := validateConfig(cfg); err != nil {
+		return "", err
+	}
+
+	if err := privdir.Ensure(filepath.Dir(path)); err != nil {
 		return "", err
 	}
 
@@ -324,11 +330,48 @@ func IsLoopbackRelayURL(relayURL string) (bool, error) {
 }
 
 func validateConfig(cfg Config) error {
-	if cfg.RelaySigningPublicKey == "" {
-		return nil
+	if cfg.RelayURL == "" {
+		if cfg.RelaySigningPublicKey == "" {
+			return nil
+		}
+		_, err := decodeRelaySigningPublicKey(cfg.RelaySigningPublicKey)
+		return err
 	}
-	_, err := decodeRelaySigningPublicKey(cfg.RelaySigningPublicKey)
-	return err
+
+	if err := validateRelayURL(cfg.RelayURL); err != nil {
+		return err
+	}
+
+	if _, err := ResolveRelaySigningPublicKey(cfg.RelayURL, cfg.RelaySigningPublicKey); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateRelayURL(relayURL string) error {
+	parsed, err := url.Parse(relayURL)
+	if err != nil {
+		return fmt.Errorf("invalid relay_url %q: %w", relayURL, err)
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("relay_url must include a host")
+	}
+	switch parsed.Scheme {
+	case "ws", "wss":
+	default:
+		return fmt.Errorf("relay_url must use ws:// or wss://")
+	}
+
+	loopback, err := IsLoopbackRelayURL(relayURL)
+	if err != nil {
+		return err
+	}
+	if !loopback && parsed.Scheme != "wss" {
+		return fmt.Errorf("non-loopback relay_url must use wss://")
+	}
+
+	return nil
 }
 
 func decodeRelaySigningPublicKey(relaySigningPublicKey string) (ed25519.PublicKey, error) {

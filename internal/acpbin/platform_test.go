@@ -1,6 +1,8 @@
 package acpbin
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -84,5 +86,43 @@ func TestArchiveExt(t *testing.T) {
 		if ext != ".zip" {
 			t.Errorf("ArchiveExt() = %q on %s, want .zip", ext, runtime.GOOS)
 		}
+	}
+}
+
+func TestBinDir_TightensDirectoryPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions are not portable on windows")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := filepath.Join(home, ".muxagent")
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	dir, err := BinDir()
+	if err != nil {
+		t.Fatalf("BinDir: %v", err)
+	}
+	if dir != bin {
+		t.Fatalf("BinDir = %q, want %q", dir, bin)
+	}
+
+	assertDirPerm(t, root, 0o700)
+	assertDirPerm(t, bin, 0o700)
+}
+
+func assertDirPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("permissions for %q = %04o, want %04o", path, got, want)
 	}
 }

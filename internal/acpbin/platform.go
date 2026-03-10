@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 )
 
 // Platform returns the ACP release platform string for the current OS/arch.
@@ -61,7 +63,7 @@ func BinDir() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(home, ".muxagent", "bin")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privdir.EnsureWithin(dir, filepath.Join(home, ".muxagent")); err != nil {
 		return "", err
 	}
 	return dir, nil

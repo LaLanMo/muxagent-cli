@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 )
 
 // FindRepoRoot returns the git repo root for a given path.
@@ -31,7 +33,7 @@ func Create(repoRoot string, wtID string) (string, error) {
 	}
 
 	wtPath := filepath.Join(home, ".muxagent", "worktrees", repoHash, wtID)
-	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
+	if err := privdir.EnsureWithin(filepath.Dir(wtPath), filepath.Join(home, ".muxagent")); err != nil {
 		return "", fmt.Errorf("mkdir: %w", err)
 	}
 

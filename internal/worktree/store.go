@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 )
 
 // Mapping holds the worktree metadata for a session.
@@ -62,7 +64,7 @@ func (s *Store) Save() error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := privdir.Ensure(filepath.Dir(s.path)); err != nil {
 		return err
 	}
 	return os.WriteFile(s.path, data, 0o600)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/localkey"
+	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 )
 
 const (
@@ -76,7 +77,7 @@ func SaveCredentials(creds *Credentials, machineSignSeed, machineEncPriv []byte)
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := privdir.Ensure(filepath.Dir(path)); err != nil {
 		return err
 	}
 
