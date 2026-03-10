@@ -16,6 +16,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/control"
+	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/keyring"
 	"github.com/LaLanMo/muxagent-cli/internal/relayws"
 	"github.com/LaLanMo/muxagent-cli/internal/runtime"
@@ -133,9 +134,16 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to load credentials (run 'muxagent auth login' first): %w", err)
 	}
 
+	machineSignPub, err := creds.GetMachineSignPublicKey()
+	if err != nil {
+		return fmt.Errorf("failed to decode machine sign public key: %w", err)
+	}
+	fingerprint := crypto.HashKeyFingerprint(machineSignPub)
+	accessToken := crypto.BuildMachineAccessToken(creds.MasterID, creds.MachineID, fingerprint, machineSignPriv, 5*time.Minute)
+
 	keyringMgr := keyring.NewManager(creds.Keyring)
 	relayHTTPURL := relayws.HTTPURLFromWS(d.relayURL)
-	if err := keyringMgr.Sync(context.Background(), relayHTTPURL); err != nil {
+	if err := keyringMgr.Sync(context.Background(), relayHTTPURL, accessToken); err != nil {
 		return fmt.Errorf("failed to sync keyring: %w", err)
 	}
 

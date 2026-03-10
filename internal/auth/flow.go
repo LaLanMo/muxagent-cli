@@ -39,6 +39,7 @@ type AuthRequestOutput struct {
 	RequestID string `json:"request_id"`
 	QRURL     string `json:"qr_url"`
 	ExpiresAt int64  `json:"expires_at"`
+	PollToken string `json:"poll_token"`
 }
 
 // AuthStatusOutput is returned from GET /v1/auth/{id}
@@ -105,6 +106,7 @@ type AuthFlow struct {
 	machineSignPriv ed25519.PrivateKey
 	machineEncPub   *[32]byte
 	machineEncPriv  *[32]byte
+	pollToken       string
 }
 
 // NewAuthFlow creates a new auth flow handler.
@@ -174,6 +176,7 @@ func (f *AuthFlow) StartAuthRequest(ctx context.Context) (*AuthRequestOutput, er
 		return nil, fmt.Errorf("failed to decode auth response: %w", err)
 	}
 
+	f.pollToken = output.PollToken
 	return &output, nil
 }
 
@@ -215,6 +218,9 @@ func (f *AuthFlow) checkAuthStatus(ctx context.Context, requestID string) (*Auth
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if f.pollToken != "" {
+		req.Header.Set("Authorization", "Bearer "+f.pollToken)
 	}
 
 	resp, err := f.client.Do(req)

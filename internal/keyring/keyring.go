@@ -164,7 +164,7 @@ type keyringUpdateRecord struct {
 	CreatedAt                      int64  `json:"created_at"`
 }
 
-func (m *Manager) Sync(ctx context.Context, relayHTTPURL string) error {
+func (m *Manager) Sync(ctx context.Context, relayHTTPURL, accessToken string) error {
 	m.mu.RLock()
 	masterID := m.state.MasterID
 	fromSeq := m.state.Seq
@@ -174,6 +174,9 @@ func (m *Manager) Sync(ctx context.Context, relayHTTPURL string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
+	}
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
