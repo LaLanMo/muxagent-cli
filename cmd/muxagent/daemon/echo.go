@@ -31,6 +31,11 @@ func newEchoCmd() *cobra.Command {
 				return nil
 			}
 
+			token, err := state.GetToken()
+			if err != nil {
+				return fmt.Errorf("daemon has incompatible state format, run: muxagent daemon stop and follow its output")
+			}
+
 			message, _ := cmd.Flags().GetString("message")
 			payload := map[string]string{"message": message}
 			body, err := json.Marshal(payload)
@@ -47,7 +52,7 @@ func newEchoCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Authorization", "Bearer "+state.Token)
+			req.Header.Set("Authorization", "Bearer "+token)
 			req.Header.Set("Content-Type", "application/json")
 			client := &http.Client{Timeout: 5 * time.Second}
 			resp, err := client.Do(req)

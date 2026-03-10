@@ -33,11 +33,16 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			// Check health endpoint
+			token, err := state.GetToken()
+			if err != nil {
+				return fmt.Errorf("daemon has incompatible state format, run: muxagent daemon stop and follow its output")
+			}
+
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://%s/health", state.Address), nil)
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Authorization", "Bearer "+state.Token)
+			req.Header.Set("Authorization", "Bearer "+token)
 			client := &http.Client{Timeout: 5 * time.Second}
 			resp, err := client.Do(req)
 			if err != nil {

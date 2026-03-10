@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -64,6 +65,14 @@ func newStartCmd() *cobra.Command {
 				fmt.Println("Authentication successful!")
 			}
 
+			// Preflight: verify credentials are current format before spawning child
+			if _, _, _, err := auth.LoadCredentials(); err != nil {
+				if errors.Is(err, auth.ErrStaleCredentials) {
+					return fmt.Errorf("%w\nRun: muxagent auth login", err)
+				}
+				return fmt.Errorf("credentials check failed: %w", err)
+			}
+
 			exe, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("resolve executable: %w", err)
@@ -109,7 +118,7 @@ func openDaemonLogFile() (string, *os.File, error) {
 		return "", nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 	logPath := filepath.Join(home, ".muxagent", "daemon.log")
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return "", nil, fmt.Errorf("create daemon log dir: %w", err)
 	}
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -142,7 +151,7 @@ func waitForDaemonReady(expectedPID int, timeout time.Duration) (config.DaemonSt
 func isDaemonHealthy(state config.DaemonState) bool {
 	token, err := state.GetToken()
 	if err != nil {
-		token = state.Token
+		return false
 	}
 
 	req, err := http.NewRequestWithContext(

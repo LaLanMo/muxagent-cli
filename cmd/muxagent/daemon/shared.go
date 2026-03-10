@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -58,14 +59,19 @@ func startDaemonCommon() (*daemonStartResult, error) {
 
 	state := config.DaemonState{
 		Address:               daemonInstance.Address(),
-		Token:                 daemonInstance.Token(),
 		PID:                   pid,
 		StartTime:             time.Now().Format(time.RFC3339),
 		StartedWithCLIVersion: version.Version,
 	}
+	if err := state.SetToken(daemonInstance.Token()); err != nil {
+		daemonInstance.Stop(context.Background())
+		config.ReleaseLock(lockFile)
+		return nil, fmt.Errorf("encrypt token: %w", err)
+	}
 
 	statePath, err := config.SaveState(state)
 	if err != nil {
+		daemonInstance.Stop(context.Background())
 		config.ReleaseLock(lockFile)
 		return nil, err
 	}

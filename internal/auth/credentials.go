@@ -10,10 +10,11 @@ import (
 	"path/filepath"
 
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
+	"github.com/LaLanMo/muxagent-cli/internal/localkey"
 )
 
 const (
-	credentialsVersion = 3
+	credentialsVersion = 4
 	localKeyInfo       = "muxagent-local-v1"
 )
 
@@ -55,6 +56,7 @@ var (
 	ErrNoCredentials      = errors.New("auth: no credentials found")
 	ErrInvalidCredentials = errors.New("auth: invalid or corrupted credentials")
 	ErrDecryptionFailed   = errors.New("auth: failed to decrypt private key")
+	ErrStaleCredentials   = errors.New("auth: credentials format changed (pre-release), please log in again with `muxagent auth login`")
 )
 
 // CredentialsPath returns the path to the credentials file.
@@ -74,11 +76,11 @@ func SaveCredentials(creds *Credentials, machineSignSeed, machineEncPriv []byte)
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 
-	localKey, err := deriveLocalKey()
+	localKey, err := localkey.DeriveKey(localKeyInfo)
 	if err != nil {
 		return err
 	}
@@ -125,7 +127,11 @@ func LoadCredentials() (*Credentials, ed25519.PrivateKey, *[32]byte, error) {
 		return nil, nil, nil, ErrInvalidCredentials
 	}
 
-	localKey, err := deriveLocalKey()
+	if creds.Version < credentialsVersion {
+		return nil, nil, nil, ErrStaleCredentials
+	}
+
+	localKey, err := localkey.DeriveKey(localKeyInfo)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -217,11 +223,6 @@ func (c *Credentials) FindMasterKey(masterSignKeyFingerprint string) *MasterKeyI
 		}
 	}
 	return nil
-}
-
-// deriveLocalKey derives a machine-specific encryption key from system entropy.
-func deriveLocalKey() (*[32]byte, error) {
-	return crypto.DeriveKeyFromBytes(crypto.CollectSystemEntropy(), []byte(localKeyInfo))
 }
 
 // NewCredentials creates a new Credentials struct with provided keys and keyring.

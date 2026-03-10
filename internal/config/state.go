@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
+	"github.com/LaLanMo/muxagent-cli/internal/localkey"
 )
 
 const localKeyInfo = "muxagent-daemon-state-v1"
@@ -29,17 +30,14 @@ type DaemonState struct {
 
 // SetToken encrypts and stores the token.
 func (s *DaemonState) SetToken(token string) error {
-	localKey, err := deriveLocalKey()
+	localKey, err := localkey.DeriveKey(localKeyInfo)
 	if err != nil {
-		// Fall back to plaintext if we can't derive key
-		s.Token = token
-		return nil
+		return fmt.Errorf("derive local key: %w", err)
 	}
 
 	sealed, err := crypto.SecretBoxSeal([]byte(token), localKey)
 	if err != nil {
-		s.Token = token
-		return nil
+		return fmt.Errorf("encrypt token: %w", err)
 	}
 
 	s.EncryptedToken = base64.StdEncoding.EncodeToString(sealed)
@@ -49,9 +47,8 @@ func (s *DaemonState) SetToken(token string) error {
 
 // GetToken decrypts and returns the token.
 func (s *DaemonState) GetToken() (string, error) {
-	// Try encrypted token first
 	if s.EncryptedToken != "" {
-		localKey, err := deriveLocalKey()
+		localKey, err := localkey.DeriveKey(localKeyInfo)
 		if err != nil {
 			return "", fmt.Errorf("failed to derive local key: %w", err)
 		}
@@ -69,13 +66,12 @@ func (s *DaemonState) GetToken() (string, error) {
 		return string(plaintext), nil
 	}
 
-	// Fall back to plaintext token (backward compatibility)
-	return s.Token, nil
-}
+	// Old plaintext format — reject
+	if s.Token != "" {
+		return "", errors.New("daemon state has stale token format, restart daemon")
+	}
 
-// deriveLocalKey derives a machine-specific encryption key from system entropy.
-func deriveLocalKey() (*[32]byte, error) {
-	return crypto.DeriveKeyFromBytes(crypto.CollectSystemEntropy(), []byte(localKeyInfo))
+	return "", errors.New("no token in daemon state")
 }
 
 func StatePath() (string, error) {
@@ -100,7 +96,7 @@ func SaveState(state DaemonState) (string, error) {
 		return "", err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
 
@@ -155,7 +151,7 @@ func AcquireLock(pid int) (*os.File, error) {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 
