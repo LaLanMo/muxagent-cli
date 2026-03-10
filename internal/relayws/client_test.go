@@ -2,8 +2,12 @@ package relayws
 
 import (
 	"context"
+	"crypto/ed25519"
+	crand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -86,13 +90,14 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 
 	var key [32]byte
 	key[0] = 1
-	session := newSession("machine-1", key)
+	session := newSession("machine-1", key, 1)
 	rt := &blockingRuntime{
 		loadStarted: make(chan struct{}, 1),
 		unblock:     make(chan struct{}),
 	}
 	client := &Client{
 		conn:       clientConn,
+		connEpoch:  1,
 		machineID:  "machine-1",
 		runtime:    rt,
 		session:    session,
@@ -179,7 +184,7 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 
 	var key [32]byte
 	key[0] = 1
-	session := newSession("machine-1", key)
+	session := newSession("machine-1", key, 1)
 	rt := &listingRuntime{
 		blockingRuntime: blockingRuntime{
 			loadStarted: make(chan struct{}, 1),
@@ -196,6 +201,7 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	}
 	client := &Client{
 		conn:       clientConn,
+		connEpoch:  1,
 		machineID:  "machine-1",
 		runtime:    rt,
 		session:    session,
@@ -235,6 +241,367 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	case <-runErr:
 	case <-time.After(2 * time.Second):
 		t.Fatal("relay run loop did not stop")
+	}
+}
+
+func TestWriteForSessionErrors(t *testing.T) {
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	msg := EncryptedMessage{Type: MessageTypeEvent}
+
+	t.Run("relay not connected", func(t *testing.T) {
+		client := &Client{
+			connEpoch: 1,
+			session:   session,
+		}
+		err := client.writeForSession(session, msg)
+		require.ErrorIs(t, err, ErrRelayNotConnected)
+	})
+
+	t.Run("no active session", func(t *testing.T) {
+		client := &Client{
+			conn:      &websocket.Conn{},
+			connEpoch: 1,
+		}
+		err := client.writeForSession(session, msg)
+		require.ErrorIs(t, err, ErrNoActiveSession)
+	})
+
+	t.Run("stale session pointer", func(t *testing.T) {
+		current := newSession("machine-1", key, 1)
+		client := &Client{
+			conn:      &websocket.Conn{},
+			connEpoch: 1,
+			session:   current,
+		}
+		err := client.writeForSession(session, msg)
+		require.ErrorIs(t, err, ErrStaleRelaySession)
+	})
+
+	t.Run("stale session epoch", func(t *testing.T) {
+		current := newSession("machine-1", key, 2)
+		client := &Client{
+			conn:      &websocket.Conn{},
+			connEpoch: 2,
+			session:   current,
+		}
+		err := client.writeForSession(session, msg)
+		require.ErrorIs(t, err, ErrStaleRelaySession)
+	})
+}
+
+func TestWriteProtocolForEpoch(t *testing.T) {
+	t.Run("stale epoch", func(t *testing.T) {
+		client := &Client{
+			conn:      &websocket.Conn{},
+			connEpoch: 2,
+		}
+		err := client.writeProtocolForEpoch(1, SessionAckMessage{Type: MessageTypeSessionAck})
+		require.ErrorIs(t, err, ErrStaleRelaySession)
+	})
+
+	t.Run("relay not connected", func(t *testing.T) {
+		client := &Client{connEpoch: 1}
+		err := client.writeProtocolForEpoch(1, SessionAckMessage{Type: MessageTypeSessionAck})
+		require.ErrorIs(t, err, ErrRelayNotConnected)
+	})
+
+	t.Run("writes to current connection", func(t *testing.T) {
+		clientConn, relayConn, cleanup := newWSPair(t)
+		defer cleanup()
+
+		client := &Client{
+			conn:      clientConn,
+			connEpoch: 7,
+		}
+		require.NoError(t, client.writeProtocolForEpoch(7, SessionAckMessage{
+			Type:                MessageTypeSessionAck,
+			MachineID:           "machine-1",
+			MachineEphemeralPub: "pub",
+			Signature:           "sig",
+		}))
+
+		var msg SessionAckMessage
+		require.NoError(t, relayConn.ReadJSON(&msg))
+		require.Equal(t, MessageTypeSessionAck, msg.Type)
+		require.Equal(t, "machine-1", msg.MachineID)
+		require.Equal(t, "pub", msg.MachineEphemeralPub)
+		require.Equal(t, "sig", msg.Signature)
+	})
+}
+
+func TestInstallSessionRejectsStaleEpoch(t *testing.T) {
+	var key [32]byte
+	key[0] = 1
+	client := &Client{
+		connEpoch: 2,
+	}
+	err := client.installSession(newSession("machine-1", key, 1))
+	require.ErrorIs(t, err, ErrStaleRelaySession)
+}
+
+func TestConnectHandshakeIsolation(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	registerSeen := make(chan struct{}, 1)
+	challengeRespSeen := make(chan struct{}, 1)
+	registeredGate := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		var reg RegisterMessage
+		require.NoError(t, conn.ReadJSON(&reg))
+		require.Equal(t, MessageTypeRegister, reg.Type)
+		registerSeen <- struct{}{}
+
+		require.NoError(t, conn.WriteJSON(ChallengeMessage{
+			Type:  MessageTypeChallenge,
+			Nonce: "nonce",
+		}))
+
+		var resp ChallengeResponseMessage
+		require.NoError(t, conn.ReadJSON(&resp))
+		require.Equal(t, MessageTypeChallengeResponse, resp.Type)
+		challengeRespSeen <- struct{}{}
+
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(200*time.Millisecond)))
+		var extra map[string]any
+		err = conn.ReadJSON(&extra)
+		require.Error(t, err)
+		require.True(t, isTimeoutErr(err), "expected read timeout, got %v", err)
+
+		<-registeredGate
+		require.NoError(t, conn.SetReadDeadline(time.Time{}))
+		require.NoError(t, conn.WriteJSON(RegisteredMessage{
+			Type:      MessageTypeRegistered,
+			MachineID: "machine-1",
+		}))
+	}))
+	defer server.Close()
+
+	_, machineSignPriv, err := ed25519.GenerateKey(crand.Reader)
+	require.NoError(t, err)
+
+	client := &Client{
+		relayURL:        "ws" + strings.TrimPrefix(server.URL, "http"),
+		machineID:       "machine-1",
+		hostname:        "host",
+		machineSignPriv: machineSignPriv,
+	}
+
+	connectErr := make(chan error, 1)
+	go func() {
+		connectErr <- client.Connect(context.Background())
+	}()
+
+	select {
+	case <-registerSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("register was not received")
+	}
+	select {
+	case <-challengeRespSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("challenge response was not received")
+	}
+
+	err = client.SendEvent(domain.Event{
+		Type:      domain.EventRunFinished,
+		SessionID: "sid",
+		At:        time.Now(),
+	})
+	require.ErrorIs(t, err, ErrRelayNotConnected)
+
+	close(registeredGate)
+
+	select {
+	case err := <-connectErr:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("connect did not finish")
+	}
+
+	require.NoError(t, client.Close())
+}
+
+func TestOldHandleRPCDoesNotWriteToNewConnection(t *testing.T) {
+	clientConn1, relayConn1, cleanup1 := newWSPair(t)
+	defer cleanup1()
+
+	var key [32]byte
+	key[0] = 1
+	oldSession := newSession("machine-1", key, 1)
+	rt := &blockingRuntime{
+		loadStarted: make(chan struct{}, 1),
+		unblock:     make(chan struct{}),
+	}
+	client := &Client{
+		conn:       clientConn1,
+		connEpoch:  1,
+		machineID:  "machine-1",
+		runtime:    rt,
+		session:    oldSession,
+		sessionCWD: map[string]string{},
+	}
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- client.Run(context.Background())
+	}()
+
+	require.NoError(t, relayConn1.WriteJSON(encryptRPC(t, oldSession, "machine-1", "msg-load", "session.load", map[string]any{
+		"sessionId": "sid",
+		"cwd":       "/tmp",
+	})))
+
+	select {
+	case <-rt.loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not start")
+	}
+
+	require.NoError(t, client.Close())
+	select {
+	case <-runErr:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run loop did not stop after close")
+	}
+
+	clientConn2, relayConn2, cleanup2 := newWSPair(t)
+	defer cleanup2()
+
+	newEpoch := client.publishActiveConnection(clientConn2)
+	require.NoError(t, client.installSession(newSession("machine-1", key, newEpoch)))
+
+	close(rt.unblock)
+
+	require.NoError(t, relayConn2.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+	var msg map[string]any
+	err := relayConn2.ReadJSON(&msg)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err), "expected timeout, got %v", err)
+}
+
+func TestManyHandleRPCDoNotWriteToNewConnection(t *testing.T) {
+	clientConn1, relayConn1, cleanup1 := newWSPair(t)
+	defer cleanup1()
+
+	var key [32]byte
+	key[0] = 1
+	oldSession := newSession("machine-1", key, 1)
+	const rpcCount = 5
+
+	rt := &blockingRuntime{
+		loadStarted: make(chan struct{}, rpcCount),
+		unblock:     make(chan struct{}),
+	}
+	client := &Client{
+		conn:       clientConn1,
+		connEpoch:  1,
+		machineID:  "machine-1",
+		runtime:    rt,
+		session:    oldSession,
+		sessionCWD: map[string]string{},
+	}
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- client.Run(context.Background())
+	}()
+
+	for i := 0; i < rpcCount; i++ {
+		require.NoError(t, relayConn1.WriteJSON(encryptRPC(
+			t,
+			oldSession,
+			"machine-1",
+			fmt.Sprintf("msg-load-%d", i),
+			"session.load",
+			map[string]any{
+				"sessionId": fmt.Sprintf("sid-%d", i),
+				"cwd":       "/tmp",
+			},
+		)))
+	}
+
+	for i := 0; i < rpcCount; i++ {
+		select {
+		case <-rt.loadStarted:
+		case <-time.After(time.Second):
+			t.Fatalf("session.load %d did not start", i)
+		}
+	}
+
+	require.NoError(t, client.Close())
+	select {
+	case <-runErr:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run loop did not stop after close")
+	}
+
+	clientConn2, relayConn2, cleanup2 := newWSPair(t)
+	defer cleanup2()
+
+	newEpoch := client.publishActiveConnection(clientConn2)
+	require.NoError(t, client.installSession(newSession("machine-1", key, newEpoch)))
+
+	close(rt.unblock)
+
+	require.NoError(t, relayConn2.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+	var msg map[string]any
+	err := relayConn2.ReadJSON(&msg)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err), "expected timeout, got %v", err)
+}
+
+func TestCloseAndSendEventConcurrent(t *testing.T) {
+	clientConn, _, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+
+	go func() {
+		<-start
+		errCh <- client.SendEvent(domain.Event{
+			Type:      domain.EventRunFinished,
+			SessionID: "sid",
+			At:        time.Now(),
+		})
+	}()
+	go func() {
+		<-start
+		errCh <- client.Close()
+	}()
+
+	close(start)
+
+	for i := 0; i < 2; i++ {
+		err := <-errCh
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, ErrRelayNotConnected) ||
+			errors.Is(err, ErrNoActiveSession) ||
+			errors.Is(err, ErrStaleRelaySession) {
+			continue
+		}
+		if strings.Contains(err.Error(), "closed network connection") {
+			continue
+		}
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -285,6 +652,36 @@ func decryptResponse(t *testing.T, session *Session, msg EncryptedMessage) map[s
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	return payload
+}
+
+func newWSPair(t *testing.T) (*websocket.Conn, *websocket.Conn, func()) {
+	t.Helper()
+
+	upgrader := websocket.Upgrader{}
+	serverConn := make(chan *websocket.Conn, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		serverConn <- conn
+	}))
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	relayConn := <-serverConn
+	cleanup := func() {
+		_ = clientConn.Close()
+		_ = relayConn.Close()
+		server.Close()
+	}
+
+	return clientConn, relayConn, cleanup
+}
+
+func isTimeoutErr(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // --- fs.list tests ---

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -207,7 +208,10 @@ func (d *Daemon) runEventBridge(ctx context.Context, relay *relayws.Client) {
 			}
 			ev = d.eventBuf.Push(ev)
 			if relay.HasSession() {
-				if err := relay.SendEvent(ev); err != nil {
+				if err := relay.SendEvent(ev); err != nil &&
+					!errors.Is(err, relayws.ErrRelayNotConnected) &&
+					!errors.Is(err, relayws.ErrNoActiveSession) &&
+					!errors.Is(err, relayws.ErrStaleRelaySession) {
 					log.Printf("event forward error: %v", err)
 				}
 			}

@@ -18,11 +18,12 @@ const (
 
 type Session struct {
 	machineID string
+	connEpoch uint64
 	key       [32]byte
 }
 
-func newSession(machineID string, key [32]byte) *Session {
-	return &Session{machineID: machineID, key: key}
+func newSession(machineID string, key [32]byte, connEpoch uint64) *Session {
+	return &Session{machineID: machineID, connEpoch: connEpoch, key: key}
 }
 
 func deriveSessionKey(sharedSecret []byte, transcript string) ([32]byte, error) {
