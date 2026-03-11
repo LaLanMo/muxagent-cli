@@ -42,7 +42,7 @@ const (
 )
 
 var releaseSigningPublicKeyStrings = []string{
-	"sZ1SvErxXry9HVm3C06yNKlIyNNNFejSPR8yOY5L9IM=",
+	"mHLat/iu3bV0z9fCcephlbMKrtCnAXiqz+UHHSkoBbQ=",
 }
 
 type releaseManifest struct {
