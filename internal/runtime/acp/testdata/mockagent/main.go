@@ -25,6 +25,8 @@ type rpcError struct {
 var (
 	writeMu       sync.Mutex
 	permResponses = make(chan message, 1)
+	stateMu       sync.Mutex
+	currentMode   = "default"
 )
 
 func send(msg any) {
@@ -41,6 +43,17 @@ func respond(id int64, result any) {
 		JSONRPC: "2.0",
 		ID:      &id,
 		Result:  resultBytes,
+	})
+}
+
+func respondError(id int64, code int, text string) {
+	send(message{
+		JSONRPC: "2.0",
+		ID:      &id,
+		Error: &rpcError{
+			Code:    code,
+			Message: text,
+		},
 	})
 }
 
@@ -68,6 +81,46 @@ func sessionUpdate(sessionID string, update map[string]any) {
 		"sessionId": sessionID,
 		"update":    update,
 	})
+}
+
+func currentModeValue() string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return currentMode
+}
+
+func setCurrentModeValue(mode string) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	currentMode = mode
+}
+
+func modeConfigOption(mode string) map[string]any {
+	return map[string]any{
+		"id":           "mode",
+		"type":         "select",
+		"category":     "mode",
+		"currentValue": mode,
+		"options": []map[string]any{
+			{"value": "default", "name": "Default"},
+			{"value": "acceptEdits", "name": "Accept Edits"},
+			{"value": "plan", "name": "Plan"},
+			{"value": "dontAsk", "name": "Don't Ask"},
+			{"value": "bypassPermissions", "name": "Bypass Permissions"},
+		},
+	}
+}
+
+func modelConfigOption() map[string]any {
+	return map[string]any{
+		"id":           "model",
+		"type":         "select",
+		"category":     "model",
+		"currentValue": "default",
+		"options": []map[string]any{
+			{"value": "default", "name": "Default"},
+		},
+	}
 }
 
 // handlePrompt processes a prompt in a goroutine so the main read loop
@@ -217,8 +270,14 @@ func main() {
 			})
 
 		case "session/new":
+			mode := currentModeValue()
 			respond(id, map[string]any{
 				"sessionId": "test-session-001",
+				"modes":     map[string]any{"currentModeId": mode},
+				"configOptions": []map[string]any{
+					modeConfigOption(mode),
+					modelConfigOption(),
+				},
 			})
 
 		case "session/load":
@@ -263,7 +322,29 @@ func main() {
 				"rawOutput":     map[string]any{"output": "historical output"},
 			})
 
-			respond(id, map[string]any{"ok": true})
+			mode := currentModeValue()
+			respond(id, map[string]any{
+				"ok":    true,
+				"modes": map[string]any{"currentModeId": mode},
+				"configOptions": []map[string]any{
+					modeConfigOption(mode),
+					modelConfigOption(),
+				},
+			})
+
+		case "session/set_mode":
+			if os.Getenv("MOCKAGENT_FAIL_SET_MODE") == "1" {
+				respondError(id, -32602, "Invalid params")
+				continue
+			}
+			var params struct {
+				ModeID string `json:"modeId"`
+			}
+			json.Unmarshal(msg.Params, &params)
+			if params.ModeID != "" {
+				setCurrentModeValue(params.ModeID)
+			}
+			respond(id, map[string]any{})
 
 		case "session/list":
 			respond(id, map[string]any{

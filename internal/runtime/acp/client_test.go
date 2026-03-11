@@ -79,11 +79,34 @@ func newTestClient(t *testing.T, bin string) *acp.Client {
 	client := acp.NewClient(acp.Config{
 		Command: bin,
 	})
+	return startTestClient(t, client)
+}
+
+func newTestClientWithEnv(t *testing.T, bin string, env map[string]string) *acp.Client {
+	t.Helper()
+	client := acp.NewClient(acp.Config{
+		Command: bin,
+		Env:     env,
+	})
+	return startTestClient(t, client)
+}
+
+func startTestClient(t *testing.T, client *acp.Client) *acp.Client {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() { client.Stop() })
 	return client
+}
+
+func findEvent(events []domain.Event, eventType domain.EventType) *domain.Event {
+	for i := range events {
+		if events[i].Type == eventType {
+			return &events[i]
+		}
+	}
+	return nil
 }
 
 func TestClient_InitializeAndNewSession(t *testing.T) {
@@ -96,6 +119,25 @@ func TestClient_InitializeAndNewSession(t *testing.T) {
 	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 	assert.Equal(t, "test-session-001", sessionID)
+}
+
+func TestClient_NewSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_FAIL_SET_MODE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sessionID, _, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
+	require.NoError(t, err)
+	assert.Equal(t, "test-session-001", sessionID)
+
+	events := collectEvents(client.Events(), 2*time.Second)
+	modeEvent := findEvent(events, domain.EventModeChanged)
+	require.NotNil(t, modeEvent)
+	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
 }
 
 func TestClient_PromptStreamsEvents(t *testing.T) {
@@ -319,6 +361,30 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	assert.Contains(t, messageParts, "there")
 	assert.Contains(t, messageParts, "History: ")
 	assert.Contains(t, messageParts, "replayed message")
+}
+
+func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_FAIL_SET_MODE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan []domain.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 3*time.Second)
+	}()
+
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	events := <-done
+	modeEvent := findEvent(events, domain.EventModeChanged)
+	require.NotNil(t, modeEvent)
+	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
 }
 
 func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {

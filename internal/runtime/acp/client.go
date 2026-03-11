@@ -51,6 +51,10 @@ type pendingPermission struct {
 	request domain.ApprovalRequest
 }
 
+type sessionModes struct {
+	CurrentModeID string `json:"currentModeId"`
+}
+
 // NewClient creates a new ACP client with the given configuration.
 func NewClient(cfg Config) *Client {
 	return &Client{
@@ -132,10 +136,8 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 	log.Printf("[acp] session/new raw result: %s", string(result))
 
 	var resp struct {
-		SessionID string `json:"sessionId"`
-		Modes     *struct {
-			CurrentModeID string `json:"currentModeId"`
-		} `json:"modes"`
+		SessionID     string                `json:"sessionId"`
+		Modes         *sessionModes         `json:"modes"`
 		ConfigOptions []domain.ConfigOption `json:"configOptions"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
@@ -143,6 +145,7 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 	}
 
 	// Apply permission mode if requested and different from default.
+	modeApplied := false
 	if domain.IsNonDefaultMode(permissionMode) {
 		_, err := c.transport.Call(ctx, "session/set_mode", map[string]any{
 			"sessionId": resp.SessionID,
@@ -150,21 +153,13 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 		})
 		if err != nil {
 			log.Printf("[acp] failed to set permission mode %q: %v", permissionMode, err)
+		} else {
+			modeApplied = true
 		}
 	}
 
-	// Emit initial mode — use the requested mode if set, otherwise the one from response.
-	modeID := permissionMode
-	if modeID == "" && resp.Modes != nil {
-		modeID = resp.Modes.CurrentModeID
-	}
-	if modeID != "" {
-		c.emit(domain.Event{
-			Type:      domain.EventModeChanged,
-			SessionID: resp.SessionID,
-			At:        time.Now(),
-			Data:      map[string]any{"currentModeId": modeID},
-		})
+	if ev := modeEvent(resp.SessionID, resolveCurrentModeID(permissionMode, modeApplied, resp.Modes, resp.ConfigOptions)); ev != nil {
+		c.emit(*ev)
 	}
 
 	// Emit initial model info from configOptions.
@@ -202,7 +197,16 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 	}
 	log.Printf("[acp] session/load raw result: %s", string(loadResult))
 
+	var loadResp struct {
+		Modes         *sessionModes         `json:"modes"`
+		ConfigOptions []domain.ConfigOption `json:"configOptions"`
+	}
+	if loadResult != nil {
+		_ = json.Unmarshal(loadResult, &loadResp)
+	}
+
 	// Re-apply permission mode if requested and different from default.
+	modeApplied := false
 	if domain.IsNonDefaultMode(permissionMode) {
 		_, err := c.transport.Call(ctx, "session/set_mode", map[string]any{
 			"sessionId": sessionID,
@@ -210,14 +214,9 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		})
 		if err != nil {
 			log.Printf("[acp] failed to restore permission mode %q on load: %v", permissionMode, err)
+		} else {
+			modeApplied = true
 		}
-
-		c.emit(domain.Event{
-			Type:      domain.EventModeChanged,
-			SessionID: sessionID,
-			At:        time.Now(),
-			Data:      map[string]any{"currentModeId": permissionMode},
-		})
 	}
 
 	// Re-apply model if non-default.
@@ -232,12 +231,8 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		}
 	}
 
-	// Parse configOptions from load response.
-	var loadResp struct {
-		ConfigOptions []domain.ConfigOption `json:"configOptions"`
-	}
-	if loadResult != nil {
-		_ = json.Unmarshal(loadResult, &loadResp)
+	if ev := modeEvent(sessionID, resolveCurrentModeID(permissionMode, modeApplied, loadResp.Modes, loadResp.ConfigOptions)); ev != nil {
+		c.emit(*ev)
 	}
 
 	// If model was re-applied, override the currentValue in configOptions.
@@ -1088,6 +1083,33 @@ func configOptionEvent(sessionID string, opts []domain.ConfigOption, category st
 		}
 	}
 	return nil
+}
+
+func resolveCurrentModeID(requestedMode string, requestedApplied bool, modes *sessionModes, opts []domain.ConfigOption) string {
+	if requestedApplied && requestedMode != "" {
+		return requestedMode
+	}
+	if modes != nil && modes.CurrentModeID != "" {
+		return modes.CurrentModeID
+	}
+	for _, opt := range opts {
+		if opt.Category == "mode" && opt.CurrentValue != "" {
+			return opt.CurrentValue
+		}
+	}
+	return ""
+}
+
+func modeEvent(sessionID, modeID string) *domain.Event {
+	if modeID == "" {
+		return nil
+	}
+	return &domain.Event{
+		Type:      domain.EventModeChanged,
+		SessionID: sessionID,
+		At:        time.Now(),
+		Data:      map[string]any{"currentModeId": modeID},
+	}
 }
 
 func expandAndValidateCWD(cwd string) (string, error) {
