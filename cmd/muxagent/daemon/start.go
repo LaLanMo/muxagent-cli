@@ -89,7 +89,7 @@ func newStartCmd() *cobra.Command {
 			child.Stdout = logFile
 			child.Stderr = logFile
 			child.Stdin = nil
-			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			child.SysProcAttr = daemonSysProcAttr()
 
 			if err := child.Start(); err != nil {
 				return fmt.Errorf("start daemon process: %w", err)
