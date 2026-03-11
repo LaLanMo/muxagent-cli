@@ -42,8 +42,7 @@ const (
 )
 
 var releaseSigningPublicKeyStrings = []string{
-	// Replace this key before the first public release.
-	"7cFuofQWv74pbJYeyyeGfBw1Bk3YKX2uZwAlPp4n3AE=",
+	"sZ1SvErxXry9HVm3C06yNKlIyNNNFejSPR8yOY5L9IM=",
 }
 
 type releaseManifest struct {
