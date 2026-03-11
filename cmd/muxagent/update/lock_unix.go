@@ -3,6 +3,7 @@
 package update
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -11,6 +12,7 @@ import (
 
 type updateLock struct {
 	file *os.File
+	path string
 }
 
 func acquireUpdateLock(path string) (*updateLock, error) {
@@ -25,7 +27,7 @@ func acquireUpdateLock(path string) (*updateLock, error) {
 		}
 		return nil, fmt.Errorf("acquire update lock: %w", err)
 	}
-	return &updateLock{file: file}, nil
+	return &updateLock{file: file, path: path}, nil
 }
 
 func (l *updateLock) Close() error {
@@ -34,8 +36,18 @@ func (l *updateLock) Close() error {
 	}
 	err := unix.Flock(int(l.file.Fd()), unix.LOCK_UN)
 	closeErr := l.file.Close()
+	removeErr := error(nil)
+	if l.path != "" {
+		removeErr = os.Remove(l.path)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+	}
 	if err != nil {
 		return err
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	return removeErr
 }

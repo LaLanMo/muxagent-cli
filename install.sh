@@ -2,8 +2,8 @@
 set -eu
 
 REPO="${MUXAGENT_REPO:-LaLanMo/muxagent-cli}"
-API_URL="${MUXAGENT_RELEASE_API_URL:-https://api.github.com/repos/$REPO/releases}"
 BASE_URL="${MUXAGENT_RELEASE_BASE_URL:-https://github.com/$REPO/releases/download}"
+LATEST_BASE_URL="${MUXAGENT_RELEASE_LATEST_BASE_URL:-https://github.com/$REPO/releases/latest/download}"
 VERSION="${MUXAGENT_VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-}"
 
@@ -63,17 +63,6 @@ normalize_version() {
   esac
 }
 
-fetch_latest_tag() {
-  need_cmd curl
-  body="$(curl -fsSL "$API_URL/latest")"
-  tag="$(printf '%s' "$body" | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-  if [ -z "$tag" ]; then
-    echo "failed to resolve latest release tag" >&2
-    exit 1
-  fi
-  printf '%s\n' "$tag"
-}
-
 choose_install_dir() {
   if [ -n "$INSTALL_DIR" ]; then
     printf '%s\n' "$INSTALL_DIR"
@@ -102,15 +91,9 @@ need_cmd chmod
 need_cmd mv
 need_cmd mkdir
 need_cmd grep
-need_cmd sed
-need_cmd tr
 need_cmd tar
 
 TAG="$(normalize_version "$VERSION")"
-if [ "$TAG" = "latest" ]; then
-  TAG="$(fetch_latest_tag)"
-fi
-
 GOOS="$(detect_goos)"
 GOARCH="$(detect_goarch)"
 ASSET_SUFFIX=""
@@ -120,6 +103,13 @@ fi
 BUNDLE_ASSET="muxagent-$GOOS-$GOARCH$ASSET_SUFFIX.tar.gz"
 TARGET_DIR="$(choose_install_dir)"
 TMP_DIR="$(mktemp -d)"
+DOWNLOAD_BASE="$BASE_URL/$TAG"
+DISPLAY_VERSION="$TAG"
+
+if [ "$TAG" = "latest" ]; then
+  DOWNLOAD_BASE="$LATEST_BASE_URL"
+  DISPLAY_VERSION="latest"
+fi
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -128,11 +118,11 @@ trap cleanup EXIT INT TERM
 
 mkdir -p "$TARGET_DIR"
 
-echo "Installing muxagent $TAG to $TARGET_DIR"
+echo "Installing muxagent $DISPLAY_VERSION to $TARGET_DIR"
 
 BUNDLE_TMP="$TMP_DIR/muxagent.tar.gz"
-if ! download_asset "$BASE_URL/$TAG/$BUNDLE_ASSET" "$BUNDLE_TMP"; then
-  echo "failed to download $BUNDLE_ASSET from $BASE_URL/$TAG/" >&2
+if ! download_asset "$DOWNLOAD_BASE/$BUNDLE_ASSET" "$BUNDLE_TMP"; then
+  echo "failed to download $BUNDLE_ASSET from $DOWNLOAD_BASE/" >&2
   exit 1
 fi
 

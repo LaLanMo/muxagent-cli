@@ -129,6 +129,23 @@ func TestLatestReleaseTimesOut(t *testing.T) {
 	assert.Contains(t, err.Error(), "deadline exceeded")
 }
 
+func TestLatestReleaseUsesSignedLatestManifest(t *testing.T) {
+	t.Parallel()
+
+	pub, priv := generateSigningKeypair(t)
+	exePath, _ := writeExecutable(t, "old-binary")
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("new-binary"), "claude-agent-acp", []byte("runtime-binary"))
+	server, _ := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, false, nil)
+	defer server.Close()
+
+	u := newTestUpdater(server, pub, exePath)
+	u.latestReleaseURL = ""
+
+	latest, err := u.latestRelease(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "v1.2.3", latest)
+}
+
 func TestInstallSuccessReplacesBinary(t *testing.T) {
 	t.Parallel()
 
@@ -391,6 +408,34 @@ func TestCleanupUpdatedBackupIgnoresUnexpectedPath(t *testing.T) {
 	assert.Empty(t, os.Getenv(updatedBackupEnvVar))
 }
 
+func TestCleanupUpdatedBackupRemovesLockAndStageDir(t *testing.T) {
+	exePath, err := currentExecutablePath()
+	require.NoError(t, err)
+
+	lockPath := exePath + ".lock"
+	stageDir, err := os.MkdirTemp(filepath.Dir(exePath), "muxagent-update-*")
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = os.Remove(lockPath)
+		_ = os.RemoveAll(stageDir)
+	})
+
+	require.NoError(t, os.WriteFile(lockPath, []byte(""), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(stageDir, "marker"), []byte("x"), 0o600))
+	t.Setenv(updatedLockEnvVar, lockPath)
+	t.Setenv(updatedStageDirEnvVar, stageDir)
+
+	CleanupUpdatedBackup()
+
+	_, err = os.Stat(lockPath)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(stageDir)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.Empty(t, os.Getenv(updatedLockEnvVar))
+	assert.Empty(t, os.Getenv(updatedStageDirEnvVar))
+}
+
 func TestRunWithUpdaterCheckOnlyDoesNotDowngrade(t *testing.T) {
 	t.Parallel()
 
@@ -515,6 +560,10 @@ func startReleaseServerWithAssets(t *testing.T, latestTag, manifestTag string, a
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(fmt.Sprintf(`{"tag_name":%q}`, latestTag)))
+		case "/latest/download/" + releaseManifestName:
+			_, _ = w.Write(manifest)
+		case "/latest/download/" + releaseManifestSigName:
+			_, _ = w.Write(signatureBody)
 		case "/download/" + latestTag + "/" + releaseManifestName:
 			_, _ = w.Write(manifest)
 		case "/download/" + latestTag + "/" + releaseManifestSigName:

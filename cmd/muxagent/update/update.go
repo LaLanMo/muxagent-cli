@@ -38,6 +38,8 @@ const (
 	maxRedirects               = 10
 	updatedBackupEnvVar        = "MUXAGENT_UPDATED_BACKUP"
 	updatedRuntimeBackupEnvVar = "MUXAGENT_UPDATED_RUNTIME_BACKUP"
+	updatedLockEnvVar          = "MUXAGENT_UPDATED_LOCK_FILE"
+	updatedStageDirEnvVar      = "MUXAGENT_UPDATED_STAGE_DIR"
 	releaseManifestHeaderBase  = "# muxagent "
 )
 
@@ -198,6 +200,8 @@ func CleanupUpdatedBackup() {
 
 	cleanupBackupFile(updatedBackupEnvVar, exePath+".bak")
 	cleanupBackupFile(updatedRuntimeBackupEnvVar, filepath.Join(filepath.Dir(exePath), runtimeBinaryName(runtime.GOOS)+".bak"))
+	cleanupBackupFile(updatedLockEnvVar, exePath+".lock")
+	cleanupStageDir(updatedStageDirEnvVar, filepath.Dir(exePath))
 }
 
 func cleanupBackupFile(envVar, expectedPath string) {
@@ -215,6 +219,25 @@ func cleanupBackupFile(envVar, expectedPath string) {
 	}
 }
 
+func cleanupStageDir(envVar, parentDir string) {
+	stageDir := os.Getenv(envVar)
+	if stageDir == "" {
+		return
+	}
+
+	_ = os.Unsetenv(envVar)
+
+	cleanStageDir := filepath.Clean(stageDir)
+	cleanParent := filepath.Clean(parentDir)
+	if filepath.Dir(cleanStageDir) != cleanParent {
+		return
+	}
+	if !strings.HasPrefix(filepath.Base(cleanStageDir), "muxagent-update-") {
+		return
+	}
+	_ = os.RemoveAll(cleanStageDir)
+}
+
 func newDefaultUpdater() (*updater, error) {
 	signingKeys, err := decodeSigningPublicKeys(releaseSigningPublicKeyStrings)
 	if err != nil {
@@ -223,7 +246,7 @@ func newDefaultUpdater() (*updater, error) {
 
 	return &updater{
 		client:                 newUpdateHTTPClient(),
-		latestReleaseURL:       fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", cliRepo),
+		latestReleaseURL:       "",
 		releaseDownloadBaseURL: fmt.Sprintf("https://github.com/%s/releases/download", cliRepo),
 		releaseSigningKeys:     signingKeys,
 		resolveExecutablePath:  currentExecutablePath,
@@ -294,18 +317,32 @@ func displayVersion(v string) string {
 }
 
 func (u *updater) latestRelease(ctx context.Context) (string, error) {
-	body, err := u.fetchBytes(ctx, u.latestReleaseURL, releaseLatestMaxBytes, "latest release metadata")
+	if u.latestReleaseURL != "" {
+		body, err := u.fetchBytes(ctx, u.latestReleaseURL, releaseLatestMaxBytes, "latest release metadata")
+		if err != nil {
+			return "", err
+		}
+
+		var release struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.Unmarshal(body, &release); err != nil {
+			return "", fmt.Errorf("decode latest release metadata: %w", err)
+		}
+		return normalizeVersion(release.TagName)
+	}
+
+	manifest, err := u.fetchAndVerifyManifestFromURLs(
+		ctx,
+		u.releaseLatestAssetURL(releaseManifestName),
+		u.releaseLatestAssetURL(releaseManifestSigName),
+		"latest release manifest",
+		"latest release manifest signature",
+	)
 	if err != nil {
 		return "", err
 	}
-
-	var release struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.Unmarshal(body, &release); err != nil {
-		return "", fmt.Errorf("decode latest release metadata: %w", err)
-	}
-	return normalizeVersion(release.TagName)
+	return manifest.Version, nil
 }
 
 func (u *updater) install(ctx context.Context, latest string) error {
@@ -392,6 +429,8 @@ func (u *updater) install(ctx context.Context, latest string) error {
 	if hadRuntime {
 		env = setEnv(env, updatedRuntimeBackupEnvVar, runtimeBakPath)
 	}
+	env = setEnv(env, updatedLockEnvVar, exePath+".lock")
+	env = setEnv(env, updatedStageDirEnvVar, stageDir)
 	if err := u.exec(exePath, []string{exePath, "update", "--ensure-runtime"}, env); err != nil {
 		if hadRuntime {
 			if restoreErr := restoreFile(runtimePath, runtimeBakPath); restoreErr != nil {
@@ -409,29 +448,43 @@ func (u *updater) install(ctx context.Context, latest string) error {
 }
 
 func (u *updater) fetchAndVerifyManifest(ctx context.Context, latest string) (*releaseManifest, error) {
-	manifestBytes, err := u.fetchBytes(ctx, u.releaseAssetURL(latest, releaseManifestName), releaseManifestMaxBytes, "release manifest")
+	manifest, err := u.fetchAndVerifyManifestFromURLs(
+		ctx,
+		u.releaseAssetURL(latest, releaseManifestName),
+		u.releaseAssetURL(latest, releaseManifestSigName),
+		"release manifest",
+		"release manifest signature",
+	)
 	if err != nil {
 		return nil, err
 	}
-	signatureBytes, err := u.fetchBytes(ctx, u.releaseAssetURL(latest, releaseManifestSigName), releaseSignatureMaxBytes, "release manifest signature")
+	if manifest.Version != latest {
+		return nil, fmt.Errorf("release manifest version %q does not match latest release %q", manifest.Version, latest)
+	}
+	return manifest, nil
+}
+
+func (u *updater) fetchAndVerifyManifestFromURLs(ctx context.Context, manifestURL, signatureURL, manifestLabel, signatureLabel string) (*releaseManifest, error) {
+	manifestBytes, err := u.fetchBytes(ctx, manifestURL, releaseManifestMaxBytes, manifestLabel)
+	if err != nil {
+		return nil, err
+	}
+	signatureBytes, err := u.fetchBytes(ctx, signatureURL, releaseSignatureMaxBytes, signatureLabel)
 	if err != nil {
 		return nil, err
 	}
 
 	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(signatureBytes)))
 	if err != nil {
-		return nil, fmt.Errorf("decode release manifest signature: %w", err)
+		return nil, fmt.Errorf("decode %s: %w", signatureLabel, err)
 	}
 	if !verifyManifestSignature(manifestBytes, signature, u.releaseSigningKeys) {
-		return nil, fmt.Errorf("release manifest signature verification failed")
+		return nil, fmt.Errorf("%s verification failed", signatureLabel)
 	}
 
 	manifest, err := parseReleaseManifest(manifestBytes)
 	if err != nil {
 		return nil, err
-	}
-	if manifest.Version != latest {
-		return nil, fmt.Errorf("release manifest version %q does not match latest release %q", manifest.Version, latest)
 	}
 	return manifest, nil
 }
@@ -563,6 +616,14 @@ func (u *updater) runtimeInstallPath(exePath string) string {
 
 func (u *updater) releaseAssetURL(tag, assetName string) string {
 	return strings.TrimRight(u.releaseDownloadBaseURL, "/") + "/" + tag + "/" + assetName
+}
+
+func (u *updater) releaseLatestAssetURL(assetName string) string {
+	base := strings.TrimRight(u.releaseDownloadBaseURL, "/")
+	if strings.HasSuffix(base, "/download") {
+		base = strings.TrimSuffix(base, "/download")
+	}
+	return base + "/latest/download/" + assetName
 }
 
 func (u *updater) ensureBundledRuntime(ctx context.Context, tag string, forceInstall bool) (string, error) {
