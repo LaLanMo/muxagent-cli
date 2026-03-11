@@ -199,8 +199,8 @@ func (d *Daemon) Start() error {
 	return nil
 }
 
-// runEventBridge reads events from the ACP runtime, pushes them to the ring buffer,
-// and forwards them to the mobile client if a session is active.
+// runEventBridge reads events from the ACP runtime and hands them to the relay,
+// which owns status tracking, buffering, and best-effort WS delivery.
 func (d *Daemon) runEventBridge(ctx context.Context, relay *relayws.Client) {
 	events := d.rt.Events()
 	for {
@@ -211,14 +211,11 @@ func (d *Daemon) runEventBridge(ctx context.Context, relay *relayws.Client) {
 			if !ok {
 				return
 			}
-			ev = d.eventBuf.Push(ev)
-			if relay.HasSession() {
-				if err := relay.SendEvent(ev); err != nil &&
-					!errors.Is(err, relayws.ErrRelayNotConnected) &&
-					!errors.Is(err, relayws.ErrNoActiveSession) &&
-					!errors.Is(err, relayws.ErrStaleRelaySession) {
-					log.Printf("event forward error: %v", err)
-				}
+			if err := relay.SendEvent(ev); err != nil &&
+				!errors.Is(err, relayws.ErrRelayNotConnected) &&
+				!errors.Is(err, relayws.ErrNoActiveSession) &&
+				!errors.Is(err, relayws.ErrStaleRelaySession) {
+				log.Printf("event forward error: %v", err)
 			}
 		}
 	}

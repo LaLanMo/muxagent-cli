@@ -80,6 +80,9 @@ type Client struct {
 
 	sessionCWDMu sync.RWMutex
 	sessionCWD   map[string]string // sessionID → cwd
+
+	statusMu      sync.RWMutex
+	sessionStatus map[string]domain.SessionStatus // sessionID → daemon-tracked status
 }
 
 func NewMachineClient(
@@ -112,6 +115,7 @@ func NewMachineClient(
 		eventBuf:        eventBuf,
 		wtStore:         wtStore,
 		sessionCWD:      make(map[string]string),
+		sessionStatus:   make(map[string]domain.SessionStatus),
 	}, nil
 }
 
@@ -479,6 +483,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 	if err != nil {
 		return nil, err.Error()
 	}
+	c.setSessionStatus(sessionID, domain.SessionStatusIdle)
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = actualCWD
 	c.sessionCWDMu.Unlock()
@@ -530,6 +535,7 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	if err != nil {
 		return nil, err.Error()
 	}
+	c.ensureSessionStatus(sessionID, domain.SessionStatusIdle)
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = cwd
 	c.sessionCWDMu.Unlock()
@@ -561,17 +567,53 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 	if err != nil {
 		return nil, err.Error()
 	}
-	// If caller provided specific IDs, filter to those only.
+	present := make(map[string]struct{}, len(all))
+	for _, s := range all {
+		present[s.SessionID] = struct{}{}
+	}
 	if len(wanted) > 0 {
-		filtered := make([]domain.SessionSummary, 0, len(wanted))
-		for _, s := range all {
-			if _, ok := wanted[s.SessionID]; ok {
-				filtered = append(filtered, s)
+		for id := range wanted {
+			if _, ok := present[id]; !ok {
+				c.clearSessionStatus(id)
 			}
 		}
-		all = filtered
+	} else {
+		c.clearMissingSessionStatuses(present)
 	}
-	return map[string]any{"sessions": all}, ""
+	// If caller provided specific IDs, filter to those only.
+	type resolvedSessionSummary struct {
+		SessionID string               `json:"sessionId"`
+		CWD       string               `json:"cwd"`
+		Title     string               `json:"title"`
+		UpdatedAt time.Time            `json:"updatedAt"`
+		Status    domain.SessionStatus `json:"status"`
+	}
+	if len(wanted) > 0 {
+		filtered := make([]resolvedSessionSummary, 0, len(wanted))
+		for _, s := range all {
+			if _, ok := wanted[s.SessionID]; ok {
+				filtered = append(filtered, resolvedSessionSummary{
+					SessionID: s.SessionID,
+					CWD:       s.CWD,
+					Title:     s.Title,
+					UpdatedAt: s.UpdatedAt,
+					Status:    c.resolvedSessionStatus(s.SessionID),
+				})
+			}
+		}
+		return map[string]any{"sessions": filtered}, ""
+	}
+	resolved := make([]resolvedSessionSummary, 0, len(all))
+	for _, s := range all {
+		resolved = append(resolved, resolvedSessionSummary{
+			SessionID: s.SessionID,
+			CWD:       s.CWD,
+			Title:     s.Title,
+			UpdatedAt: s.UpdatedAt,
+			Status:    c.resolvedSessionStatus(s.SessionID),
+		})
+	}
+	return map[string]any{"sessions": resolved}, ""
 }
 
 func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, string) {
@@ -602,10 +644,7 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		}
 	}
 
-	// Look up the CWD for this session (saved during create/load)
-	c.sessionCWDMu.RLock()
-	cwd := c.sessionCWD[sessionID]
-	c.sessionCWDMu.RUnlock()
+	c.setSessionStatus(sessionID, domain.SessionStatusRunning)
 
 	// Run the prompt asynchronously — return ACK immediately so the
 	// Flutter client's RPC timeout doesn't fire.  Use context.Background()
@@ -622,7 +661,6 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 			}); evErr != nil && !isExpectedRelayDrop(evErr) {
 				log.Printf("send run.failed event: %v", evErr)
 			}
-			// Don't call syncSessionStatus — run.failed already signals the error state.
 			return
 		}
 		data := map[string]any{"stopReason": stopReason}
@@ -641,7 +679,6 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		}); evErr != nil && !isExpectedRelayDrop(evErr) {
 			log.Printf("send run.finished event: %v", evErr)
 		}
-		c.syncSessionStatus(context.Background(), sessionID, cwd)
 	}()
 
 	return map[string]any{"accepted": true}, ""
@@ -909,41 +946,15 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 	return map[string]any{"results": results}, ""
 }
 
-func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
-	if c.runtime == nil {
-		return
-	}
-	all, err := c.runtime.ListSessions(ctx, "")
-	if err != nil {
-		log.Printf("syncSessionStatus: list sessions: %v", err)
-		return
-	}
-	for _, s := range all {
-		if s.SessionID == sessionID {
-			if err := c.SendEvent(domain.Event{
-				Type:      domain.EventSessionStatus,
-				SessionID: sessionID,
-				At:        s.UpdatedAt,
-				Session: &domain.Session{
-					ID:        s.SessionID,
-					Title:     s.Title,
-					Status:    domain.SessionStatusDone,
-					CreatedAt: s.UpdatedAt,
-					UpdatedAt: s.UpdatedAt,
-					Metadata:  map[string]any{"cwd": s.CWD},
-				},
-			}); err != nil && !isExpectedRelayDrop(err) {
-				log.Printf("send session.status event: %v", err)
-			}
-			return
-		}
-	}
-}
-
 // --- Event forwarding ---
 
 // SendEvent encrypts a domain event and sends it to the connected client via WS.
 func (c *Client) SendEvent(event domain.Event) error {
+	c.applyEventStatus(event)
+	if c.eventBuf != nil {
+		event = c.eventBuf.Push(event)
+	}
+
 	c.stateMu.RLock()
 	session := c.session
 	connPresent := c.conn != nil
@@ -976,6 +987,81 @@ func (c *Client) SendEvent(event domain.Event) error {
 		msg.Hint = &EventHint{Event: string(event.Type)}
 	}
 	return c.writeForSession(session, msg)
+}
+
+func (c *Client) applyEventStatus(event domain.Event) {
+	if event.SessionID == "" {
+		return
+	}
+	switch event.Type {
+	case domain.EventApprovalRequested:
+		c.setSessionStatus(event.SessionID, domain.SessionStatusWaitingApproval)
+	case domain.EventApprovalReplied:
+		c.setSessionStatus(event.SessionID, domain.SessionStatusRunning)
+	case domain.EventRunFinished:
+		c.setSessionStatus(event.SessionID, domain.SessionStatusIdle)
+	case domain.EventRunFailed:
+		c.setSessionStatus(event.SessionID, domain.SessionStatusError)
+	case domain.EventSessionStatus:
+		if event.Session != nil {
+			c.setSessionStatus(event.SessionID, event.Session.Status)
+		}
+	}
+}
+
+func (c *Client) setSessionStatus(sessionID string, status domain.SessionStatus) {
+	if sessionID == "" {
+		return
+	}
+	c.statusMu.Lock()
+	defer c.statusMu.Unlock()
+	if c.sessionStatus == nil {
+		c.sessionStatus = make(map[string]domain.SessionStatus)
+	}
+	c.sessionStatus[sessionID] = status
+}
+
+func (c *Client) ensureSessionStatus(sessionID string, status domain.SessionStatus) {
+	if sessionID == "" {
+		return
+	}
+	c.statusMu.Lock()
+	defer c.statusMu.Unlock()
+	if c.sessionStatus == nil {
+		c.sessionStatus = make(map[string]domain.SessionStatus)
+	}
+	if _, ok := c.sessionStatus[sessionID]; ok {
+		return
+	}
+	c.sessionStatus[sessionID] = status
+}
+
+func (c *Client) resolvedSessionStatus(sessionID string) domain.SessionStatus {
+	c.statusMu.RLock()
+	defer c.statusMu.RUnlock()
+	if status, ok := c.sessionStatus[sessionID]; ok {
+		return status
+	}
+	return domain.SessionStatusIdle
+}
+
+func (c *Client) clearSessionStatus(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	c.statusMu.Lock()
+	defer c.statusMu.Unlock()
+	delete(c.sessionStatus, sessionID)
+}
+
+func (c *Client) clearMissingSessionStatuses(present map[string]struct{}) {
+	c.statusMu.Lock()
+	defer c.statusMu.Unlock()
+	for sessionID := range c.sessionStatus {
+		if _, ok := present[sessionID]; !ok {
+			delete(c.sessionStatus, sessionID)
+		}
+	}
 }
 
 // --- Response handling ---

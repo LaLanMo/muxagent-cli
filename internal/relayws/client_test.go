@@ -164,6 +164,31 @@ func (r *listingRuntime) ListSessions(ctx context.Context, cwd string) ([]domain
 	return r.sessions, nil
 }
 
+type promptResult struct {
+	stopReason string
+	usage      *domain.PromptUsage
+	err        error
+}
+
+type promptRuntime struct {
+	listingRuntime
+	started chan struct{}
+	release chan promptResult
+}
+
+func (r *promptRuntime) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error) {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return "", nil, ctx.Err()
+	case result := <-r.release:
+		return result.stopReason, result.usage, result.err
+	}
+}
+
 func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverConn := make(chan *websocket.Conn, 1)
@@ -235,6 +260,7 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	require.Equal(t, "sid-1", entry["sessionId"])
 	require.Equal(t, "/tmp/project", entry["cwd"])
 	require.Equal(t, "Generated title", entry["title"])
+	require.Equal(t, string(domain.SessionStatusIdle), entry["status"])
 
 	require.NoError(t, clientConn.Close())
 	select {
@@ -242,6 +268,165 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("relay run loop did not stop")
 	}
+}
+
+func TestRpcLoadSessionPreservesTrackedStatus(t *testing.T) {
+	rt := &listingRuntime{
+		blockingRuntime: blockingRuntime{
+			loadStarted: make(chan struct{}, 1),
+			unblock:     make(chan struct{}),
+		},
+		sessions: []domain.SessionSummary{
+			{
+				SessionID: "sid",
+				CWD:       "/tmp/project",
+				Title:     "Title",
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+	client := &Client{
+		runtime:       rt,
+		sessionCWD:    map[string]string{},
+		sessionStatus: map[string]domain.SessionStatus{"sid": domain.SessionStatusRunning},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, errStr := client.rpcLoadSession(context.Background(), map[string]any{
+			"sessionId": "sid",
+			"cwd":       "/tmp/project",
+		})
+		require.Empty(t, errStr)
+	}()
+
+	select {
+	case <-rt.loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not start")
+	}
+
+	close(rt.unblock)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not finish")
+	}
+
+	result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
+		"sessionIds": []any{"sid"},
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, string(domain.SessionStatusRunning), resolvedStatusFromRPCResult(t, result))
+}
+
+func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
+	client := &Client{
+		machineID:     "machine-1",
+		runtime:       &listingRuntime{sessions: []domain.SessionSummary{{SessionID: "sid", CWD: "/tmp/project", Title: "Title", UpdatedAt: time.Now()}}},
+		eventBuf:      NewEventBuffer(8),
+		sessionStatus: map[string]domain.SessionStatus{},
+	}
+
+	err := client.SendEvent(domain.Event{
+		Type:      domain.EventApprovalRequested,
+		SessionID: "sid",
+		At:        time.Now(),
+		Approval:  &domain.ApprovalRequest{ID: "req-1", SessionID: "sid"},
+	})
+	require.ErrorIs(t, err, ErrRelayNotConnected)
+
+	result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
+		"sessionIds": []any{"sid"},
+	})
+	require.Empty(t, errStr)
+	status := resolvedStatusFromRPCResult(t, result)
+	require.Equal(t, string(domain.SessionStatusWaitingApproval), status)
+
+	err = client.SendEvent(domain.Event{
+		Type:      domain.EventRunFinished,
+		SessionID: "sid",
+		At:        time.Now(),
+		Data:      map[string]any{"stopReason": "end_turn"},
+	})
+	require.ErrorIs(t, err, ErrRelayNotConnected)
+
+	result, errStr = client.rpcResolveSessions(context.Background(), map[string]any{
+		"sessionIds": []any{"sid"},
+	})
+	require.Empty(t, errStr)
+	status = resolvedStatusFromRPCResult(t, result)
+	require.Equal(t, string(domain.SessionStatusIdle), status)
+
+	events, complete := client.eventBuf.Since(0)
+	require.True(t, complete)
+	require.Len(t, events, 2)
+	require.EqualValues(t, 1, events[0].Seq)
+	require.Equal(t, domain.EventApprovalRequested, events[0].Type)
+	require.EqualValues(t, 2, events[1].Seq)
+	require.Equal(t, domain.EventRunFinished, events[1].Type)
+}
+
+func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
+	rt := &promptRuntime{
+		listingRuntime: listingRuntime{
+			sessions: []domain.SessionSummary{
+				{
+					SessionID: "sid",
+					CWD:       "/tmp/project",
+					Title:     "Title",
+					UpdatedAt: time.Now(),
+				},
+			},
+		},
+		started: make(chan struct{}, 1),
+		release: make(chan promptResult, 1),
+	}
+	client := &Client{
+		machineID:     "machine-1",
+		runtime:       rt,
+		eventBuf:      NewEventBuffer(8),
+		sessionCWD:    map[string]string{"sid": "/tmp/project"},
+		sessionStatus: map[string]domain.SessionStatus{},
+	}
+
+	result, errStr := client.rpcPrompt(context.Background(), map[string]any{
+		"sessionId": "sid",
+		"text":      "hello",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, true, result.(map[string]any)["accepted"])
+
+	select {
+	case <-rt.started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+
+	resolveResult, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
+		"sessionIds": []any{"sid"},
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, string(domain.SessionStatusRunning), resolvedStatusFromRPCResult(t, resolveResult))
+
+	rt.release <- promptResult{stopReason: "end_turn"}
+
+	require.Eventually(t, func() bool {
+		result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
+			"sessionIds": []any{"sid"},
+		})
+		if errStr != "" {
+			return false
+		}
+		return resolvedStatusFromRPCResult(t, result) == string(domain.SessionStatusIdle)
+	}, time.Second, 10*time.Millisecond)
+
+	events, complete := client.eventBuf.Since(0)
+	require.True(t, complete)
+	require.Len(t, events, 1)
+	require.Equal(t, domain.EventRunFinished, events[0].Type)
 }
 
 func TestWriteForSessionErrors(t *testing.T) {
@@ -652,6 +837,22 @@ func decryptResponse(t *testing.T, session *Session, msg EncryptedMessage) map[s
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	return payload
+}
+
+func resolvedStatusFromRPCResult(t *testing.T, result any) string {
+	t.Helper()
+
+	body, err := json.Marshal(result)
+	require.NoError(t, err)
+
+	var payload struct {
+		Sessions []struct {
+			Status string `json:"status"`
+		} `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(body, &payload))
+	require.Len(t, payload.Sessions, 1)
+	return payload.Sessions[0].Status
 }
 
 func newWSPair(t *testing.T) (*websocket.Conn, *websocket.Conn, func()) {
