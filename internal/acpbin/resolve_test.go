@@ -57,6 +57,7 @@ func TestResolve_ManagedPathExists(t *testing.T) {
 
 func TestResolve_RelativePathExists(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	exePath := filepath.Join(dir, "muxagent")
 
 	prev := currentExecutablePath

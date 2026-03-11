@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/LaLanMo/muxagent-cli/internal/runtime/acp"
@@ -49,6 +50,17 @@ func run(cmd *cobra.Command, promptText, cwd string) error {
 	rtSettings, err := cfg.ActiveRuntimeSettings()
 	if err != nil {
 		return fmt.Errorf("runtime settings: %w", err)
+	}
+	if cfg.ActiveRuntime == config.RuntimeClaudeCode {
+		resolved, err := acpbin.Resolve(cfg, nil)
+		if err != nil {
+			return fmt.Errorf("resolve Claude Code runtime: %w", err)
+		}
+		rtSettings.Command = resolved
+		rtSettings, err = acpbin.InjectClaudeCodeExecutable(rtSettings)
+		if err != nil {
+			return fmt.Errorf("configure Claude Code executable wrapper: %w", err)
+		}
 	}
 
 	client := acp.NewClient(acp.Config{

@@ -73,6 +73,11 @@ func (d *Daemon) Start() error {
 		}
 		runtimeSettings.Command = resolved
 		log.Printf("[runtime] resolved: %s", resolved)
+
+		runtimeSettings, err = acpbin.InjectClaudeCodeExecutable(runtimeSettings)
+		if err != nil {
+			return fmt.Errorf("failed to configure Claude Code executable wrapper: %w", err)
+		}
 	}
 
 	rtClient := acp.NewClient(acp.Config{
