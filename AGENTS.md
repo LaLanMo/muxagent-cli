@@ -32,6 +32,10 @@ for _, tt := range tests {
 
 ## Code Conventions
 
+### Git Commits
+- Use Conventional Commits for commit messages (for example: `feat: ...`, `fix: ...`, `chore: ...`)
+- Prefer adding a scope only when it adds useful context beyond the repo name (for example: `fix(auth): ...`)
+
 ### File Permissions
 - `0o600` for files containing secrets (config, state, tokens)
 - `0o755` for directories

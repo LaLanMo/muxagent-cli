@@ -69,3 +69,30 @@ func TestRootHelpIncludesVersionEntryPoints(t *testing.T) {
 	assert.Contains(t, out.String(), "version     Show muxagent version")
 	assert.Contains(t, out.String(), "-v, --version")
 }
+
+func TestRootHelpOmitsCompletionCommand(t *testing.T) {
+	cmd := NewRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--help"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.NotContains(t, out.String(), "completion")
+	assert.Contains(t, out.String(), "auth")
+	assert.Contains(t, out.String(), "daemon")
+	assert.Contains(t, out.String(), "health")
+}
+
+func TestCompletionCommandUnavailable(t *testing.T) {
+	cmd := NewRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"completion"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command \"completion\" for \"muxagent\"")
+}

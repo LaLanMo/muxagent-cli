@@ -20,6 +20,7 @@ func NewRootCmd() *cobra.Command {
 		Version: cliversion.CLIString(),
 	}
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
 	rootCmd.AddCommand(
 		acptest.NewCmd(),
