@@ -200,6 +200,23 @@ jobs:
           MUXAGENT_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.MUXAGENT_RELEASE_SIGNING_PRIVATE_KEY }}
         run: go run ./scripts/sign_release -dir "$RELEASE_DIR" -version "${{ steps.meta.outputs.version }}"
 
+      - name: Ensure release tag exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          target="${{ steps.target.outputs.sha }}"
+
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$version" >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$version" \
+            -f sha="$target"
+
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -214,6 +231,6 @@ jobs:
             gh release create "$version" "$RELEASE_DIR"/* \
               --draft \
               --repo "$GITHUB_REPOSITORY" \
-              --target "${{ steps.target.outputs.sha }}" \
+              --verify-tag \
               --title "$version"
           fi
