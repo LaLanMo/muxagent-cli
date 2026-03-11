@@ -17,18 +17,19 @@ import (
 )
 
 const (
-	signingKeyEnv   = "MUXAGENT_RELEASE_SIGNING_PRIVATE_KEY"
-	manifestName    = "SHA256SUMS"
-	signatureName   = "SHA256SUMS.sig"
-	manifestPrefix  = "# muxagent "
-	assetNamePrefix = "muxagent-"
+	signingKeyEnv  = "MUXAGENT_RELEASE_SIGNING_PRIVATE_KEY"
+	manifestName   = "SHA256SUMS"
+	signatureName  = "SHA256SUMS.sig"
+	manifestPrefix = "# muxagent "
 )
+
+var assetNamePrefixes = []string{"muxagent-", "claude-agent-acp-"}
 
 func main() {
 	var dir string
 	var version string
 
-	flag.StringVar(&dir, "dir", ".", "release directory containing muxagent-* assets")
+	flag.StringVar(&dir, "dir", ".", "release directory containing muxagent-* and claude-agent-acp-* assets")
 	flag.StringVar(&version, "version", "", "release version (for example v1.2.3)")
 	flag.Parse()
 
@@ -120,7 +121,7 @@ func buildManifest(dir, version string) ([]byte, error) {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasPrefix(name, assetNamePrefix) {
+		if !matchesAssetPrefix(name) {
 			continue
 		}
 		hash, err := fileSHA256(filepath.Join(dir, name))
@@ -131,7 +132,7 @@ func buildManifest(dir, version string) ([]byte, error) {
 	}
 
 	if len(assets) == 0 {
-		return nil, fmt.Errorf("no %s* assets found in %s", assetNamePrefix, dir)
+		return nil, fmt.Errorf("no signed release assets found in %s", dir)
 	}
 
 	sort.Slice(assets, func(i, j int) bool {
@@ -149,6 +150,15 @@ func buildManifest(dir, version string) ([]byte, error) {
 		builder.WriteByte('\n')
 	}
 	return []byte(builder.String()), nil
+}
+
+func matchesAssetPrefix(name string) bool {
+	for _, prefix := range assetNamePrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func fileSHA256(path string) (string, error) {

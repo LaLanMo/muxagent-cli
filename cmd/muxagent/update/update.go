@@ -34,6 +34,7 @@ const (
 	releaseManifestMaxBytes   = 1 << 20
 	releaseSignatureMaxBytes  = 64 << 10
 	releaseBinaryMaxBytes     = 100 << 20
+	releaseRuntimeMaxBytes    = 500 << 20
 	updateHTTPTimeout         = 5 * time.Minute
 	maxRedirects              = 10
 	updatedBackupEnvVar       = "MUXAGENT_UPDATED_BACKUP"
@@ -58,6 +59,7 @@ type updater struct {
 	resolveExecutablePath  func() (string, error)
 	exec                   func(string, []string, []string) error
 	environ                func() []string
+	runtimePlatform        func() (string, error)
 	goos                   string
 	goarch                 string
 }
@@ -146,7 +148,30 @@ func ensureRuntime() error {
 		return nil
 	}
 
-	_, err = acpbin.Resolve(cfg, func(ev acpbin.ProgressEvent) {
+	if config.IsRuntimeCommandOverridden(config.RuntimeClaudeCode) {
+		if _, err := acpbin.Resolve(cfg, nil); err != nil {
+			return fmt.Errorf("failed to set up agent runtime: %w", err)
+		}
+		fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
+		return nil
+	}
+
+	if version.Version != "dev" {
+		u, err := newDefaultUpdater()
+		if err != nil {
+			return err
+		}
+
+		currentTag, err := normalizeVersion(version.Version)
+		if err == nil {
+			if _, err := u.ensureBundledRuntime(context.Background(), currentTag); err == nil {
+				fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
+				return nil
+			}
+		}
+	}
+
+	_, err = acpbin.ResolveManaged(cfg, func(ev acpbin.ProgressEvent) {
 		if ev.Phase == "downloading" && ev.TotalBytes > 0 {
 			pct := float64(ev.BytesRead) / float64(ev.TotalBytes) * 100
 			fmt.Printf("\rDownloading agent runtime... %.0f%%", pct)
@@ -193,6 +218,7 @@ func newDefaultUpdater() (*updater, error) {
 		resolveExecutablePath:  currentExecutablePath,
 		exec:                   syscall.Exec,
 		environ:                os.Environ,
+		runtimePlatform:        acpbin.Platform,
 		goos:                   runtime.GOOS,
 		goarch:                 runtime.GOARCH,
 	}, nil
@@ -450,72 +476,159 @@ func (u *updater) assetName() string {
 	return assetName
 }
 
+func (u *updater) runtimeAssetName() (string, error) {
+	platformFn := u.runtimePlatform
+	if platformFn == nil {
+		platformFn = acpbin.Platform
+	}
+
+	platform, err := platformFn()
+	if err != nil {
+		return "", err
+	}
+
+	assetName := "claude-agent-acp-" + platform
+	if strings.HasPrefix(platform, "windows-") {
+		assetName += ".exe"
+	}
+	return assetName, nil
+}
+
+func (u *updater) runtimeInstallPath(exePath string) string {
+	name := "claude-agent-acp"
+	if u.goos == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(filepath.Dir(exePath), name)
+}
+
 func (u *updater) releaseAssetURL(tag, assetName string) string {
 	return strings.TrimRight(u.releaseDownloadBaseURL, "/") + "/" + tag + "/" + assetName
 }
 
+func (u *updater) ensureBundledRuntime(ctx context.Context, tag string) (string, error) {
+	exePath, err := u.resolveExecutablePath()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+
+	manifest, err := u.fetchAndVerifyManifest(ctx, tag)
+	if err != nil {
+		return "", err
+	}
+
+	assetName, err := u.runtimeAssetName()
+	if err != nil {
+		return "", err
+	}
+
+	expectedHash, ok := manifest.Entries[assetName]
+	if !ok {
+		return "", fmt.Errorf("release manifest missing asset %q", assetName)
+	}
+
+	destPath := u.runtimeInstallPath(exePath)
+	if hashValue, err := fileSHA256(destPath); err == nil && subtle.ConstantTimeCompare([]byte(hashValue), []byte(expectedHash)) == 1 {
+		return destPath, nil
+	}
+
+	tmpPath := destPath + ".tmp"
+	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
+
+	if err := u.downloadVerifiedAsset(ctx, u.releaseAssetURL(tag, assetName), tmpPath, expectedHash, releaseRuntimeMaxBytes, "agent runtime"); err != nil {
+		return "", err
+	}
+	if err := os.Remove(destPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("replace agent runtime: %w", err)
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return "", fmt.Errorf("install agent runtime: %w", err)
+	}
+
+	return destPath, nil
+}
+
 func (u *updater) downloadVerifiedBinary(ctx context.Context, url, destPath, expectedHash string) error {
+	return u.downloadVerifiedAsset(ctx, url, destPath, expectedHash, releaseBinaryMaxBytes, "update")
+}
+
+func (u *updater) downloadVerifiedAsset(ctx context.Context, url, destPath, expectedHash string, maxBytes int64, label string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
 	resp, err := u.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to download update: %w", err)
+		return fmt.Errorf("failed to download %s: %w", label, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download update (HTTP %d)", resp.StatusCode)
+		return fmt.Errorf("failed to download %s (HTTP %d)", label, resp.StatusCode)
 	}
-	if resp.ContentLength > releaseBinaryMaxBytes {
-		return fmt.Errorf("update binary exceeds %d bytes", releaseBinaryMaxBytes)
+	if resp.ContentLength > maxBytes {
+		return fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
 	}
 
 	f, err := os.Create(destPath)
 	if err != nil {
-		return fmt.Errorf("cannot write update: %w", err)
+		return fmt.Errorf("cannot write %s: %w", label, err)
 	}
 
 	hasher := sha256.New()
-	reader := io.LimitReader(resp.Body, releaseBinaryMaxBytes+1)
+	reader := io.LimitReader(resp.Body, maxBytes+1)
 	written, err := io.Copy(io.MultiWriter(f, hasher), reader)
 	if err != nil {
 		_ = f.Close()
 		_ = os.Remove(destPath)
-		return fmt.Errorf("failed to download update: %w", err)
+		return fmt.Errorf("failed to download %s: %w", label, err)
 	}
 	if written == 0 {
 		_ = f.Close()
 		_ = os.Remove(destPath)
-		return fmt.Errorf("update binary is empty")
+		return fmt.Errorf("%s is empty", label)
 	}
-	if written > releaseBinaryMaxBytes {
+	if written > maxBytes {
 		_ = f.Close()
 		_ = os.Remove(destPath)
-		return fmt.Errorf("update binary exceeds %d bytes", releaseBinaryMaxBytes)
+		return fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
 	}
 	expectedHashBytes, err := hex.DecodeString(expectedHash)
 	if err != nil {
 		_ = f.Close()
 		_ = os.Remove(destPath)
-		return fmt.Errorf("invalid expected update checksum: %w", err)
+		return fmt.Errorf("invalid expected %s checksum: %w", label, err)
 	}
 	actualHashBytes := hasher.Sum(nil)
 	if subtle.ConstantTimeCompare(actualHashBytes, expectedHashBytes) != 1 {
 		_ = f.Close()
 		_ = os.Remove(destPath)
-		return fmt.Errorf("update binary checksum mismatch")
+		return fmt.Errorf("%s checksum mismatch", label)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(destPath)
-		return fmt.Errorf("failed to close update binary: %w", err)
+		return fmt.Errorf("failed to close %s: %w", label, err)
 	}
 	if err := os.Chmod(destPath, 0o755); err != nil {
 		_ = os.Remove(destPath)
-		return fmt.Errorf("chmod update binary: %w", err)
+		return fmt.Errorf("chmod %s: %w", label, err)
 	}
 	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func copyFile(srcPath, dstPath string) error {

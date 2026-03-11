@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -252,6 +253,51 @@ func TestInstallRejectsBinaryHashMismatch(t *testing.T) {
 	assert.Equal(t, oldContent, got)
 }
 
+func TestEnsureBundledRuntimeInstallsCompanionAsset(t *testing.T) {
+	t.Parallel()
+
+	pub, priv := generateSigningKeypair(t)
+	exePath, _ := writeExecutable(t, "old-binary")
+	runtimeBinary := []byte("#!/bin/sh\necho runtime\n")
+	server, reqs := startReleaseServerWithAssets(t, "v1.2.3", "v1.2.3", map[string][]byte{
+		"claude-agent-acp-darwin-arm64": runtimeBinary,
+	}, priv, false, nil)
+	defer server.Close()
+
+	u := newTestUpdater(server, pub, exePath)
+	runtimePath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3")
+	require.NoError(t, err)
+
+	assert.Equal(t, filepath.Join(filepath.Dir(exePath), "claude-agent-acp"), runtimePath)
+
+	got, err := os.ReadFile(runtimePath)
+	require.NoError(t, err)
+	assert.Equal(t, runtimeBinary, got)
+	assert.Equal(t, 1, reqs.count("/download/v1.2.3/claude-agent-acp-darwin-arm64"))
+}
+
+func TestEnsureBundledRuntimeSkipsDownloadWhenCompanionMatches(t *testing.T) {
+	t.Parallel()
+
+	pub, priv := generateSigningKeypair(t)
+	exePath, _ := writeExecutable(t, "old-binary")
+	runtimeBinary := []byte("#!/bin/sh\necho runtime\n")
+	runtimePath := filepath.Join(filepath.Dir(exePath), "claude-agent-acp")
+	require.NoError(t, os.WriteFile(runtimePath, runtimeBinary, 0o755))
+
+	server, reqs := startReleaseServerWithAssets(t, "v1.2.3", "v1.2.3", map[string][]byte{
+		"claude-agent-acp-darwin-arm64": runtimeBinary,
+	}, priv, false, nil)
+	defer server.Close()
+
+	u := newTestUpdater(server, pub, exePath)
+	gotPath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3")
+	require.NoError(t, err)
+
+	assert.Equal(t, runtimePath, gotPath)
+	assert.Zero(t, reqs.count("/download/v1.2.3/claude-agent-acp-darwin-arm64"))
+}
+
 func TestDownloadVerifiedBinaryRejectsOversizedBinary(t *testing.T) {
 	t.Parallel()
 
@@ -373,17 +419,40 @@ func newTestUpdater(server *httptest.Server, pub ed25519.PublicKey, exePath stri
 		exec: func(path string, args []string, env []string) error {
 			return nil
 		},
-		environ: func() []string { return nil },
-		goos:    "darwin",
-		goarch:  "arm64",
+		environ:         func() []string { return nil },
+		runtimePlatform: func() (string, error) { return "darwin-arm64", nil },
+		goos:            "darwin",
+		goarch:          "arm64",
 	}
 }
 
 func startReleaseServer(t *testing.T, latestTag, manifestTag, assetName string, binary []byte, signer ed25519.PrivateKey, corruptSignature bool, latestDelay func(http.ResponseWriter, *http.Request)) (*httptest.Server, *releaseRequests) {
 	t.Helper()
+	return startReleaseServerWithAssets(t, latestTag, manifestTag, map[string][]byte{assetName: binary}, signer, corruptSignature, latestDelay)
+}
 
-	hash := sha256.Sum256(binary)
-	manifest := []byte(fmt.Sprintf("%s%s\n%s  %s\n", releaseManifestHeaderBase, manifestTag, hex.EncodeToString(hash[:]), assetName))
+func startReleaseServerWithAssets(t *testing.T, latestTag, manifestTag string, assets map[string][]byte, signer ed25519.PrivateKey, corruptSignature bool, latestDelay func(http.ResponseWriter, *http.Request)) (*httptest.Server, *releaseRequests) {
+	t.Helper()
+
+	names := make([]string, 0, len(assets))
+	for name := range assets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var builder strings.Builder
+	builder.WriteString(releaseManifestHeaderBase)
+	builder.WriteString(manifestTag)
+	builder.WriteByte('\n')
+	for _, name := range names {
+		hash := sha256.Sum256(assets[name])
+		builder.WriteString(hex.EncodeToString(hash[:]))
+		builder.WriteString("  ")
+		builder.WriteString(name)
+		builder.WriteByte('\n')
+	}
+
+	manifest := []byte(builder.String())
 	signature := ed25519.Sign(signer, manifest)
 	if corruptSignature {
 		signature[0] ^= 0xff
@@ -405,9 +474,12 @@ func startReleaseServer(t *testing.T, latestTag, manifestTag, assetName string, 
 			_, _ = w.Write(manifest)
 		case "/download/" + latestTag + "/" + releaseManifestSigName:
 			_, _ = w.Write(signatureBody)
-		case "/download/" + latestTag + "/" + assetName:
-			_, _ = w.Write(binary)
 		default:
+			assetName := strings.TrimPrefix(r.URL.Path, "/download/"+latestTag+"/")
+			if body, ok := assets[assetName]; ok {
+				_, _ = w.Write(body)
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))

@@ -16,6 +16,7 @@ func TestRunWritesManifestAndSignature(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "muxagent-darwin-arm64"), []byte("darwin"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "muxagent-linux-amd64"), []byte("linux"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude-agent-acp-darwin-arm64"), []byte("runtime"), 0o644))
 
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -33,5 +34,8 @@ func TestRunWritesManifestAndSignature(t *testing.T) {
 	signature, err := base64.StdEncoding.DecodeString(string(signatureBody))
 	require.NoError(t, err)
 	assert.Contains(t, string(manifest), "# muxagent v1.2.3")
+	assert.Contains(t, string(manifest), "muxagent-darwin-arm64")
+	assert.Contains(t, string(manifest), "muxagent-linux-amd64")
+	assert.Contains(t, string(manifest), "claude-agent-acp-darwin-arm64")
 	assert.True(t, ed25519.Verify(privateKey.Public().(ed25519.PublicKey), manifest, signature))
 }

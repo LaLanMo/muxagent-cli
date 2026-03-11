@@ -3,6 +3,7 @@ package acpbin
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -14,7 +15,7 @@ func Cleanup() {
 		return
 	}
 
-	currentName := "claude-agent-acp-" + ACPVersion
+	currentName := managedBinaryName(runtime.GOOS, ACPVersion)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {

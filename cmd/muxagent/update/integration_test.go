@@ -280,6 +280,7 @@ func TestIntegrationSigningToolCLI(t *testing.T) {
 	binaryContent := []byte("#!/bin/sh\necho hello\n")
 	assetName := fmt.Sprintf("muxagent-%s-%s", runtime.GOOS, runtime.GOARCH)
 	require.NoError(t, os.WriteFile(filepath.Join(releaseDir, assetName), binaryContent, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(releaseDir, "claude-agent-acp-darwin-arm64"), []byte("#!/bin/sh\necho runtime\n"), 0o755))
 
 	// Run the signing tool
 	signCmd := exec.Command(toolPath, "-dir", releaseDir, "-version", "v1.0.0")
@@ -302,6 +303,7 @@ func TestIntegrationSigningToolCLI(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v1.0.0", parsed.Version)
 	assert.Contains(t, parsed.Entries, assetName)
+	assert.Contains(t, parsed.Entries, "claude-agent-acp-darwin-arm64")
 
 	// Read and verify signature
 	sigBytes, err := os.ReadFile(sigPath)

@@ -9,6 +9,14 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/privdir"
 )
 
+var currentExecutablePath = func() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
 // Platform returns the ACP release platform string for the current OS/arch.
 // Examples: "darwin-arm64", "linux-x64", "linux-x64-musl".
 func Platform() (string, error) {
@@ -75,20 +83,16 @@ func ManagedPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "claude-agent-acp-"+ACPVersion), nil
+	return filepath.Join(dir, managedBinaryName(runtime.GOOS, ACPVersion)), nil
 }
 
 // RelativePath returns the path to claude-agent-acp next to the current executable.
 func RelativePath() (string, error) {
-	exe, err := os.Executable()
+	exe, err := currentExecutablePath()
 	if err != nil {
 		return "", err
 	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(exe), "claude-agent-acp"), nil
+	return filepath.Join(filepath.Dir(exe), binaryName(runtime.GOOS)), nil
 }
 
 // DownloadURL returns the GitHub release download URL for the given platform.
@@ -101,4 +105,20 @@ func DownloadURL(platform string) string {
 		"https://github.com/zed-industries/claude-agent-acp/releases/download/v%s/claude-agent-acp-%s%s",
 		ACPVersion, platform, ext,
 	)
+}
+
+func binaryName(goos string) string {
+	name := "claude-agent-acp"
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+func managedBinaryName(goos, version string) string {
+	name := "claude-agent-acp-" + version
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return name
 }

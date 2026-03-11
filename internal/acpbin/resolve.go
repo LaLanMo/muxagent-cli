@@ -14,6 +14,17 @@ import (
 //
 // After a successful resolve, old versions are cleaned up.
 func Resolve(cfg config.Config, progressFn func(ProgressEvent)) (string, error) {
+	return resolve(cfg, progressFn, true)
+}
+
+// ResolveManaged determines the ACP binary path while skipping the side-by-side
+// lookup. This is useful after a CLI self-update when a stale bundled runtime
+// may still be present next to the executable.
+func ResolveManaged(cfg config.Config, progressFn func(ProgressEvent)) (string, error) {
+	return resolve(cfg, progressFn, false)
+}
+
+func resolve(cfg config.Config, progressFn func(ProgressEvent), includeRelative bool) (string, error) {
 	// Step 1: User explicitly overrode the command
 	if config.IsRuntimeCommandOverridden(config.RuntimeClaudeCode) {
 		settings := cfg.Runtimes[config.RuntimeClaudeCode]
@@ -21,9 +32,11 @@ func Resolve(cfg config.Config, progressFn func(ProgressEvent)) (string, error) 
 	}
 
 	// Step 2: Binary next to CLI executable (side-by-side distribution)
-	if rel, err := RelativePath(); err == nil {
-		if info, err := os.Stat(rel); err == nil && info.Mode().IsRegular() {
-			return rel, nil
+	if includeRelative {
+		if rel, err := RelativePath(); err == nil {
+			if info, err := os.Stat(rel); err == nil && info.Mode().IsRegular() {
+				return rel, nil
+			}
 		}
 	}
 
