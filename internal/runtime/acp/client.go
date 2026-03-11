@@ -123,7 +123,7 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 			"claudeCode": map[string]any{
 				"options": map[string]any{
 					"env": map[string]any{
-						"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+						"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "0",
 					},
 				},
 			},
