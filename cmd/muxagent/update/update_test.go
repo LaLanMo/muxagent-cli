@@ -1,6 +1,9 @@
 package update
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -132,7 +135,10 @@ func TestInstallSuccessReplacesBinary(t *testing.T) {
 	pub, priv := generateSigningKeypair(t)
 	exePath, oldContent := writeExecutable(t, "old-binary")
 	newContent := []byte("#!/bin/sh\necho new\n")
-	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64", newContent, priv, false, nil)
+	runtimeContent := []byte("#!/bin/sh\necho runtime\n")
+	bundleAssetName := "muxagent-darwin-arm64.tar.gz"
+	bundleBytes := createTarGzBundle(t, "muxagent", newContent, "claude-agent-acp", runtimeContent)
+	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.3", bundleAssetName, bundleBytes, priv, false, nil)
 	defer server.Close()
 
 	var execPath string
@@ -152,11 +158,15 @@ func TestInstallSuccessReplacesBinary(t *testing.T) {
 	got, err := os.ReadFile(exePath)
 	require.NoError(t, err)
 	assert.Equal(t, newContent, got)
+	runtimePath := filepath.Join(filepath.Dir(exePath), "claude-agent-acp")
+	gotRuntime, err := os.ReadFile(runtimePath)
+	require.NoError(t, err)
+	assert.Equal(t, runtimeContent, gotRuntime)
 	assert.FileExists(t, exePath+".bak")
 	assert.Equal(t, exePath, execPath)
 	assert.Equal(t, []string{exePath, "update", "--ensure-runtime"}, execArgs)
 	assert.Contains(t, strings.Join(execEnv, "\n"), updatedBackupEnvVar+"="+exePath+".bak")
-	assert.Equal(t, 1, reqs.count("/download/v1.2.3/muxagent-darwin-arm64"))
+	assert.Equal(t, 1, reqs.count("/download/v1.2.3/"+bundleAssetName))
 	assert.NotEqual(t, newContent, oldContent)
 }
 
@@ -166,7 +176,8 @@ func TestInstallRollsBackWhenExecFails(t *testing.T) {
 	pub, priv := generateSigningKeypair(t)
 	exePath, oldContent := writeExecutable(t, "old-binary")
 	newContent := []byte("#!/bin/sh\necho new\n")
-	server, _ := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64", newContent, priv, false, nil)
+	bundleBytes := createTarGzBundle(t, "muxagent", newContent, "claude-agent-acp", []byte("#!/bin/sh\necho runtime\n"))
+	server, _ := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, false, nil)
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
@@ -190,14 +201,15 @@ func TestInstallRejectsManifestVersionMismatchWithoutDownloadingBinary(t *testin
 
 	pub, priv := generateSigningKeypair(t)
 	exePath, _ := writeExecutable(t, "old-binary")
-	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.2", "muxagent-darwin-arm64", []byte("new-binary"), priv, false, nil)
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("new-binary"), "claude-agent-acp", []byte("runtime-binary"))
+	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.2", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, false, nil)
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
 	err := u.install(context.Background(), "v1.2.3")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match latest release")
-	assert.Zero(t, reqs.count("/download/v1.2.3/muxagent-darwin-arm64"))
+	assert.Zero(t, reqs.count("/download/v1.2.3/muxagent-darwin-arm64.tar.gz"))
 }
 
 func TestInstallRejectsInvalidSignatureBeforeBinaryDownload(t *testing.T) {
@@ -205,14 +217,15 @@ func TestInstallRejectsInvalidSignatureBeforeBinaryDownload(t *testing.T) {
 
 	pub, priv := generateSigningKeypair(t)
 	exePath, _ := writeExecutable(t, "old-binary")
-	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64", []byte("new-binary"), priv, true, nil)
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("new-binary"), "claude-agent-acp", []byte("runtime-binary"))
+	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, true, nil)
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
 	err := u.install(context.Background(), "v1.2.3")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "signature verification failed")
-	assert.Zero(t, reqs.count("/download/v1.2.3/muxagent-darwin-arm64"))
+	assert.Zero(t, reqs.count("/download/v1.2.3/muxagent-darwin-arm64.tar.gz"))
 }
 
 func TestInstallRejectsBinaryHashMismatch(t *testing.T) {
@@ -222,8 +235,10 @@ func TestInstallRejectsBinaryHashMismatch(t *testing.T) {
 	exePath, oldContent := writeExecutable(t, "old-binary")
 	expectedBinary := []byte("#!/bin/sh\necho expected\n")
 	actualBinary := []byte("#!/bin/sh\necho tampered\n")
-	hash := sha256.Sum256(expectedBinary)
-	manifest := []byte(fmt.Sprintf("%s%s\n%s  %s\n", releaseManifestHeaderBase, "v1.2.3", hex.EncodeToString(hash[:]), "muxagent-darwin-arm64"))
+	expectedBundle := createTarGzBundle(t, "muxagent", expectedBinary, "claude-agent-acp", []byte("#!/bin/sh\necho runtime\n"))
+	actualBundle := createTarGzBundle(t, "muxagent", actualBinary, "claude-agent-acp", []byte("#!/bin/sh\necho runtime\n"))
+	hash := sha256.Sum256(expectedBundle)
+	manifest := []byte(fmt.Sprintf("%s%s\n%s  %s\n", releaseManifestHeaderBase, "v1.2.3", hex.EncodeToString(hash[:]), "muxagent-darwin-arm64.tar.gz"))
 	signature := ed25519.Sign(priv, manifest)
 
 	reqs := &releaseRequests{counts: make(map[string]int)}
@@ -234,8 +249,8 @@ func TestInstallRejectsBinaryHashMismatch(t *testing.T) {
 			_, _ = w.Write(manifest)
 		case "/download/v1.2.3/" + releaseManifestSigName:
 			_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString(signature)))
-		case "/download/v1.2.3/muxagent-darwin-arm64":
-			_, _ = w.Write(actualBinary)
+		case "/download/v1.2.3/muxagent-darwin-arm64.tar.gz":
+			_, _ = w.Write(actualBundle)
 		default:
 			http.NotFound(w, r)
 		}
@@ -246,7 +261,7 @@ func TestInstallRejectsBinaryHashMismatch(t *testing.T) {
 	err := u.install(context.Background(), "v1.2.3")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "checksum mismatch")
-	assert.Equal(t, 1, reqs.count("/download/v1.2.3/muxagent-darwin-arm64"))
+	assert.Equal(t, 1, reqs.count("/download/v1.2.3/muxagent-darwin-arm64.tar.gz"))
 
 	got, readErr := os.ReadFile(exePath)
 	require.NoError(t, readErr)
@@ -259,13 +274,15 @@ func TestEnsureBundledRuntimeInstallsCompanionAsset(t *testing.T) {
 	pub, priv := generateSigningKeypair(t)
 	exePath, _ := writeExecutable(t, "old-binary")
 	runtimeBinary := []byte("#!/bin/sh\necho runtime\n")
+	bundleAssetName := "muxagent-darwin-arm64.tar.gz"
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("#!/bin/sh\necho cli\n"), "claude-agent-acp", runtimeBinary)
 	server, reqs := startReleaseServerWithAssets(t, "v1.2.3", "v1.2.3", map[string][]byte{
-		"claude-agent-acp-darwin-arm64": runtimeBinary,
+		bundleAssetName: bundleBytes,
 	}, priv, false, nil)
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
-	runtimePath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3")
+	runtimePath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3", true)
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(filepath.Dir(exePath), "claude-agent-acp"), runtimePath)
@@ -273,7 +290,7 @@ func TestEnsureBundledRuntimeInstallsCompanionAsset(t *testing.T) {
 	got, err := os.ReadFile(runtimePath)
 	require.NoError(t, err)
 	assert.Equal(t, runtimeBinary, got)
-	assert.Equal(t, 1, reqs.count("/download/v1.2.3/claude-agent-acp-darwin-arm64"))
+	assert.Equal(t, 1, reqs.count("/download/v1.2.3/"+bundleAssetName))
 }
 
 func TestEnsureBundledRuntimeSkipsDownloadWhenCompanionMatches(t *testing.T) {
@@ -285,24 +302,26 @@ func TestEnsureBundledRuntimeSkipsDownloadWhenCompanionMatches(t *testing.T) {
 	runtimePath := filepath.Join(filepath.Dir(exePath), "claude-agent-acp")
 	require.NoError(t, os.WriteFile(runtimePath, runtimeBinary, 0o755))
 
+	bundleAssetName := "muxagent-darwin-arm64.tar.gz"
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("#!/bin/sh\necho cli\n"), "claude-agent-acp", runtimeBinary)
 	server, reqs := startReleaseServerWithAssets(t, "v1.2.3", "v1.2.3", map[string][]byte{
-		"claude-agent-acp-darwin-arm64": runtimeBinary,
+		bundleAssetName: bundleBytes,
 	}, priv, false, nil)
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
-	gotPath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3")
+	gotPath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3", false)
 	require.NoError(t, err)
 
 	assert.Equal(t, runtimePath, gotPath)
-	assert.Zero(t, reqs.count("/download/v1.2.3/claude-agent-acp-darwin-arm64"))
+	assert.Zero(t, reqs.count("/download/v1.2.3/"+bundleAssetName))
 }
 
 func TestDownloadVerifiedBinaryRejectsOversizedBinary(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", releaseBinaryMaxBytes+1))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", releaseBundleMaxBytes+1))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -377,7 +396,8 @@ func TestRunWithUpdaterCheckOnlyDoesNotDowngrade(t *testing.T) {
 
 	pub, priv := generateSigningKeypair(t)
 	exePath, _ := writeExecutable(t, "old-binary")
-	server, _ := startReleaseServer(t, "v1.1.0", "v1.1.0", "muxagent-darwin-arm64", []byte("new-binary"), priv, false, nil)
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("new-binary"), "claude-agent-acp", []byte("runtime-binary"))
+	server, _ := startReleaseServer(t, "v1.1.0", "v1.1.0", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, false, nil)
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
@@ -424,6 +444,31 @@ func newTestUpdater(server *httptest.Server, pub ed25519.PublicKey, exePath stri
 		goos:            "darwin",
 		goarch:          "arm64",
 	}
+}
+
+func createTarGzBundle(t *testing.T, cliName string, cliBody []byte, runtimeName string, runtimeBody []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tarWriter := tar.NewWriter(gz)
+
+	write := func(name string, body []byte) {
+		header := &tar.Header{
+			Name: name,
+			Mode: 0o755,
+			Size: int64(len(body)),
+		}
+		require.NoError(t, tarWriter.WriteHeader(header))
+		_, err := tarWriter.Write(body)
+		require.NoError(t, err)
+	}
+
+	write(cliName, cliBody)
+	write(runtimeName, runtimeBody)
+	require.NoError(t, tarWriter.Close())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
 }
 
 func startReleaseServer(t *testing.T, latestTag, manifestTag, assetName string, binary []byte, signer ed25519.PrivateKey, corruptSignature bool, latestDelay func(http.ResponseWriter, *http.Request)) (*httptest.Server, *releaseRequests) {

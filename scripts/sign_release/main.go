@@ -23,13 +23,13 @@ const (
 	manifestPrefix = "# muxagent "
 )
 
-var assetNamePrefixes = []string{"muxagent-", "claude-agent-acp-"}
+var assetNamePrefixes = []string{"muxagent-"}
 
 func main() {
 	var dir string
 	var version string
 
-	flag.StringVar(&dir, "dir", ".", "release directory containing muxagent-* and claude-agent-acp-* assets")
+	flag.StringVar(&dir, "dir", ".", "release directory containing muxagent-* bundle assets")
 	flag.StringVar(&version, "version", "", "release version (for example v1.2.3)")
 	flag.Parse()
 

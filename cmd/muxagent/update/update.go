@@ -27,18 +27,18 @@ import (
 )
 
 const (
-	cliRepo                   = "LaLanMo/muxagent-cli"
-	releaseManifestName       = "SHA256SUMS"
-	releaseManifestSigName    = "SHA256SUMS.sig"
-	releaseLatestMaxBytes     = 1 << 20
-	releaseManifestMaxBytes   = 1 << 20
-	releaseSignatureMaxBytes  = 64 << 10
-	releaseBinaryMaxBytes     = 100 << 20
-	releaseRuntimeMaxBytes    = 500 << 20
-	updateHTTPTimeout         = 5 * time.Minute
-	maxRedirects              = 10
-	updatedBackupEnvVar       = "MUXAGENT_UPDATED_BACKUP"
-	releaseManifestHeaderBase = "# muxagent "
+	cliRepo                    = "LaLanMo/muxagent-cli"
+	releaseManifestName        = "SHA256SUMS"
+	releaseManifestSigName     = "SHA256SUMS.sig"
+	releaseLatestMaxBytes      = 1 << 20
+	releaseManifestMaxBytes    = 1 << 20
+	releaseSignatureMaxBytes   = 64 << 10
+	releaseBundleMaxBytes      = 500 << 20
+	updateHTTPTimeout          = 5 * time.Minute
+	maxRedirects               = 10
+	updatedBackupEnvVar        = "MUXAGENT_UPDATED_BACKUP"
+	updatedRuntimeBackupEnvVar = "MUXAGENT_UPDATED_RUNTIME_BACKUP"
+	releaseManifestHeaderBase  = "# muxagent "
 )
 
 var releaseSigningPublicKeyStrings = []string{
@@ -72,7 +72,7 @@ func NewCmd() *cobra.Command {
 		Short: "Update muxagent to the latest version",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if ensureRuntimeOnly {
-				return ensureRuntime()
+				return ensureRuntime(true)
 			}
 			return run(checkOnly)
 		},
@@ -126,7 +126,7 @@ func runWithUpdater(u *updater, checkOnly bool, currentVersion string) error {
 
 	if cmp <= 0 {
 		fmt.Printf("muxagent is up to date (v%s)\n", currentClean)
-		return ensureRuntime()
+		return ensureRuntime(false)
 	}
 
 	fmt.Printf("Updating muxagent... (v%s → v%s)\n", currentClean, latestClean)
@@ -136,7 +136,7 @@ func runWithUpdater(u *updater, checkOnly bool, currentVersion string) error {
 	return nil
 }
 
-func ensureRuntime() error {
+func ensureRuntime(forceBundleInstall bool) error {
 	cfg, err := config.LoadEffective()
 	if err != nil {
 		return err
@@ -163,10 +163,16 @@ func ensureRuntime() error {
 
 		currentTag, err := normalizeVersion(version.Version)
 		if err == nil {
-			if _, err := u.ensureBundledRuntime(context.Background(), currentTag); err == nil {
+			if _, err := u.ensureBundledRuntime(context.Background(), currentTag, forceBundleInstall); err == nil {
 				fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
 				return nil
 			}
+		}
+	}
+
+	if forceBundleInstall {
+		if runtimePath, err := acpbin.RelativePath(); err == nil {
+			_ = os.Remove(runtimePath)
 		}
 	}
 
@@ -185,17 +191,23 @@ func ensureRuntime() error {
 }
 
 func CleanupUpdatedBackup() {
-	backupPath := os.Getenv(updatedBackupEnvVar)
-	if backupPath == "" {
-		return
-	}
-
-	_ = os.Unsetenv(updatedBackupEnvVar)
 	exePath, err := currentExecutablePath()
 	if err != nil {
 		return
 	}
-	if backupPath != exePath+".bak" {
+
+	cleanupBackupFile(updatedBackupEnvVar, exePath+".bak")
+	cleanupBackupFile(updatedRuntimeBackupEnvVar, filepath.Join(filepath.Dir(exePath), runtimeBinaryName(runtime.GOOS)+".bak"))
+}
+
+func cleanupBackupFile(envVar, expectedPath string) {
+	backupPath := os.Getenv(envVar)
+	if backupPath == "" {
+		return
+	}
+
+	_ = os.Unsetenv(envVar)
+	if backupPath != expectedPath {
 		return
 	}
 	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -313,32 +325,81 @@ func (u *updater) install(ctx context.Context, latest string) error {
 		return err
 	}
 
-	assetName := u.assetName()
+	assetName, err := u.bundleAssetName()
+	if err != nil {
+		return err
+	}
 	expectedHash, ok := manifest.Entries[assetName]
 	if !ok {
 		return fmt.Errorf("release manifest missing asset %q", assetName)
 	}
 
-	tmpPath := exePath + ".tmp"
 	bakPath := exePath + ".bak"
-	_ = os.Remove(tmpPath)
-	defer os.Remove(tmpPath)
+	runtimePath := u.runtimeInstallPath(exePath)
+	runtimeBakPath := runtimePath + ".bak"
+	stageDir, err := os.MkdirTemp(filepath.Dir(exePath), "muxagent-update-*")
+	if err != nil {
+		return fmt.Errorf("create update staging dir: %w", err)
+	}
+	defer os.RemoveAll(stageDir)
 
-	if err := u.downloadVerifiedBinary(ctx, u.releaseAssetURL(latest, assetName), tmpPath, expectedHash); err != nil {
+	archivePath := filepath.Join(stageDir, assetName)
+	_ = os.Remove(archivePath)
+	defer os.Remove(archivePath)
+
+	if err := u.downloadVerifiedAsset(ctx, u.releaseAssetURL(latest, assetName), archivePath, expectedHash, releaseBundleMaxBytes, "release bundle"); err != nil {
 		return err
 	}
+
+	bundleFiles, err := extractBundleArchive(archivePath, stageDir, u.goos)
+	if err != nil {
+		return fmt.Errorf("extract release bundle: %w", err)
+	}
+
 	if err := copyFile(exePath, bakPath); err != nil {
 		_ = os.Remove(bakPath)
 		return fmt.Errorf("create rollback backup: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, exePath); err != nil {
+	if err := os.Rename(bundleFiles.CLIPath, exePath); err != nil {
 		_ = os.Remove(bakPath)
 		return fmt.Errorf("replace executable: %w", err)
 	}
 
+	hadRuntime := false
+	if _, err := os.Stat(runtimePath); err == nil {
+		hadRuntime = true
+		_ = os.Remove(runtimeBakPath)
+		if err := os.Rename(runtimePath, runtimeBakPath); err != nil {
+			if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
+				return fmt.Errorf("backup agent runtime: %v (rollback failed: %w)", err, restoreErr)
+			}
+			return fmt.Errorf("backup agent runtime: %w", err)
+		}
+	}
+
+	if err := os.Rename(bundleFiles.RuntimePath, runtimePath); err != nil {
+		if hadRuntime {
+			_ = restoreFile(runtimePath, runtimeBakPath)
+		}
+		if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
+			return fmt.Errorf("install bundled runtime: %v (rollback failed: %w)", err, restoreErr)
+		}
+		return fmt.Errorf("install bundled runtime: %w", err)
+	}
+
 	env := setEnv(u.environ(), updatedBackupEnvVar, bakPath)
+	if hadRuntime {
+		env = setEnv(env, updatedRuntimeBackupEnvVar, runtimeBakPath)
+	}
 	if err := u.exec(exePath, []string{exePath, "update", "--ensure-runtime"}, env); err != nil {
+		if hadRuntime {
+			if restoreErr := restoreFile(runtimePath, runtimeBakPath); restoreErr != nil {
+				return fmt.Errorf("re-exec failed: %v (runtime rollback failed: %w)", err, restoreErr)
+			}
+		} else {
+			_ = os.Remove(runtimePath)
+		}
 		if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
 			return fmt.Errorf("re-exec failed: %v (rollback failed: %w)", err, restoreErr)
 		}
@@ -467,15 +528,7 @@ func parseReleaseManifest(manifestBytes []byte) (*releaseManifest, error) {
 	}, nil
 }
 
-func (u *updater) assetName() string {
-	assetName := fmt.Sprintf("muxagent-%s-%s", u.goos, u.goarch)
-	if u.goos == "windows" {
-		assetName += ".exe"
-	}
-	return assetName
-}
-
-func (u *updater) runtimeAssetName() (string, error) {
+func (u *updater) bundleAssetName() (string, error) {
 	platformFn := u.runtimePlatform
 	if platformFn == nil {
 		platformFn = acpbin.Platform
@@ -486,10 +539,17 @@ func (u *updater) runtimeAssetName() (string, error) {
 		return "", err
 	}
 
-	assetName := "claude-agent-acp-" + platform
-	if strings.HasPrefix(platform, "windows-") {
-		assetName += ".exe"
+	suffix := ""
+	if strings.HasSuffix(platform, "-musl") {
+		suffix = "-musl"
 	}
+
+	assetName := fmt.Sprintf("muxagent-%s-%s%s", u.goos, u.goarch, suffix)
+	if u.goos == "windows" {
+		assetName += ".zip"
+		return assetName, nil
+	}
+	assetName += ".tar.gz"
 	return assetName, nil
 }
 
@@ -505,10 +565,16 @@ func (u *updater) releaseAssetURL(tag, assetName string) string {
 	return strings.TrimRight(u.releaseDownloadBaseURL, "/") + "/" + tag + "/" + assetName
 }
 
-func (u *updater) ensureBundledRuntime(ctx context.Context, tag string) (string, error) {
+func (u *updater) ensureBundledRuntime(ctx context.Context, tag string, forceInstall bool) (string, error) {
 	exePath, err := u.resolveExecutablePath()
 	if err != nil {
 		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+	destPath := u.runtimeInstallPath(exePath)
+	if !forceInstall {
+		if _, err := os.Stat(destPath); err == nil {
+			return destPath, nil
+		}
 	}
 
 	manifest, err := u.fetchAndVerifyManifest(ctx, tag)
@@ -516,7 +582,7 @@ func (u *updater) ensureBundledRuntime(ctx context.Context, tag string) (string,
 		return "", err
 	}
 
-	assetName, err := u.runtimeAssetName()
+	assetName, err := u.bundleAssetName()
 	if err != nil {
 		return "", err
 	}
@@ -526,22 +592,29 @@ func (u *updater) ensureBundledRuntime(ctx context.Context, tag string) (string,
 		return "", fmt.Errorf("release manifest missing asset %q", assetName)
 	}
 
-	destPath := u.runtimeInstallPath(exePath)
-	if hashValue, err := fileSHA256(destPath); err == nil && subtle.ConstantTimeCompare([]byte(hashValue), []byte(expectedHash)) == 1 {
-		return destPath, nil
+	stageDir, err := os.MkdirTemp(filepath.Dir(destPath), "muxagent-runtime-*")
+	if err != nil {
+		return "", fmt.Errorf("create runtime staging dir: %w", err)
 	}
+	defer os.RemoveAll(stageDir)
 
-	tmpPath := destPath + ".tmp"
-	_ = os.Remove(tmpPath)
-	defer os.Remove(tmpPath)
+	archivePath := filepath.Join(stageDir, assetName)
+	_ = os.Remove(archivePath)
+	defer os.Remove(archivePath)
 
-	if err := u.downloadVerifiedAsset(ctx, u.releaseAssetURL(tag, assetName), tmpPath, expectedHash, releaseRuntimeMaxBytes, "agent runtime"); err != nil {
+	if err := u.downloadVerifiedAsset(ctx, u.releaseAssetURL(tag, assetName), archivePath, expectedHash, releaseBundleMaxBytes, "release bundle"); err != nil {
 		return "", err
 	}
-	if err := os.Remove(destPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("replace agent runtime: %w", err)
+
+	bundleFiles, err := extractBundleArchive(archivePath, stageDir, u.goos)
+	if err != nil {
+		return "", fmt.Errorf("extract release bundle: %w", err)
 	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
+
+	if forceInstall {
+		_ = os.Remove(destPath)
+	}
+	if err := os.Rename(bundleFiles.RuntimePath, destPath); err != nil {
 		return "", fmt.Errorf("install agent runtime: %w", err)
 	}
 
@@ -549,7 +622,7 @@ func (u *updater) ensureBundledRuntime(ctx context.Context, tag string) (string,
 }
 
 func (u *updater) downloadVerifiedBinary(ctx context.Context, url, destPath, expectedHash string) error {
-	return u.downloadVerifiedAsset(ctx, url, destPath, expectedHash, releaseBinaryMaxBytes, "update")
+	return u.downloadVerifiedAsset(ctx, url, destPath, expectedHash, releaseBundleMaxBytes, "update")
 }
 
 func (u *updater) downloadVerifiedAsset(ctx context.Context, url, destPath, expectedHash string, maxBytes int64, label string) error {

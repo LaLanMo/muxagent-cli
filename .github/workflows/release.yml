@@ -25,6 +25,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
+      BUILD_DIR: ${{ github.workspace }}/build
       RELEASE_DIR: ${{ github.workspace }}/release
 
     steps:
@@ -113,7 +114,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RELEASE_DIR"
+          mkdir -p "$BUILD_DIR"
 
           build() {
             local goos="$1"
@@ -121,7 +122,7 @@ jobs:
             local output="$3"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
               go build -trimpath -ldflags="-s -w -X github.com/LaLanMo/muxagent-cli/internal/version.Version=${{ steps.meta.outputs.version }}" \
-              -o "$RELEASE_DIR/$output" ./cmd/muxagent
+              -o "$BUILD_DIR/$output" ./cmd/muxagent
           }
 
           build darwin amd64 muxagent-darwin-amd64
@@ -133,7 +134,11 @@ jobs:
 
       - name: Build claude-agent-acp binaries
         working-directory: muxagent-cli
-        run: bash ./scripts/build_claude_agent_acp.sh "$RELEASE_DIR"
+        run: bash ./scripts/build_claude_agent_acp.sh "$BUILD_DIR"
+
+      - name: Package release bundles
+        working-directory: muxagent-cli
+        run: bash ./scripts/package_release_bundles.sh "$BUILD_DIR" "$RELEASE_DIR"
 
       - name: Verify signing key is configured
         shell: bash
@@ -224,11 +229,12 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.meta.outputs.version }}"
+          assets=("$RELEASE_DIR"/*)
 
           if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$version" "$RELEASE_DIR"/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$version" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$version" "$RELEASE_DIR"/* \
+            gh release create "$version" "${assets[@]}" \
               --draft \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \

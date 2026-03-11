@@ -36,17 +36,6 @@ detect_goarch() {
   esac
 }
 
-detect_runtime_arch() {
-  case "$(uname -m)" in
-    x86_64|amd64) echo "x64" ;;
-    arm64|aarch64) echo "arm64" ;;
-    *)
-      echo "unsupported architecture: $(uname -m)" >&2
-      exit 1
-      ;;
-  esac
-}
-
 is_musl() {
   if [ "$(detect_goos)" != "linux" ]; then
     return 1
@@ -63,24 +52,6 @@ is_musl() {
   done
 
   return 1
-}
-
-runtime_platform() {
-  os="$(detect_goos)"
-  arch="$(detect_runtime_arch)"
-
-  case "$os" in
-    darwin)
-      echo "$os-$arch"
-      ;;
-    linux)
-      if is_musl; then
-        echo "$os-$arch-musl"
-      else
-        echo "$os-$arch"
-      fi
-      ;;
-  esac
 }
 
 normalize_version() {
@@ -133,6 +104,7 @@ need_cmd mkdir
 need_cmd grep
 need_cmd sed
 need_cmd tr
+need_cmd tar
 
 TAG="$(normalize_version "$VERSION")"
 if [ "$TAG" = "latest" ]; then
@@ -141,8 +113,11 @@ fi
 
 GOOS="$(detect_goos)"
 GOARCH="$(detect_goarch)"
-CLI_ASSET="muxagent-$GOOS-$GOARCH"
-RUNTIME_ASSET="claude-agent-acp-$(runtime_platform)"
+ASSET_SUFFIX=""
+if [ "$GOOS" = "linux" ] && is_musl; then
+  ASSET_SUFFIX="-musl"
+fi
+BUNDLE_ASSET="muxagent-$GOOS-$GOARCH$ASSET_SUFFIX.tar.gz"
 TARGET_DIR="$(choose_install_dir)"
 TMP_DIR="$(mktemp -d)"
 
@@ -155,21 +130,31 @@ mkdir -p "$TARGET_DIR"
 
 echo "Installing muxagent $TAG to $TARGET_DIR"
 
-CLI_TMP="$TMP_DIR/muxagent"
-if ! download_asset "$BASE_URL/$TAG/$CLI_ASSET" "$CLI_TMP"; then
-  echo "failed to download $CLI_ASSET from $BASE_URL/$TAG/" >&2
+BUNDLE_TMP="$TMP_DIR/muxagent.tar.gz"
+if ! download_asset "$BASE_URL/$TAG/$BUNDLE_ASSET" "$BUNDLE_TMP"; then
+  echo "failed to download $BUNDLE_ASSET from $BASE_URL/$TAG/" >&2
   exit 1
 fi
-chmod 755 "$CLI_TMP"
-mv "$CLI_TMP" "$TARGET_DIR/muxagent"
 
-RUNTIME_TMP="$TMP_DIR/claude-agent-acp"
-if download_asset "$BASE_URL/$TAG/$RUNTIME_ASSET" "$RUNTIME_TMP"; then
-  chmod 755 "$RUNTIME_TMP"
-  mv "$RUNTIME_TMP" "$TARGET_DIR/claude-agent-acp"
-else
-  echo "warning: bundled Claude runtime not found for $RUNTIME_ASSET; muxagent will prepare it when needed" >&2
+EXTRACT_DIR="$TMP_DIR/extract"
+mkdir -p "$EXTRACT_DIR"
+if ! tar -xzf "$BUNDLE_TMP" -C "$EXTRACT_DIR"; then
+  echo "failed to extract $BUNDLE_ASSET" >&2
+  exit 1
 fi
+
+if [ ! -f "$EXTRACT_DIR/muxagent" ]; then
+  echo "bundle missing muxagent executable" >&2
+  exit 1
+fi
+if [ ! -f "$EXTRACT_DIR/claude-agent-acp" ]; then
+  echo "bundle missing claude-agent-acp executable" >&2
+  exit 1
+fi
+
+chmod 755 "$EXTRACT_DIR/muxagent" "$EXTRACT_DIR/claude-agent-acp"
+mv "$EXTRACT_DIR/muxagent" "$TARGET_DIR/muxagent"
+mv "$EXTRACT_DIR/claude-agent-acp" "$TARGET_DIR/claude-agent-acp"
 
 case ":$PATH:" in
   *":$TARGET_DIR:"*) ;;

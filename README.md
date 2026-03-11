@@ -15,8 +15,9 @@ it falls back to `~/.local/bin`.
 
 ### Windows
 
-Download the latest `muxagent` binary from
-[GitHub Releases](https://github.com/LaLanMo/muxagent-cli/releases).
+Download the latest `muxagent-windows-*.zip` bundle from
+[GitHub Releases](https://github.com/LaLanMo/muxagent-cli/releases), unzip it,
+and run `muxagent.exe`.
 
 Official installs include everything needed to run MuxAgent with Claude Code.
 

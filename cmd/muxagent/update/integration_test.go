@@ -49,13 +49,16 @@ func TestIntegrationE2EUpdateFlow(t *testing.T) {
 
 	// "New" release binary — a shell script that prints v0.0.2
 	newBinary := []byte("#!/bin/sh\necho v0.0.2\n")
-	newHash := sha256.Sum256(newBinary)
+	runtimeBinary := []byte("#!/bin/sh\necho runtime\n")
+	bundleAssetName := fmt.Sprintf("muxagent-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	bundleBytes := createTarGzBundle(t, "muxagent", newBinary, "claude-agent-acp", runtimeBinary)
+	newHash := sha256.Sum256(bundleBytes)
 
 	// Build manifest and sign it
-	manifest := []byte(fmt.Sprintf("%sv0.0.2\n%s  muxagent-%s-%s\n",
+	manifest := []byte(fmt.Sprintf("%sv0.0.2\n%s  %s\n",
 		releaseManifestHeaderBase,
 		hex.EncodeToString(newHash[:]),
-		runtime.GOOS, runtime.GOARCH,
+		bundleAssetName,
 	))
 	signature := ed25519.Sign(priv, manifest)
 	sigBase64 := []byte(base64.StdEncoding.EncodeToString(signature))
@@ -72,8 +75,8 @@ func TestIntegrationE2EUpdateFlow(t *testing.T) {
 			_, _ = w.Write(manifest)
 		case "/download/v0.0.2/" + releaseManifestSigName:
 			_, _ = w.Write(sigBase64)
-		case fmt.Sprintf("/download/v0.0.2/muxagent-%s-%s", runtime.GOOS, runtime.GOARCH):
-			_, _ = w.Write(newBinary)
+		case "/download/v0.0.2/" + bundleAssetName:
+			_, _ = w.Write(bundleBytes)
 		default:
 			http.NotFound(w, r)
 		}
@@ -97,9 +100,10 @@ func TestIntegrationE2EUpdateFlow(t *testing.T) {
 			execPath = path
 			return nil
 		},
-		environ: func() []string { return os.Environ() },
-		goos:    runtime.GOOS,
-		goarch:  runtime.GOARCH,
+		environ:         func() []string { return os.Environ() },
+		runtimePlatform: testRuntimePlatform(runtime.GOOS, runtime.GOARCH),
+		goos:            runtime.GOOS,
+		goarch:          runtime.GOARCH,
 	}
 
 	err = u.install(context.Background(), "v0.0.2")
@@ -127,22 +131,22 @@ func TestIntegrationE2EUpdateFlow(t *testing.T) {
 	// All expected URLs should have been hit
 	assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+releaseManifestName))
 	assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+releaseManifestSigName))
-	assert.Equal(t, 1, reqs.count(fmt.Sprintf("/download/v0.0.2/muxagent-%s-%s", runtime.GOOS, runtime.GOARCH)))
+	assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+bundleAssetName))
 
 	// --- Test 2: Tampered binary is rejected ---
 	// Reset: put old binary back
 	require.NoError(t, os.WriteFile(exePath, oldBinary, 0o755))
 	_ = os.Remove(exePath + ".bak")
 
-	tamperedBinary := []byte("#!/bin/sh\necho EVIL\n")
+	tamperedBundle := createTarGzBundle(t, "muxagent", []byte("#!/bin/sh\necho EVIL\n"), "claude-agent-acp", runtimeBinary)
 	tamperedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/download/v0.0.2/" + releaseManifestName:
 			_, _ = w.Write(manifest) // same signed manifest (expects newBinary hash)
 		case "/download/v0.0.2/" + releaseManifestSigName:
 			_, _ = w.Write(sigBase64)
-		case fmt.Sprintf("/download/v0.0.2/muxagent-%s-%s", runtime.GOOS, runtime.GOARCH):
-			_, _ = w.Write(tamperedBinary) // DIFFERENT binary!
+		case "/download/v0.0.2/" + bundleAssetName:
+			_, _ = w.Write(tamperedBundle) // DIFFERENT bundle!
 		default:
 			http.NotFound(w, r)
 		}
@@ -159,9 +163,10 @@ func TestIntegrationE2EUpdateFlow(t *testing.T) {
 			t.Fatal("exec should not be called for tampered binary")
 			return nil
 		},
-		environ: func() []string { return nil },
-		goos:    runtime.GOOS,
-		goarch:  runtime.GOARCH,
+		environ:         func() []string { return nil },
+		runtimePlatform: testRuntimePlatform(runtime.GOOS, runtime.GOARCH),
+		goos:            runtime.GOOS,
+		goarch:          runtime.GOARCH,
 	}
 	u2.client.Timeout = 5 * time.Second
 
@@ -213,13 +218,13 @@ func TestIntegrationE2EUpdateFlow(t *testing.T) {
 	assert.Contains(t, err.Error(), "signature verification failed")
 
 	// Binary download should never have been attempted
-	assert.Zero(t, wrongKeyReqs.count(fmt.Sprintf("/download/v0.0.2/muxagent-%s-%s", runtime.GOOS, runtime.GOARCH)))
+	assert.Zero(t, wrongKeyReqs.count("/download/v0.0.2/"+bundleAssetName))
 
 	// --- Test 4: Signing tool round-trip ---
 	// Build a release dir, sign it, verify the outputs match what the updater expects
 	releaseDir := t.TempDir()
-	assetName := fmt.Sprintf("muxagent-%s-%s", runtime.GOOS, runtime.GOARCH)
-	require.NoError(t, os.WriteFile(filepath.Join(releaseDir, assetName), newBinary, 0o755))
+	assetName := fmt.Sprintf("muxagent-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	require.NoError(t, os.WriteFile(filepath.Join(releaseDir, assetName), bundleBytes, 0o755))
 
 	// Simulate what the signing tool does
 	assetHash, err := fileSHA256ForTest(filepath.Join(releaseDir, assetName))
@@ -277,10 +282,9 @@ func TestIntegrationSigningToolCLI(t *testing.T) {
 
 	// Create a release directory with a fake binary
 	releaseDir := t.TempDir()
-	binaryContent := []byte("#!/bin/sh\necho hello\n")
-	assetName := fmt.Sprintf("muxagent-%s-%s", runtime.GOOS, runtime.GOARCH)
-	require.NoError(t, os.WriteFile(filepath.Join(releaseDir, assetName), binaryContent, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(releaseDir, "claude-agent-acp-darwin-arm64"), []byte("#!/bin/sh\necho runtime\n"), 0o755))
+	bundleContent := createTarGzBundle(t, "muxagent", []byte("#!/bin/sh\necho hello\n"), "claude-agent-acp", []byte("#!/bin/sh\necho runtime\n"))
+	assetName := fmt.Sprintf("muxagent-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	require.NoError(t, os.WriteFile(filepath.Join(releaseDir, assetName), bundleContent, 0o755))
 
 	// Run the signing tool
 	signCmd := exec.Command(toolPath, "-dir", releaseDir, "-version", "v1.0.0")
@@ -303,7 +307,6 @@ func TestIntegrationSigningToolCLI(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v1.0.0", parsed.Version)
 	assert.Contains(t, parsed.Entries, assetName)
-	assert.Contains(t, parsed.Entries, "claude-agent-acp-darwin-arm64")
 
 	// Read and verify signature
 	sigBytes, err := os.ReadFile(sigPath)
@@ -333,5 +336,27 @@ func findRepoRoot(t *testing.T) string {
 			t.Fatal("could not find repo root")
 		}
 		dir = parent
+	}
+}
+
+func testRuntimePlatform(goos, goarch string) func() (string, error) {
+	return func() (string, error) {
+		switch goos {
+		case "darwin":
+			if goarch == "amd64" {
+				return "darwin-x64", nil
+			}
+			return "darwin-arm64", nil
+		case "linux":
+			if goarch == "amd64" {
+				return "linux-x64", nil
+			}
+			return "linux-arm64", nil
+		default:
+			if goarch == "amd64" {
+				return "windows-x64", nil
+			}
+			return "windows-arm64", nil
+		}
 	}
 }
