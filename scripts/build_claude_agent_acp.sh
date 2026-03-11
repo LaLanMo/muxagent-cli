@@ -118,9 +118,12 @@ extract_binary() {
 
   if [[ "$platform" == windows-* ]]; then
     binary_name="${binary_name}.exe"
-    unzip -q "$archive" -d "$stage"
-  else
+  fi
+
+  if [[ "$platform" == linux-* ]]; then
     tar -xzf "$archive" -C "$stage"
+  else
+    unzip -q "$archive" -d "$stage"
   fi
 
   local extracted
