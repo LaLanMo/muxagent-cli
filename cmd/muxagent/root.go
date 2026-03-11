@@ -9,14 +9,17 @@ import (
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/daemon"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/health"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/update"
+	cliversion "github.com/LaLanMo/muxagent-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "muxagent",
-		Short: "MuxAgent CLI",
+		Use:     "muxagent",
+		Short:   "MuxAgent CLI",
+		Version: cliversion.CLIString(),
 	}
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
 
 	rootCmd.AddCommand(
 		acptest.NewCmd(),
@@ -25,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 		daemon.NewCmd(),
 		health.NewCmd(),
 		update.NewCmd(),
+		newVersionCmd(),
 	)
 
 	return rootCmd

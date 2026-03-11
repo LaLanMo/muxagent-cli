@@ -46,4 +46,5 @@ starting the daemon.
 - `muxagent daemon status` - Show daemon status.
 - `muxagent daemon stop` - Stop the daemon.
 - `muxagent auth status` - Show pairing status.
+- `muxagent version` - Show the installed CLI version.
 - `muxagent update` - Update `muxagent`.
