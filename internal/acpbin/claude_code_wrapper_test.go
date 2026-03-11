@@ -19,7 +19,7 @@ func TestInjectClaudeCodeExecutable(t *testing.T) {
 		verify func(t *testing.T, got config.RuntimeSettings, err error)
 	}{
 		{
-			name: "injects wrapper for claude agent acp",
+			name: "injects wrapper for resolved runtime command",
 			input: config.RuntimeSettings{
 				Command: "/tmp/claude-agent-acp",
 				Env:     map[string]string{"CLAUDECODE": ""},
@@ -56,6 +56,36 @@ func TestInjectClaudeCodeExecutable(t *testing.T) {
 			},
 		},
 		{
+			name: "injects wrapper for versioned managed runtime command",
+			input: config.RuntimeSettings{
+				Command: "/tmp/claude-agent-acp-0.21.0",
+				Env:     map[string]string{"CLAUDECODE": ""},
+			},
+			verify: func(t *testing.T, got config.RuntimeSettings, err error) {
+				if err != nil {
+					t.Fatalf("InjectClaudeCodeExecutable() error = %v", err)
+				}
+				wrapperPath := got.Env[claudeCodeExecutableEnv]
+				if wrapperPath == "" {
+					t.Fatalf("expected %s to be set", claudeCodeExecutableEnv)
+				}
+				data, readErr := os.ReadFile(wrapperPath)
+				if readErr != nil {
+					t.Fatalf("read wrapper: %v", readErr)
+				}
+				content := string(data)
+				if !strings.Contains(content, "--cli") {
+					t.Fatalf("wrapper missing --cli: %q", content)
+				}
+				if !strings.Contains(content, "claude-agent-acp-0.21.0") {
+					t.Fatalf("wrapper missing target command: %q", content)
+				}
+				if got.Env["CLAUDECODE"] != "" {
+					t.Fatalf("expected CLAUDECODE env to be preserved")
+				}
+			},
+		},
+		{
 			name: "respects existing executable override",
 			input: config.RuntimeSettings{
 				Command: "/tmp/claude-agent-acp",
@@ -73,10 +103,30 @@ func TestInjectClaudeCodeExecutable(t *testing.T) {
 			},
 		},
 		{
-			name: "skips unrelated commands",
+			name: "injects wrapper for arbitrary resolved runtime command",
 			input: config.RuntimeSettings{
-				Command: "/usr/local/bin/opencode",
+				Command: "/tmp/custom-claude-runtime",
 			},
+			verify: func(t *testing.T, got config.RuntimeSettings, err error) {
+				if err != nil {
+					t.Fatalf("InjectClaudeCodeExecutable() error = %v", err)
+				}
+				wrapperPath := got.Env[claudeCodeExecutableEnv]
+				if wrapperPath == "" {
+					t.Fatalf("expected %s to be set", claudeCodeExecutableEnv)
+				}
+				data, readErr := os.ReadFile(wrapperPath)
+				if readErr != nil {
+					t.Fatalf("read wrapper: %v", readErr)
+				}
+				if !strings.Contains(string(data), "custom-claude-runtime") {
+					t.Fatalf("wrapper missing target command: %q", string(data))
+				}
+			},
+		},
+		{
+			name:  "skips empty command",
+			input: config.RuntimeSettings{},
 			verify: func(t *testing.T, got config.RuntimeSettings, err error) {
 				if err != nil {
 					t.Fatalf("InjectClaudeCodeExecutable() error = %v", err)

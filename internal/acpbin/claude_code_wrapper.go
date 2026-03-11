@@ -15,6 +15,8 @@ const claudeCodeExecutableEnv = "CLAUDE_CODE_EXECUTABLE"
 
 // InjectClaudeCodeExecutable ensures Claude ACP runtimes spawn their internal
 // Claude CLI through a wrapper that adds the required --cli flag.
+// Callers are expected to invoke this only for the Claude Code runtime after
+// they have resolved the runtime command.
 func InjectClaudeCodeExecutable(settings config.RuntimeSettings) (config.RuntimeSettings, error) {
 	if !needsClaudeCodeExecutableWrapper(settings) {
 		return settings, nil
@@ -34,16 +36,7 @@ func needsClaudeCodeExecutableWrapper(settings config.RuntimeSettings) bool {
 	if strings.TrimSpace(settings.Command) == "" {
 		return false
 	}
-	if value := strings.TrimSpace(settings.Env[claudeCodeExecutableEnv]); value != "" {
-		return false
-	}
-
-	switch strings.ToLower(filepath.Base(settings.Command)) {
-	case "claude-agent-acp", "claude-agent-acp.exe", "claude-agent-acp.cmd", "claude-agent-acp.bat":
-		return true
-	default:
-		return false
-	}
+	return strings.TrimSpace(settings.Env[claudeCodeExecutableEnv]) == ""
 }
 
 func ensureClaudeCodeExecutableWrapper(command string) (string, error) {
