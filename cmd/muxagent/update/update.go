@@ -57,6 +57,7 @@ type releaseManifest struct {
 type updater struct {
 	client                 *http.Client
 	latestReleaseURL       string
+	releasesURL            string
 	releaseDownloadBaseURL string
 	releaseSigningKeys     []ed25519.PublicKey
 	resolveExecutablePath  func() (string, error)
@@ -65,11 +66,13 @@ type updater struct {
 	runtimePlatform        func() (string, error)
 	goos                   string
 	goarch                 string
+	prerelease             bool
 }
 
 func NewCmd() *cobra.Command {
 	var checkOnly bool
 	var ensureRuntimeOnly bool
+	var prerelease bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -78,21 +81,23 @@ func NewCmd() *cobra.Command {
 			if ensureRuntimeOnly {
 				return ensureRuntime(true)
 			}
-			return run(checkOnly)
+			return run(checkOnly, prerelease)
 		},
 	}
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "Only check for updates, don't install")
+	cmd.Flags().BoolVar(&prerelease, "prerelease", false, "Use the latest pre-release instead of the latest stable release")
 	cmd.Flags().BoolVar(&ensureRuntimeOnly, "ensure-runtime", false, "Only ensure the agent runtime binary is downloaded")
 	cmd.Flags().MarkHidden("ensure-runtime")
 
 	return cmd
 }
 
-func run(checkOnly bool) error {
+func run(checkOnly bool, prerelease bool) error {
 	u, err := newDefaultUpdater()
 	if err != nil {
 		return err
 	}
+	u.prerelease = prerelease
 	return runWithUpdater(u, checkOnly, version.Version)
 }
 
@@ -123,7 +128,11 @@ func runWithUpdater(u *updater, checkOnly bool, currentVersion string) error {
 		if cmp <= 0 {
 			fmt.Printf("muxagent is up to date (v%s)\n", currentClean)
 		} else {
-			fmt.Printf("Update available: v%s → v%s\nRun \"muxagent update\" to install.\n", currentClean, latestClean)
+			updateCmd := "muxagent update"
+			if u.prerelease {
+				updateCmd += " --prerelease"
+			}
+			fmt.Printf("Update available: v%s → v%s\nRun %q to install.\n", currentClean, latestClean, updateCmd)
 		}
 		return nil
 	}
@@ -288,6 +297,7 @@ func newDefaultUpdater() (*updater, error) {
 	return &updater{
 		client:                 newUpdateHTTPClient(),
 		latestReleaseURL:       "",
+		releasesURL:            fmt.Sprintf("https://api.github.com/repos/%s/releases", cliRepo),
 		releaseDownloadBaseURL: fmt.Sprintf("https://github.com/%s/releases/download", cliRepo),
 		releaseSigningKeys:     signingKeys,
 		resolveExecutablePath:  currentExecutablePath,
@@ -358,6 +368,10 @@ func displayVersion(v string) string {
 }
 
 func (u *updater) latestRelease(ctx context.Context) (string, error) {
+	if u.prerelease {
+		return u.latestPrerelease(ctx)
+	}
+
 	if u.latestReleaseURL != "" {
 		body, err := u.fetchBytes(ctx, u.latestReleaseURL, releaseLatestMaxBytes, "latest release metadata")
 		if err != nil {
@@ -384,6 +398,44 @@ func (u *updater) latestRelease(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return manifest.Version, nil
+}
+
+func (u *updater) latestPrerelease(ctx context.Context) (string, error) {
+	if strings.TrimSpace(u.releasesURL) == "" {
+		return "", fmt.Errorf("prerelease updates are not configured")
+	}
+
+	body, err := u.fetchBytes(ctx, u.releasesURL, releaseLatestMaxBytes, "release list metadata")
+	if err != nil {
+		return "", err
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+	}
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return "", fmt.Errorf("decode release list metadata: %w", err)
+	}
+
+	latest := ""
+	for _, release := range releases {
+		if release.Draft || !release.Prerelease {
+			continue
+		}
+		tag, err := normalizeVersion(release.TagName)
+		if err != nil {
+			continue
+		}
+		if latest == "" || semver.Compare(tag, latest) > 0 {
+			latest = tag
+		}
+	}
+	if latest == "" {
+		return "", fmt.Errorf("no prerelease release found")
+	}
+	return latest, nil
 }
 
 func (u *updater) install(ctx context.Context, latest string) error {
@@ -554,6 +606,7 @@ func (u *updater) fetchBytes(ctx context.Context, url string, maxBytes int64, la
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "muxagent-cli/"+displayVersion(version.Version))
 	resp, err := u.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", label, err)

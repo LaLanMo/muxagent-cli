@@ -147,6 +147,71 @@ func TestLatestReleaseUsesSignedLatestManifest(t *testing.T) {
 	assert.Equal(t, "v1.2.3", latest)
 }
 
+func TestLatestReleaseUsesLatestPrereleaseFromReleaseList(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"tag_name":"v1.2.3","draft":false,"prerelease":false},
+				{"tag_name":"v1.3.0-rc1","draft":false,"prerelease":true},
+				{"tag_name":"v1.3.0-rc2","draft":false,"prerelease":true},
+				{"tag_name":"v1.4.0-rc1","draft":true,"prerelease":true},
+				{"tag_name":"not-a-version","draft":false,"prerelease":true}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	client.Timeout = time.Second
+	client.CheckRedirect = httpsOnlyRedirectPolicy
+
+	u := &updater{
+		client:      client,
+		releasesURL: srv.URL + "/releases",
+		prerelease:  true,
+	}
+	latest, err := u.latestRelease(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "v1.3.0-rc2", latest)
+}
+
+func TestLatestReleasePrereleaseErrorsWhenNoPrereleaseFound(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"tag_name":"v1.2.3","draft":false,"prerelease":false},
+				{"tag_name":"v1.3.0-rc1","draft":true,"prerelease":true}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	client.Timeout = time.Second
+	client.CheckRedirect = httpsOnlyRedirectPolicy
+
+	u := &updater{
+		client:      client,
+		releasesURL: srv.URL + "/releases",
+		prerelease:  true,
+	}
+	_, err := u.latestRelease(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no prerelease release found")
+}
+
 func TestInstallSuccessReplacesBinary(t *testing.T) {
 	t.Parallel()
 
@@ -502,6 +567,7 @@ func newTestUpdater(server *httptest.Server, pub ed25519.PublicKey, exePath stri
 	return &updater{
 		client:                 client,
 		latestReleaseURL:       server.URL + "/latest",
+		releasesURL:            server.URL + "/releases",
 		releaseDownloadBaseURL: server.URL + "/download",
 		releaseSigningKeys:     []ed25519.PublicKey{pub},
 		resolveExecutablePath: func() (string, error) {
@@ -587,6 +653,12 @@ func startReleaseServerWithAssets(t *testing.T, latestTag, manifestTag string, a
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(fmt.Sprintf(`{"tag_name":%q}`, latestTag)))
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`[
+				{"tag_name":%q,"draft":false,"prerelease":false},
+				{"tag_name":%q,"draft":false,"prerelease":true}
+			]`, latestTag, latestTag+"-rc1")))
 		case "/latest/download/" + releaseManifestName:
 			_, _ = w.Write(manifest)
 		case "/latest/download/" + releaseManifestSigName:
