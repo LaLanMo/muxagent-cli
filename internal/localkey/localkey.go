@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
@@ -18,6 +20,7 @@ const (
 	keychainService = "muxagent"
 	keychainAccount = "master-key"
 	masterKeySize   = 32
+	fileBackendEnv  = "MUXAGENT_LOCALKEY_FILE"
 )
 
 type keychainBackend interface {
@@ -31,7 +34,7 @@ var (
 	masterKeyOnce  sync.Once
 	cachedKey      *[32]byte
 	cachedErr      error
-	currentBackend keychainBackend = osKeychainBackend{}
+	currentBackend keychainBackend = defaultBackend()
 )
 
 // DeriveKey derives a 32-byte key for the given info string from the OS keychain-backed
@@ -121,4 +124,11 @@ func decodeMasterKey(encoded string) (*[32]byte, error) {
 	var key [masterKeySize]byte
 	copy(key[:], b)
 	return &key, nil
+}
+
+func defaultBackend() keychainBackend {
+	if path := strings.TrimSpace(os.Getenv(fileBackendEnv)); path != "" {
+		return &fileBackend{path: path}
+	}
+	return osKeychainBackend{}
 }

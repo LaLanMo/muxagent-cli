@@ -9,25 +9,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/LaLanMo/muxagent-cli/internal/config"
 )
 
 type bundleFiles struct {
-	CLIPath     string
-	RuntimePath string
+	CLIPath      string
+	RuntimePaths map[config.RuntimeID]string
 }
 
 func extractBundleArchive(archivePath, stageDir, goos string) (bundleFiles, error) {
-	files := bundleFiles{}
+	files := bundleFiles{RuntimePaths: make(map[config.RuntimeID]string)}
 	cliName := cliBinaryName(goos)
-	runtimeName := runtimeBinaryName(goos)
+	runtimeNames := bundledRuntimeBinaryNames(goos)
 
 	switch {
 	case strings.HasSuffix(archivePath, ".tar.gz"):
-		if err := extractTarGzBundle(archivePath, stageDir, cliName, runtimeName, &files); err != nil {
+		if err := extractTarGzBundle(archivePath, stageDir, cliName, runtimeNames, &files); err != nil {
 			return bundleFiles{}, err
 		}
 	case strings.HasSuffix(archivePath, ".zip"):
-		if err := extractZipBundle(archivePath, stageDir, cliName, runtimeName, &files); err != nil {
+		if err := extractZipBundle(archivePath, stageDir, cliName, runtimeNames, &files); err != nil {
 			return bundleFiles{}, err
 		}
 	default:
@@ -37,13 +39,15 @@ func extractBundleArchive(archivePath, stageDir, goos string) (bundleFiles, erro
 	if files.CLIPath == "" {
 		return bundleFiles{}, fmt.Errorf("bundle missing %s", cliName)
 	}
-	if files.RuntimePath == "" {
-		return bundleFiles{}, fmt.Errorf("bundle missing %s", runtimeName)
+	for runtimeID, runtimeName := range runtimeNames {
+		if files.RuntimePaths[runtimeID] == "" {
+			return bundleFiles{}, fmt.Errorf("bundle missing %s", runtimeName)
+		}
 	}
 	return files, nil
 }
 
-func extractTarGzBundle(archivePath, stageDir, cliName, runtimeName string, files *bundleFiles) error {
+func extractTarGzBundle(archivePath, stageDir, cliName string, runtimeNames map[config.RuntimeID]string, files *bundleFiles) error {
 	src, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -77,17 +81,23 @@ func extractTarGzBundle(archivePath, stageDir, cliName, runtimeName string, file
 				return err
 			}
 			files.CLIPath = path
-		case runtimeName:
-			path, err := extractBundleFile(reader, stageDir, runtimeName, 0o755)
-			if err != nil {
-				return err
+		default:
+			for runtimeID, runtimeName := range runtimeNames {
+				if name != runtimeName {
+					continue
+				}
+				path, err := extractBundleFile(reader, stageDir, runtimeName, 0o755)
+				if err != nil {
+					return err
+				}
+				files.RuntimePaths[runtimeID] = path
+				break
 			}
-			files.RuntimePath = path
 		}
 	}
 }
 
-func extractZipBundle(archivePath, stageDir, cliName, runtimeName string, files *bundleFiles) error {
+func extractZipBundle(archivePath, stageDir, cliName string, runtimeNames map[config.RuntimeID]string, files *bundleFiles) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return err
@@ -112,17 +122,23 @@ func extractZipBundle(archivePath, stageDir, cliName, runtimeName string, files 
 				return extractErr
 			}
 			files.CLIPath = path
-		case runtimeName:
-			rc, err := file.Open()
-			if err != nil {
-				return err
+		default:
+			for runtimeID, runtimeName := range runtimeNames {
+				if name != runtimeName {
+					continue
+				}
+				rc, err := file.Open()
+				if err != nil {
+					return err
+				}
+				path, extractErr := extractBundleFile(rc, stageDir, runtimeName, file.Mode())
+				_ = rc.Close()
+				if extractErr != nil {
+					return extractErr
+				}
+				files.RuntimePaths[runtimeID] = path
+				break
 			}
-			path, extractErr := extractBundleFile(rc, stageDir, runtimeName, file.Mode())
-			_ = rc.Close()
-			if extractErr != nil {
-				return extractErr
-			}
-			files.RuntimePath = path
 		}
 	}
 	return nil
@@ -154,12 +170,27 @@ func cliBinaryName(goos string) string {
 	return name
 }
 
-func runtimeBinaryName(goos string) string {
-	name := "claude-agent-acp"
+func runtimeBinaryName(id config.RuntimeID, goos string) string {
+	name := ""
+	switch id {
+	case config.RuntimeClaudeCode:
+		name = "claude-agent-acp"
+	case config.RuntimeCodex:
+		name = "codex-acp"
+	default:
+		return ""
+	}
 	if goos == "windows" {
 		name += ".exe"
 	}
 	return name
+}
+
+func bundledRuntimeBinaryNames(goos string) map[config.RuntimeID]string {
+	return map[config.RuntimeID]string{
+		config.RuntimeClaudeCode: runtimeBinaryName(config.RuntimeClaudeCode, goos),
+		config.RuntimeCodex:      runtimeBinaryName(config.RuntimeCodex, goos),
+	}
 }
 
 func restoreFile(destPath, backupPath string) error {

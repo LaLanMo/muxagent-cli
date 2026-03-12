@@ -47,45 +47,51 @@ stage_dir() {
 package_tar_bundle() {
   local bundle_name="$1"
   local cli_src="$2"
-  local runtime_src="$3"
+  local claude_src="$3"
+  local codex_src="$4"
   local stage
 
   need_file "$BUILD_DIR/$cli_src"
-  need_file "$BUILD_DIR/$runtime_src"
+  need_file "$BUILD_DIR/$claude_src"
+  need_file "$BUILD_DIR/$codex_src"
 
   stage="$(stage_dir)"
   cp "$BUILD_DIR/$cli_src" "$stage/muxagent"
-  cp "$BUILD_DIR/$runtime_src" "$stage/claude-agent-acp"
-  chmod 755 "$stage/muxagent" "$stage/claude-agent-acp"
+  cp "$BUILD_DIR/$claude_src" "$stage/claude-agent-acp"
+  cp "$BUILD_DIR/$codex_src" "$stage/codex-acp"
+  chmod 755 "$stage/muxagent" "$stage/claude-agent-acp" "$stage/codex-acp"
 
-  tar -C "$stage" -czf "$OUT_DIR/$bundle_name" muxagent claude-agent-acp
+  tar -C "$stage" -czf "$OUT_DIR/$bundle_name" muxagent claude-agent-acp codex-acp
 }
 
 package_zip_bundle() {
   local bundle_name="$1"
   local cli_src="$2"
-  local runtime_src="$3"
+  local claude_src="$3"
+  local codex_src="$4"
   local stage
 
   need_file "$BUILD_DIR/$cli_src"
-  need_file "$BUILD_DIR/$runtime_src"
+  need_file "$BUILD_DIR/$claude_src"
+  need_file "$BUILD_DIR/$codex_src"
 
   stage="$(stage_dir)"
   cp "$BUILD_DIR/$cli_src" "$stage/muxagent.exe"
-  cp "$BUILD_DIR/$runtime_src" "$stage/claude-agent-acp.exe"
-  chmod 755 "$stage/muxagent.exe" "$stage/claude-agent-acp.exe"
+  cp "$BUILD_DIR/$claude_src" "$stage/claude-agent-acp.exe"
+  cp "$BUILD_DIR/$codex_src" "$stage/codex-acp.exe"
+  chmod 755 "$stage/muxagent.exe" "$stage/claude-agent-acp.exe" "$stage/codex-acp.exe"
 
   (
     cd "$stage"
-    zip -q "$OUT_DIR/$bundle_name" muxagent.exe claude-agent-acp.exe
+    zip -q "$OUT_DIR/$bundle_name" muxagent.exe claude-agent-acp.exe codex-acp.exe
   )
 }
 
-package_tar_bundle "muxagent-darwin-amd64.tar.gz" "muxagent-darwin-amd64" "claude-agent-acp-darwin-x64"
-package_tar_bundle "muxagent-darwin-arm64.tar.gz" "muxagent-darwin-arm64" "claude-agent-acp-darwin-arm64"
-package_tar_bundle "muxagent-linux-amd64.tar.gz" "muxagent-linux-amd64" "claude-agent-acp-linux-x64"
-package_tar_bundle "muxagent-linux-amd64-musl.tar.gz" "muxagent-linux-amd64" "claude-agent-acp-linux-x64-musl"
-package_tar_bundle "muxagent-linux-arm64.tar.gz" "muxagent-linux-arm64" "claude-agent-acp-linux-arm64"
-package_tar_bundle "muxagent-linux-arm64-musl.tar.gz" "muxagent-linux-arm64" "claude-agent-acp-linux-arm64-musl"
-package_zip_bundle "muxagent-windows-amd64.zip" "muxagent-windows-amd64.exe" "claude-agent-acp-windows-x64.exe"
-package_zip_bundle "muxagent-windows-arm64.zip" "muxagent-windows-arm64.exe" "claude-agent-acp-windows-arm64.exe"
+package_tar_bundle "muxagent-darwin-amd64.tar.gz" "muxagent-darwin-amd64" "claude-agent-acp-darwin-x64" "codex-acp-darwin-amd64"
+package_tar_bundle "muxagent-darwin-arm64.tar.gz" "muxagent-darwin-arm64" "claude-agent-acp-darwin-arm64" "codex-acp-darwin-arm64"
+package_tar_bundle "muxagent-linux-amd64.tar.gz" "muxagent-linux-amd64" "claude-agent-acp-linux-x64" "codex-acp-linux-amd64"
+package_tar_bundle "muxagent-linux-amd64-musl.tar.gz" "muxagent-linux-amd64" "claude-agent-acp-linux-x64-musl" "codex-acp-linux-amd64-musl"
+package_tar_bundle "muxagent-linux-arm64.tar.gz" "muxagent-linux-arm64" "claude-agent-acp-linux-arm64" "codex-acp-linux-arm64"
+package_tar_bundle "muxagent-linux-arm64-musl.tar.gz" "muxagent-linux-arm64" "claude-agent-acp-linux-arm64-musl" "codex-acp-linux-arm64-musl"
+package_zip_bundle "muxagent-windows-amd64.zip" "muxagent-windows-amd64.exe" "claude-agent-acp-windows-x64.exe" "codex-acp-windows-amd64.exe"
+package_zip_bundle "muxagent-windows-arm64.zip" "muxagent-windows-arm64.exe" "claude-agent-acp-windows-arm64.exe" "codex-acp-windows-arm64.exe"

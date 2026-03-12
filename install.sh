@@ -141,10 +141,15 @@ if [ ! -f "$EXTRACT_DIR/claude-agent-acp" ]; then
   echo "bundle missing claude-agent-acp executable" >&2
   exit 1
 fi
+if [ ! -f "$EXTRACT_DIR/codex-acp" ]; then
+  echo "bundle missing codex-acp executable" >&2
+  exit 1
+fi
 
-chmod 755 "$EXTRACT_DIR/muxagent" "$EXTRACT_DIR/claude-agent-acp"
+chmod 755 "$EXTRACT_DIR/muxagent" "$EXTRACT_DIR/claude-agent-acp" "$EXTRACT_DIR/codex-acp"
 mv "$EXTRACT_DIR/muxagent" "$TARGET_DIR/muxagent"
 mv "$EXTRACT_DIR/claude-agent-acp" "$TARGET_DIR/claude-agent-acp"
+mv "$EXTRACT_DIR/codex-acp" "$TARGET_DIR/codex-acp"
 
 case ":$PATH:" in
   *":$TARGET_DIR:"*) ;;

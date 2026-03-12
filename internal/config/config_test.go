@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestDefault_ContainsBothRuntimes(t *testing.T) {
+func TestDefault_ContainsBuiltInRuntimes(t *testing.T) {
 	cfg := Default()
 
 	if cfg.RelayURL != defaultRelayURL {
@@ -20,15 +20,8 @@ func TestDefault_ContainsBothRuntimes(t *testing.T) {
 		t.Fatalf("RelaySigningPublicKey = %q, want %q", cfg.RelaySigningPublicKey, defaultRelaySigningPublicKey)
 	}
 
-	oc, ok := cfg.Runtimes[RuntimeOpenCode]
-	if !ok {
-		t.Fatal("default config missing opencode runtime")
-	}
-	if oc.Command != "opencode" {
-		t.Errorf("opencode command = %q, want %q", oc.Command, "opencode")
-	}
-	if len(oc.Args) != 1 || oc.Args[0] != "acp" {
-		t.Errorf("opencode args = %v, want [acp]", oc.Args)
+	if _, ok := cfg.Runtimes[RuntimeOpenCode]; ok {
+		t.Fatal("default config unexpectedly includes opencode runtime")
 	}
 
 	cc, ok := cfg.Runtimes[RuntimeClaudeCode]
@@ -36,65 +29,131 @@ func TestDefault_ContainsBothRuntimes(t *testing.T) {
 		t.Fatal("default config missing claude-code runtime")
 	}
 	if cc.Command != "" {
-		t.Errorf("claude-code command = %q, want empty (resolved at runtime)", cc.Command)
+		t.Errorf("claude-code command = %q, want empty", cc.Command)
 	}
 	if v, exists := cc.Env["CLAUDECODE"]; !exists || v != "" {
 		t.Errorf("claude-code Env[CLAUDECODE] = %q (exists=%v), want empty-string sentinel", v, exists)
 	}
+
+	codex, ok := cfg.Runtimes[RuntimeCodex]
+	if !ok {
+		t.Fatal("default config missing codex runtime")
+	}
+	if codex.Command != "" {
+		t.Errorf("codex command = %q, want empty", codex.Command)
+	}
 }
 
-func TestActiveRuntimeSettings_ClaudeCode(t *testing.T) {
+func TestRuntimeSettingsFor(t *testing.T) {
 	cfg := Default()
-	cfg.ActiveRuntime = RuntimeClaudeCode
 
-	settings, err := cfg.ActiveRuntimeSettings()
+	settings, err := cfg.RuntimeSettingsFor(RuntimeCodex)
 	if err != nil {
-		t.Fatalf("ActiveRuntimeSettings: %v", err)
+		t.Fatalf("RuntimeSettingsFor: %v", err)
 	}
 	if settings.Command != "" {
-		t.Errorf("command = %q, want empty (resolved at runtime)", settings.Command)
-	}
-	if v, ok := settings.Env["CLAUDECODE"]; !ok || v != "" {
-		t.Errorf("Env[CLAUDECODE] = %q (ok=%v), want empty-string", v, ok)
+		t.Fatalf("command = %q, want empty", settings.Command)
 	}
 }
 
-func TestActiveRuntimeSettings_UnknownRuntime(t *testing.T) {
+func TestRuntimeSettingsFor_UnknownRuntime(t *testing.T) {
 	cfg := Default()
-	cfg.ActiveRuntime = "nonexistent"
 
-	_, err := cfg.ActiveRuntimeSettings()
+	_, err := cfg.RuntimeSettingsFor("nonexistent")
 	if err == nil {
-		t.Fatal("expected error for unknown runtime, got nil")
+		t.Fatal("expected error for unknown runtime")
 	}
 	if want := `runtime "nonexistent" not configured`; err.Error() != want {
-		t.Errorf("error = %q, want %q", err.Error(), want)
+		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
 
-func TestMergeConfig_OverlayClaudeCodeCommand(t *testing.T) {
+func TestConfiguredRuntimeIDs_Sorted(t *testing.T) {
+	cfg := Config{
+		Runtimes: map[RuntimeID]RuntimeSettings{
+			RuntimeCodex:      {},
+			RuntimeClaudeCode: {},
+		},
+	}
+
+	ids := cfg.ConfiguredRuntimeIDs()
+	if len(ids) != 2 {
+		t.Fatalf("len(ids) = %d, want 2", len(ids))
+	}
+	if ids[0] != RuntimeClaudeCode || ids[1] != RuntimeCodex {
+		t.Fatalf("ids = %v, want [claude-code codex]", ids)
+	}
+}
+
+func TestMergeConfig_NilOverlayRuntimesPreservesBase(t *testing.T) {
 	base := Default()
 	overlay := Config{
-		RelaySigningPublicKey: "relay-pub",
+		RelayURL: "ws://localhost:9999/ws",
+	}
+
+	merged := mergeConfig(base, overlay)
+
+	if len(merged.Runtimes) != len(base.Runtimes) {
+		t.Fatalf("runtime count = %d, want %d", len(merged.Runtimes), len(base.Runtimes))
+	}
+	if _, ok := merged.Runtimes[RuntimeClaudeCode]; !ok {
+		t.Fatal("claude-code runtime missing after nil overlay")
+	}
+	if _, ok := merged.Runtimes[RuntimeCodex]; !ok {
+		t.Fatal("codex runtime missing after nil overlay")
+	}
+	if merged.RelayURL != overlay.RelayURL {
+		t.Fatalf("RelayURL = %q, want overlay value", merged.RelayURL)
+	}
+}
+
+func TestMergeConfig_ExplicitRuntimesReplaceBase(t *testing.T) {
+	base := Default()
+	overlay := Config{
 		Runtimes: map[RuntimeID]RuntimeSettings{
-			RuntimeClaudeCode: {
-				Command: "/usr/local/bin/claude-agent-acp",
+			RuntimeCodex: {
+				CWD: "/tmp/codex",
 			},
 		},
 	}
 
 	merged := mergeConfig(base, overlay)
 
+	if len(merged.Runtimes) != 1 {
+		t.Fatalf("runtime count = %d, want 1", len(merged.Runtimes))
+	}
+	if _, ok := merged.Runtimes[RuntimeClaudeCode]; ok {
+		t.Fatal("claude-code runtime should be removed by explicit runtime overlay")
+	}
+	codex, ok := merged.Runtimes[RuntimeCodex]
+	if !ok {
+		t.Fatal("codex runtime missing after overlay")
+	}
+	if codex.Command != "" {
+		t.Fatalf("codex command = %q, want empty resolver-backed default", codex.Command)
+	}
+	if codex.CWD != "/tmp/codex" {
+		t.Fatalf("codex cwd = %q, want overlay value", codex.CWD)
+	}
+}
+
+func TestMergeConfig_RuntimeOverlayPreservesBaseFields(t *testing.T) {
+	base := Default()
+	overlay := Config{
+		Runtimes: map[RuntimeID]RuntimeSettings{
+			RuntimeClaudeCode: {
+				Command: "/custom/claude-agent-acp",
+			},
+		},
+	}
+
+	merged := mergeConfig(base, overlay)
 	cc := merged.Runtimes[RuntimeClaudeCode]
-	if cc.Command != "/usr/local/bin/claude-agent-acp" {
-		t.Errorf("command = %q, want overlay value", cc.Command)
+	if cc.Command != "/custom/claude-agent-acp" {
+		t.Fatalf("command = %q, want overlay value", cc.Command)
 	}
-	if merged.RelaySigningPublicKey != "relay-pub" {
-		t.Errorf("RelaySigningPublicKey = %q, want overlay value", merged.RelaySigningPublicKey)
-	}
-	// Base Env should be preserved when overlay Env is empty.
 	if v, ok := cc.Env["CLAUDECODE"]; !ok || v != "" {
-		t.Errorf("Env[CLAUDECODE] = %q (ok=%v), want preserved empty-string sentinel", v, ok)
+		t.Fatalf("Env[CLAUDECODE] = %q (ok=%v), want preserved sentinel", v, ok)
 	}
 }
 
@@ -103,28 +162,24 @@ func TestSaveAndLoad_RoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 
 	cfg := Default()
-	cfg.ActiveRuntime = RuntimeClaudeCode
 
 	savedPath, err := SaveTo(cfg, path)
 	if err != nil {
 		t.Fatalf("SaveTo: %v", err)
 	}
 	if savedPath != path {
-		t.Errorf("savedPath = %q, want %q", savedPath, path)
+		t.Fatalf("savedPath = %q, want %q", savedPath, path)
 	}
 
 	loaded, err := loadFile(path)
 	if err != nil {
 		t.Fatalf("loadFile: %v", err)
 	}
-	if loaded.ActiveRuntime != RuntimeClaudeCode {
-		t.Errorf("ActiveRuntime = %q, want %q", loaded.ActiveRuntime, RuntimeClaudeCode)
-	}
 	if _, ok := loaded.Runtimes[RuntimeClaudeCode]; !ok {
-		t.Error("loaded config missing claude-code runtime")
+		t.Fatal("loaded config missing claude-code runtime")
 	}
-	if _, ok := loaded.Runtimes[RuntimeOpenCode]; !ok {
-		t.Error("loaded config missing opencode runtime")
+	if _, ok := loaded.Runtimes[RuntimeCodex]; !ok {
+		t.Fatal("loaded config missing codex runtime")
 	}
 }
 
@@ -148,29 +203,110 @@ func TestSaveTo_TightensParentDirPermissions(t *testing.T) {
 	assertDirPerm(t, dir, 0o700)
 }
 
-func TestApplyEnvOverrides_ClaudeCodeCommand(t *testing.T) {
-	cfg := Default()
+func TestApplyEnvOverrides_OnlyExistingRuntimes(t *testing.T) {
+	cfg := Config{
+		Runtimes: map[RuntimeID]RuntimeSettings{
+			RuntimeCodex: {},
+		},
+	}
 
+	t.Setenv("MUXAGENT_RUNTIMES_CODEX_COMMAND", "/custom/codex-acp")
 	t.Setenv("MUXAGENT_RUNTIMES_CLAUDE-CODE_COMMAND", "/custom/claude-agent-acp")
-	t.Setenv("MUXAGENT_RELAY_SIGNING_PUBLIC_KEY", "relay-pub")
 	result := applyEnvOverrides(cfg)
 
-	cc := result.Runtimes[RuntimeClaudeCode]
-	if cc.Command != "/custom/claude-agent-acp" {
-		t.Errorf("command = %q, want %q", cc.Command, "/custom/claude-agent-acp")
+	codex := result.Runtimes[RuntimeCodex]
+	if codex.Command != "/custom/codex-acp" {
+		t.Fatalf("codex command = %q, want env override", codex.Command)
 	}
-	if result.RelaySigningPublicKey != "relay-pub" {
-		t.Errorf("RelaySigningPublicKey = %q, want %q", result.RelaySigningPublicKey, "relay-pub")
+	if _, ok := result.Runtimes[RuntimeClaudeCode]; ok {
+		t.Fatal("env override should not create claude-code runtime")
+	}
+}
+
+func TestLoadEffective_UserRuntimesReplaceDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	userDir := filepath.Join(home, ".muxagent")
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	userPath := filepath.Join(userDir, "config.json")
+	payload := `{"runtimes":{"codex":{"cwd":"/tmp/project"}}}`
+	if err := os.WriteFile(userPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// OpenCode should be unaffected.
-	oc := result.Runtimes[RuntimeOpenCode]
-	if oc.Command != "opencode" {
-		t.Errorf("opencode command = %q, want %q", oc.Command, "opencode")
+	cfg, err := LoadEffective()
+	if err != nil {
+		t.Fatalf("LoadEffective: %v", err)
+	}
+	if len(cfg.Runtimes) != 1 {
+		t.Fatalf("runtime count = %d, want 1", len(cfg.Runtimes))
+	}
+	if _, ok := cfg.Runtimes[RuntimeClaudeCode]; ok {
+		t.Fatal("claude-code runtime should not survive explicit user runtimes")
+	}
+	codex := cfg.Runtimes[RuntimeCodex]
+	if codex.Command != "" {
+		t.Fatalf("codex command = %q, want empty resolver-backed default", codex.Command)
+	}
+	if codex.CWD != "/tmp/project" {
+		t.Fatalf("codex cwd = %q, want user override", codex.CWD)
+	}
+}
+
+func TestLoadEffective_ProjectRuntimesReplaceUser(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	userDir := filepath.Join(home, ".muxagent")
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	userPath := filepath.Join(userDir, "config.json")
+	userPayload := `{"runtimes":{"codex":{"cwd":"/tmp/codex"}}}`
+	if err := os.WriteFile(userPath, []byte(userPayload), 0o600); err != nil {
+		t.Fatalf("WriteFile user: %v", err)
 	}
 
-	// Clean up: verify env var was read (Setenv auto-cleans via t.Cleanup).
-	_ = os.Getenv("MUXAGENT_RUNTIMES_CLAUDE-CODE_COMMAND")
+	cwd := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	projectDir := filepath.Join(cwd, ".muxagent")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll project: %v", err)
+	}
+	projectPath := filepath.Join(projectDir, "config.json")
+	projectPayload := `{"runtimes":{"claude-code":{"command":"/tmp/claude-agent-acp"}}}`
+	if err := os.WriteFile(projectPath, []byte(projectPayload), 0o600); err != nil {
+		t.Fatalf("WriteFile project: %v", err)
+	}
+
+	cfg, err := LoadEffective()
+	if err != nil {
+		t.Fatalf("LoadEffective: %v", err)
+	}
+	if len(cfg.Runtimes) != 1 {
+		t.Fatalf("runtime count = %d, want 1", len(cfg.Runtimes))
+	}
+	if _, ok := cfg.Runtimes[RuntimeCodex]; ok {
+		t.Fatal("codex runtime should not survive explicit project runtimes")
+	}
+	cc := cfg.Runtimes[RuntimeClaudeCode]
+	if cc.Command != "/tmp/claude-agent-acp" {
+		t.Fatalf("claude command = %q, want project override", cc.Command)
+	}
+	if v, ok := cc.Env["CLAUDECODE"]; !ok || v != "" {
+		t.Fatalf("Env[CLAUDECODE] = %q (ok=%v), want preserved sentinel", v, ok)
+	}
 }
 
 func TestResolveRelaySigningPublicKey_RemoteRequiresPin(t *testing.T) {
@@ -216,6 +352,34 @@ func TestResolveRelaySigningPublicKey_DecodesValidKey(t *testing.T) {
 	}
 	if got := base64.StdEncoding.EncodeToString(decoded); got != base64.StdEncoding.EncodeToString(pub) {
 		t.Fatalf("decoded key mismatch: got %q want %q", got, base64.StdEncoding.EncodeToString(pub))
+	}
+}
+
+func TestValidateConfig_RejectsEmptyRuntimeSet(t *testing.T) {
+	cfg := Config{}
+
+	err := validateConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for empty runtime set")
+	}
+	if want := "at least one runtime must be configured"; err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestValidateConfig_RejectsUnsupportedRuntime(t *testing.T) {
+	cfg := Config{
+		Runtimes: map[RuntimeID]RuntimeSettings{
+			RuntimeOpenCode: {},
+		},
+	}
+
+	err := validateConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for unsupported runtime")
+	}
+	if want := `runtime "opencode" is not supported`; err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -268,6 +432,7 @@ func TestValidateConfig_RelayURLPolicy(t *testing.T) {
 		{
 			name: "remote ws rejected",
 			cfg: Config{
+				Runtimes:              map[RuntimeID]RuntimeSettings{RuntimeCodex: {}},
 				RelayURL:              "ws://relay.example/ws",
 				RelaySigningPublicKey: validKey,
 			},
@@ -276,6 +441,7 @@ func TestValidateConfig_RelayURLPolicy(t *testing.T) {
 		{
 			name: "remote wss accepted",
 			cfg: Config{
+				Runtimes:              map[RuntimeID]RuntimeSettings{RuntimeCodex: {}},
 				RelayURL:              "wss://relay.example/ws",
 				RelaySigningPublicKey: validKey,
 			},
@@ -283,12 +449,14 @@ func TestValidateConfig_RelayURLPolicy(t *testing.T) {
 		{
 			name: "loopback ws accepted",
 			cfg: Config{
+				Runtimes: map[RuntimeID]RuntimeSettings{RuntimeCodex: {}},
 				RelayURL: "ws://localhost:8080/ws",
 			},
 		},
 		{
 			name: "remote relay requires signing key",
 			cfg: Config{
+				Runtimes: map[RuntimeID]RuntimeSettings{RuntimeCodex: {}},
 				RelayURL: "wss://relay.example/ws",
 			},
 			wantErr: "pairing with remote relay requires relay_signing_public_key",

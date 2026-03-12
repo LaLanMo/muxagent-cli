@@ -101,6 +101,10 @@ jobs:
         working-directory: muxagent-cli
         run: bash ./scripts/build_claude_agent_acp.sh "$BUILD_DIR"
 
+      - name: Fetch codex-acp binaries
+        working-directory: muxagent-cli
+        run: bash ./scripts/build_codex_acp.sh "$BUILD_DIR"
+
       - name: Package release bundles
         working-directory: muxagent-cli
         run: bash ./scripts/package_release_bundles.sh "$BUILD_DIR" "$RELEASE_DIR"

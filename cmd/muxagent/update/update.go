@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
+	"github.com/LaLanMo/muxagent-cli/internal/codexbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/version"
 	"github.com/spf13/cobra"
@@ -37,7 +38,8 @@ const (
 	updateHTTPTimeout          = 5 * time.Minute
 	maxRedirects               = 10
 	updatedBackupEnvVar        = "MUXAGENT_UPDATED_BACKUP"
-	updatedRuntimeBackupEnvVar = "MUXAGENT_UPDATED_RUNTIME_BACKUP"
+	updatedClaudeRuntimeBakEnv = "MUXAGENT_UPDATED_CLAUDE_RUNTIME_BACKUP"
+	updatedCodexRuntimeBakEnv  = "MUXAGENT_UPDATED_CODEX_RUNTIME_BACKUP"
 	updatedLockEnvVar          = "MUXAGENT_UPDATED_LOCK_FILE"
 	updatedStageDirEnvVar      = "MUXAGENT_UPDATED_STAGE_DIR"
 	releaseManifestHeaderBase  = "# muxagent "
@@ -144,50 +146,27 @@ func ensureRuntime(forceBundleInstall bool) error {
 		return err
 	}
 
-	if cfg.ActiveRuntime != config.RuntimeClaudeCode {
+	runtimeIDs := cfg.ConfiguredRuntimeIDs()
+	if len(runtimeIDs) == 0 {
 		fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
 		return nil
 	}
 
-	if config.IsRuntimeCommandOverridden(config.RuntimeClaudeCode) {
-		if _, err := acpbin.Resolve(cfg, nil); err != nil {
-			return fmt.Errorf("failed to set up agent runtime: %w", err)
-		}
-		fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
-		return nil
-	}
-
+	var updaterInstance *updater
+	var currentTag string
 	if version.Version != "dev" {
-		u, err := newDefaultUpdater()
+		updaterInstance, err = newDefaultUpdater()
 		if err != nil {
 			return err
 		}
-
-		currentTag, err := normalizeVersion(version.Version)
-		if err == nil {
-			if _, err := u.ensureBundledRuntime(context.Background(), currentTag, forceBundleInstall); err == nil {
-				fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
-				return nil
-			}
-		}
+		currentTag, _ = normalizeVersion(version.Version)
 	}
 
-	if forceBundleInstall {
-		if runtimePath, err := acpbin.RelativePath(); err == nil {
-			_ = os.Remove(runtimePath)
+	for _, runtimeID := range runtimeIDs {
+		if err := ensureRuntimeFor(cfg, runtimeID, updaterInstance, currentTag, forceBundleInstall); err != nil {
+			return err
 		}
 	}
-
-	_, err = acpbin.ResolveManaged(cfg, func(ev acpbin.ProgressEvent) {
-		if ev.Phase == "downloading" && ev.TotalBytes > 0 {
-			pct := float64(ev.BytesRead) / float64(ev.TotalBytes) * 100
-			fmt.Printf("\rDownloading agent runtime... %.0f%%", pct)
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("failed to set up agent runtime: %w", err)
-	}
-	fmt.Println()
 	fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
 	return nil
 }
@@ -199,7 +178,8 @@ func CleanupUpdatedBackup() {
 	}
 
 	cleanupBackupFile(updatedBackupEnvVar, exePath+".bak")
-	cleanupBackupFile(updatedRuntimeBackupEnvVar, filepath.Join(filepath.Dir(exePath), runtimeBinaryName(runtime.GOOS)+".bak"))
+	cleanupBackupFile(updatedClaudeRuntimeBakEnv, filepath.Join(filepath.Dir(exePath), runtimeBinaryName(config.RuntimeClaudeCode, runtime.GOOS)+".bak"))
+	cleanupBackupFile(updatedCodexRuntimeBakEnv, filepath.Join(filepath.Dir(exePath), runtimeBinaryName(config.RuntimeCodex, runtime.GOOS)+".bak"))
 	cleanupBackupFile(updatedLockEnvVar, exePath+".lock")
 	cleanupStageDir(updatedStageDirEnvVar, filepath.Dir(exePath))
 }
@@ -216,6 +196,67 @@ func cleanupBackupFile(envVar, expectedPath string) {
 	}
 	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return
+	}
+}
+
+func ensureRuntimeFor(cfg config.Config, runtimeID config.RuntimeID, u *updater, currentTag string, forceBundleInstall bool) error {
+	switch runtimeID {
+	case config.RuntimeClaudeCode:
+		if config.IsRuntimeCommandOverridden(runtimeID) {
+			if _, err := acpbin.Resolve(cfg, nil); err != nil {
+				return fmt.Errorf("failed to set up %s runtime: %w", runtimeID, err)
+			}
+			return nil
+		}
+		if u != nil && currentTag != "" {
+			if _, err := u.ensureBundledRuntime(context.Background(), currentTag, forceBundleInstall, runtimeID); err == nil {
+				return nil
+			}
+		}
+		if forceBundleInstall {
+			if runtimePath, err := acpbin.RelativePath(); err == nil {
+				_ = os.Remove(runtimePath)
+			}
+		}
+		if _, err := acpbin.ResolveManaged(cfg, func(ev acpbin.ProgressEvent) {
+			if ev.Phase == "downloading" && ev.TotalBytes > 0 {
+				pct := float64(ev.BytesRead) / float64(ev.TotalBytes) * 100
+				fmt.Printf("\rDownloading %s runtime... %.0f%%", runtimeID, pct)
+			}
+		}); err != nil {
+			return fmt.Errorf("failed to set up %s runtime: %w", runtimeID, err)
+		}
+		fmt.Println()
+		return nil
+	case config.RuntimeCodex:
+		if config.IsRuntimeCommandOverridden(runtimeID) {
+			if _, err := codexbin.Resolve(cfg, nil); err != nil {
+				return fmt.Errorf("failed to set up %s runtime: %w", runtimeID, err)
+			}
+			return nil
+		}
+		if u != nil && currentTag != "" {
+			if _, err := u.ensureBundledRuntime(context.Background(), currentTag, forceBundleInstall, runtimeID); err == nil {
+				return nil
+			}
+		}
+		if forceBundleInstall {
+			if runtimePath, err := codexbin.RelativePath(); err == nil {
+				_ = os.Remove(runtimePath)
+			}
+		}
+		if _, err := codexbin.ResolveManaged(cfg, func(ev codexbin.ProgressEvent) {
+			if ev.Phase == "downloading" && ev.TotalBytes > 0 {
+				pct := float64(ev.BytesRead) / float64(ev.TotalBytes) * 100
+				fmt.Printf("\rDownloading %s runtime... %.0f%%", runtimeID, pct)
+			}
+		}); err != nil {
+			return fmt.Errorf("failed to set up %s runtime: %w", runtimeID, err)
+		}
+		fmt.Println()
+		return nil
+	default:
+		return fmt.Errorf("runtime %q is not supported", runtimeID)
 	}
 }
 
@@ -372,8 +413,10 @@ func (u *updater) install(ctx context.Context, latest string) error {
 	}
 
 	bakPath := exePath + ".bak"
-	runtimePath := u.runtimeInstallPath(exePath)
-	runtimeBakPath := runtimePath + ".bak"
+	runtimeNames := bundledRuntimeBinaryNames(u.goos)
+	runtimePaths := make(map[config.RuntimeID]string, len(runtimeNames))
+	runtimeBakPaths := make(map[config.RuntimeID]string, len(runtimeNames))
+	hadRuntime := make(map[config.RuntimeID]bool, len(runtimeNames))
 	stageDir, err := os.MkdirTemp(filepath.Dir(exePath), "muxagent-update-*")
 	if err != nil {
 		return fmt.Errorf("create update staging dir: %w", err)
@@ -403,41 +446,58 @@ func (u *updater) install(ctx context.Context, latest string) error {
 		return fmt.Errorf("replace executable: %w", err)
 	}
 
-	hadRuntime := false
-	if _, err := os.Stat(runtimePath); err == nil {
-		hadRuntime = true
-		_ = os.Remove(runtimeBakPath)
-		if err := os.Rename(runtimePath, runtimeBakPath); err != nil {
-			if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
-				return fmt.Errorf("backup agent runtime: %v (rollback failed: %w)", err, restoreErr)
-			}
-			return fmt.Errorf("backup agent runtime: %w", err)
-		}
-	}
+	for runtimeID, stagedPath := range bundleFiles.RuntimePaths {
+		runtimePath := u.runtimeInstallPath(runtimeID, exePath)
+		runtimeBakPath := runtimePath + ".bak"
+		runtimePaths[runtimeID] = runtimePath
+		runtimeBakPaths[runtimeID] = runtimeBakPath
 
-	if err := os.Rename(bundleFiles.RuntimePath, runtimePath); err != nil {
-		if hadRuntime {
-			_ = restoreFile(runtimePath, runtimeBakPath)
+		if _, err := os.Stat(runtimePath); err == nil {
+			hadRuntime[runtimeID] = true
+			_ = os.Remove(runtimeBakPath)
+			if err := os.Rename(runtimePath, runtimeBakPath); err != nil {
+				if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
+					return fmt.Errorf("backup %s runtime: %v (rollback failed: %w)", runtimeID, err, restoreErr)
+				}
+				return fmt.Errorf("backup %s runtime: %w", runtimeID, err)
+			}
 		}
-		if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
-			return fmt.Errorf("install bundled runtime: %v (rollback failed: %w)", err, restoreErr)
+
+		if err := os.Rename(stagedPath, runtimePath); err != nil {
+			for restoredID, destPath := range runtimePaths {
+				bak := runtimeBakPaths[restoredID]
+				if hadRuntime[restoredID] {
+					_ = restoreFile(destPath, bak)
+				} else {
+					_ = os.Remove(destPath)
+				}
+			}
+			if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
+				return fmt.Errorf("install bundled %s runtime: %v (rollback failed: %w)", runtimeID, err, restoreErr)
+			}
+			return fmt.Errorf("install bundled %s runtime: %w", runtimeID, err)
 		}
-		return fmt.Errorf("install bundled runtime: %w", err)
 	}
 
 	env := setEnv(u.environ(), updatedBackupEnvVar, bakPath)
-	if hadRuntime {
-		env = setEnv(env, updatedRuntimeBackupEnvVar, runtimeBakPath)
+	for runtimeID, backupPath := range runtimeBakPaths {
+		if !hadRuntime[runtimeID] {
+			continue
+		}
+		env = setEnv(env, runtimeBackupEnvVar(runtimeID), backupPath)
 	}
 	env = setEnv(env, updatedLockEnvVar, exePath+".lock")
 	env = setEnv(env, updatedStageDirEnvVar, stageDir)
 	if err := u.exec(exePath, []string{exePath, "update", "--ensure-runtime"}, env); err != nil {
-		if hadRuntime {
-			if restoreErr := restoreFile(runtimePath, runtimeBakPath); restoreErr != nil {
-				return fmt.Errorf("re-exec failed: %v (runtime rollback failed: %w)", err, restoreErr)
+		for runtimeID, runtimePath := range runtimePaths {
+			runtimeBakPath := runtimeBakPaths[runtimeID]
+			if hadRuntime[runtimeID] {
+				if restoreErr := restoreFile(runtimePath, runtimeBakPath); restoreErr != nil {
+					return fmt.Errorf("re-exec failed: %v (%s runtime rollback failed: %w)", err, runtimeID, restoreErr)
+				}
+			} else {
+				_ = os.Remove(runtimePath)
 			}
-		} else {
-			_ = os.Remove(runtimePath)
 		}
 		if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
 			return fmt.Errorf("re-exec failed: %v (rollback failed: %w)", err, restoreErr)
@@ -606,12 +666,19 @@ func (u *updater) bundleAssetName() (string, error) {
 	return assetName, nil
 }
 
-func (u *updater) runtimeInstallPath(exePath string) string {
-	name := "claude-agent-acp"
-	if u.goos == "windows" {
-		name += ".exe"
+func runtimeBackupEnvVar(runtimeID config.RuntimeID) string {
+	switch runtimeID {
+	case config.RuntimeClaudeCode:
+		return updatedClaudeRuntimeBakEnv
+	case config.RuntimeCodex:
+		return updatedCodexRuntimeBakEnv
+	default:
+		return ""
 	}
-	return filepath.Join(filepath.Dir(exePath), name)
+}
+
+func (u *updater) runtimeInstallPath(runtimeID config.RuntimeID, exePath string) string {
+	return filepath.Join(filepath.Dir(exePath), runtimeBinaryName(runtimeID, u.goos))
 }
 
 func (u *updater) releaseAssetURL(tag, assetName string) string {
@@ -626,12 +693,12 @@ func (u *updater) releaseLatestAssetURL(assetName string) string {
 	return base + "/latest/download/" + assetName
 }
 
-func (u *updater) ensureBundledRuntime(ctx context.Context, tag string, forceInstall bool) (string, error) {
+func (u *updater) ensureBundledRuntime(ctx context.Context, tag string, forceInstall bool, runtimeID config.RuntimeID) (string, error) {
 	exePath, err := u.resolveExecutablePath()
 	if err != nil {
 		return "", fmt.Errorf("resolve executable path: %w", err)
 	}
-	destPath := u.runtimeInstallPath(exePath)
+	destPath := u.runtimeInstallPath(runtimeID, exePath)
 	if !forceInstall {
 		if _, err := os.Stat(destPath); err == nil {
 			return destPath, nil
@@ -675,8 +742,12 @@ func (u *updater) ensureBundledRuntime(ctx context.Context, tag string, forceIns
 	if forceInstall {
 		_ = os.Remove(destPath)
 	}
-	if err := os.Rename(bundleFiles.RuntimePath, destPath); err != nil {
-		return "", fmt.Errorf("install agent runtime: %w", err)
+	runtimePath := bundleFiles.RuntimePaths[runtimeID]
+	if runtimePath == "" {
+		return "", fmt.Errorf("release bundle missing %s runtime", runtimeID)
+	}
+	if err := os.Rename(runtimePath, destPath); err != nil {
+		return "", fmt.Errorf("install %s runtime: %w", runtimeID, err)
 	}
 
 	return destPath, nil

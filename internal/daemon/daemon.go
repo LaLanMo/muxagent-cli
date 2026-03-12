@@ -14,15 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/control"
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/keyring"
 	"github.com/LaLanMo/muxagent-cli/internal/relayws"
-	"github.com/LaLanMo/muxagent-cli/internal/runtime"
-	"github.com/LaLanMo/muxagent-cli/internal/runtime/acp"
+	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
 	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 )
 
@@ -32,7 +30,7 @@ type Daemon struct {
 	token    string
 	relay    *relayws.Client
 	relayURL string
-	rt       runtime.Client
+	rt       *runtimemanager.Manager
 	eventBuf *relayws.EventBuffer
 	stopOnce sync.Once
 	stopErr  error
@@ -53,44 +51,12 @@ func (d *Daemon) Start() error {
 	}
 	d.token = token
 
-	// Initialize runtime client
+	// Initialize runtime manager
 	cfg, err := config.LoadEffective()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	runtimeSettings, err := cfg.ActiveRuntimeSettings()
-	if err != nil {
-		return fmt.Errorf("failed to get runtime settings: %w", err)
-	}
-
-	// Resolve agent runtime binary (may trigger download on first run)
-	if cfg.ActiveRuntime == config.RuntimeClaudeCode {
-		resolved, err := acpbin.Resolve(cfg, func(ev acpbin.ProgressEvent) {
-			log.Printf("[runtime] %s: %d/%d bytes", ev.Phase, ev.BytesRead, ev.TotalBytes)
-		})
-		if err != nil {
-			return fmt.Errorf("failed to set up agent runtime: %w", err)
-		}
-		runtimeSettings.Command = resolved
-		log.Printf("[runtime] resolved: %s", resolved)
-
-		runtimeSettings, err = acpbin.InjectClaudeCodeExecutable(runtimeSettings)
-		if err != nil {
-			return fmt.Errorf("failed to configure Claude Code executable wrapper: %w", err)
-		}
-	}
-
-	rtClient := acp.NewClient(acp.Config{
-		Command: runtimeSettings.Command,
-		Args:    runtimeSettings.Args,
-		CWD:     runtimeSettings.CWD,
-		Env:     runtimeSettings.Env,
-	})
-
-	if err := rtClient.Start(context.Background()); err != nil {
-		return fmt.Errorf("failed to start ACP runtime: %w", err)
-	}
-	d.rt = rtClient
+	d.rt = runtimemanager.New(cfg)
 	d.eventBuf = relayws.NewEventBuffer(4096)
 
 	mux := http.NewServeMux()
@@ -169,7 +135,7 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to load worktree store: %w", err)
 	}
 
-	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, string(cfg.ActiveRuntime), creds, machineSignPriv, keyringMgr, rtClient, d.eventBuf, wtStore)
+	relayClient, err := relayws.NewMachineClient(d.relayURL, hostname, creds, machineSignPriv, keyringMgr, d.rt, d.eventBuf, wtStore)
 	if err != nil {
 		return fmt.Errorf("failed to create relay client: %w", err)
 	}

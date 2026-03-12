@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/LaLanMo/muxagent-cli/internal/privdir"
@@ -18,13 +19,13 @@ type RuntimeID string
 const (
 	RuntimeOpenCode   RuntimeID = "opencode"
 	RuntimeClaudeCode RuntimeID = "claude-code"
+	RuntimeCodex      RuntimeID = "codex"
 
 	defaultRelayURL              = "wss://relay.muxagent.com/ws"
 	defaultRelaySigningPublicKey = "xpUiBnvnwOKe8tsXL7LgLmeTcog7hJXA+RrVERC+QqU="
 )
 
 type Config struct {
-	ActiveRuntime         RuntimeID                     `json:"active_runtime"`
 	Runtimes              map[RuntimeID]RuntimeSettings `json:"runtimes"`
 	RelayURL              string                        `json:"relay_url,omitempty"`
 	RelaySigningPublicKey string                        `json:"relay_signing_public_key,omitempty"`
@@ -41,17 +42,13 @@ type RuntimeSettings struct {
 // exists or when callers want to seed a new config.
 func Default() Config {
 	return Config{
-		ActiveRuntime: RuntimeClaudeCode,
-		RelayURL:      defaultRelayURL,
+		RelayURL:              defaultRelayURL,
 		RelaySigningPublicKey: defaultRelaySigningPublicKey,
 		Runtimes: map[RuntimeID]RuntimeSettings{
-			RuntimeOpenCode: {
-				Command: "opencode",
-				Args:    []string{"acp"},
-			},
 			RuntimeClaudeCode: {
 				Env: map[string]string{"CLAUDECODE": ""},
 			},
+			RuntimeCodex: {},
 		},
 	}
 }
@@ -106,7 +103,8 @@ func load() (Config, error) {
 // 3. Merge project config (./.muxagent/config.json)
 // 4. Apply environment variable overrides (MUXAGENT_*)
 //
-// Each layer overrides the previous (non-empty values win).
+// Each layer overrides the previous. Scalar fields use non-empty overwrite
+// semantics; an explicit runtimes map replaces the previous runtime set.
 // Missing files are silently skipped; parse errors are returned.
 func LoadEffective() (Config, error) {
 	cfg := Default()
@@ -212,24 +210,33 @@ func Exists(path string) bool {
 	return err == nil
 }
 
-// ActiveRuntimeSettings returns the settings for the active runtime.
+// RuntimeSettingsFor returns the configured settings for the given runtime.
 // Returns an error if the runtime is not configured.
-func (c Config) ActiveRuntimeSettings() (RuntimeSettings, error) {
-	settings, ok := c.Runtimes[c.ActiveRuntime]
+func (c Config) RuntimeSettingsFor(id RuntimeID) (RuntimeSettings, error) {
+	settings, ok := c.Runtimes[id]
 	if !ok {
-		return RuntimeSettings{}, fmt.Errorf("runtime %q not configured", c.ActiveRuntime)
+		return RuntimeSettings{}, fmt.Errorf("runtime %q not configured", id)
 	}
 	return settings, nil
 }
 
-// mergeConfig merges overlay into base, returning a new config where non-empty
-// overlay values override base values. Used for layered config loading.
+// ConfiguredRuntimeIDs returns configured runtimes in a stable order.
+func (c Config) ConfiguredRuntimeIDs() []RuntimeID {
+	ids := make([]RuntimeID, 0, len(c.Runtimes))
+	for id := range c.Runtimes {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return string(ids[i]) < string(ids[j])
+	})
+	return ids
+}
+
+// mergeConfig merges overlay into base. Scalar fields use non-empty overwrite
+// semantics; an explicit runtimes map replaces the previous runtime set while
+// still preserving built-in defaults for each selected runtime entry.
 func mergeConfig(base, overlay Config) Config {
 	result := base
-
-	if overlay.ActiveRuntime != "" {
-		result.ActiveRuntime = overlay.ActiveRuntime
-	}
 
 	if overlay.RelayURL != "" {
 		result.RelayURL = overlay.RelayURL
@@ -238,30 +245,43 @@ func mergeConfig(base, overlay Config) Config {
 		result.RelaySigningPublicKey = overlay.RelaySigningPublicKey
 	}
 
-	// Merge runtimes map
-	for name, settings := range overlay.Runtimes {
-		if result.Runtimes == nil {
-			result.Runtimes = make(map[RuntimeID]RuntimeSettings)
-		}
-		existing := result.Runtimes[name]
-		if settings.Command != "" {
-			existing.Command = settings.Command
-		}
-		if len(settings.Args) > 0 {
-			existing.Args = settings.Args
-		}
-		if settings.CWD != "" {
-			existing.CWD = settings.CWD
-		}
-		if len(settings.Env) > 0 {
-			if existing.Env == nil {
-				existing.Env = make(map[string]string)
+	if overlay.Runtimes != nil {
+		result.Runtimes = make(map[RuntimeID]RuntimeSettings, len(overlay.Runtimes))
+		for name, settings := range overlay.Runtimes {
+			seed := defaultRuntimeSettings(name)
+			if baseSettings, ok := base.Runtimes[name]; ok {
+				seed = mergeRuntimeSettings(seed, baseSettings)
 			}
-			for k, v := range settings.Env {
-				existing.Env[k] = v
-			}
+			result.Runtimes[name] = mergeRuntimeSettings(seed, settings)
 		}
-		result.Runtimes[name] = existing
+	}
+
+	return result
+}
+
+func defaultRuntimeSettings(id RuntimeID) RuntimeSettings {
+	return Default().Runtimes[id]
+}
+
+func mergeRuntimeSettings(base, overlay RuntimeSettings) RuntimeSettings {
+	result := base
+
+	if overlay.Command != "" {
+		result.Command = overlay.Command
+	}
+	if len(overlay.Args) > 0 {
+		result.Args = overlay.Args
+	}
+	if overlay.CWD != "" {
+		result.CWD = overlay.CWD
+	}
+	if len(overlay.Env) > 0 {
+		if result.Env == nil {
+			result.Env = make(map[string]string)
+		}
+		for k, v := range overlay.Env {
+			result.Env[k] = v
+		}
 	}
 
 	return result
@@ -334,6 +354,15 @@ func IsLoopbackRelayURL(relayURL string) (bool, error) {
 }
 
 func validateConfig(cfg Config) error {
+	if len(cfg.Runtimes) == 0 {
+		return fmt.Errorf("at least one runtime must be configured")
+	}
+	for id := range cfg.Runtimes {
+		if !IsSupportedRuntime(id) {
+			return fmt.Errorf("runtime %q is not supported", id)
+		}
+	}
+
 	if cfg.RelayURL == "" {
 		if cfg.RelaySigningPublicKey == "" {
 			return nil
@@ -387,4 +416,13 @@ func decodeRelaySigningPublicKey(relaySigningPublicKey string) (ed25519.PublicKe
 		return nil, fmt.Errorf("invalid relay_signing_public_key length")
 	}
 	return ed25519.PublicKey(decoded), nil
+}
+
+func IsSupportedRuntime(id RuntimeID) bool {
+	switch id {
+	case RuntimeClaudeCode, RuntimeCodex:
+		return true
+	default:
+		return false
+	}
 }

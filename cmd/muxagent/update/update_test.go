@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -299,7 +300,7 @@ func TestEnsureBundledRuntimeInstallsCompanionAsset(t *testing.T) {
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
-	runtimePath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3", true)
+	runtimePath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3", true, config.RuntimeClaudeCode)
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(filepath.Dir(exePath), "claude-agent-acp"), runtimePath)
@@ -327,11 +328,36 @@ func TestEnsureBundledRuntimeSkipsDownloadWhenCompanionMatches(t *testing.T) {
 	defer server.Close()
 
 	u := newTestUpdater(server, pub, exePath)
-	gotPath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3", false)
+	gotPath, err := u.ensureBundledRuntime(context.Background(), "v1.2.3", false, config.RuntimeClaudeCode)
 	require.NoError(t, err)
 
 	assert.Equal(t, runtimePath, gotPath)
 	assert.Zero(t, reqs.count("/download/v1.2.3/"+bundleAssetName))
+}
+
+func TestEnsureRuntimeSkipsCompanionSetupForCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := t.TempDir()
+	prevWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(cwd))
+	t.Cleanup(func() {
+		_ = os.Chdir(prevWD)
+	})
+
+	cfg := config.Default()
+	cfg.Runtimes = map[config.RuntimeID]config.RuntimeSettings{
+		config.RuntimeCodex: cfg.Runtimes[config.RuntimeCodex],
+	}
+
+	configPath, err := config.UserConfigPath()
+	require.NoError(t, err)
+	_, err = config.SaveTo(cfg, configPath)
+	require.NoError(t, err)
+
+	require.NoError(t, ensureRuntime(false))
 }
 
 func TestDownloadVerifiedBinaryRejectsOversizedBinary(t *testing.T) {
@@ -511,6 +537,7 @@ func createTarGzBundle(t *testing.T, cliName string, cliBody []byte, runtimeName
 
 	write(cliName, cliBody)
 	write(runtimeName, runtimeBody)
+	write("codex-acp", []byte("#!/bin/sh\necho codex\n"))
 	require.NoError(t, tarWriter.Close())
 	require.NoError(t, gz.Close())
 	return buf.Bytes()

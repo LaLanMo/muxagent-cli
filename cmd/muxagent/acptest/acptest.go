@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
+	"github.com/LaLanMo/muxagent-cli/internal/codexbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/LaLanMo/muxagent-cli/internal/runtime/acp"
@@ -17,6 +18,7 @@ import (
 func NewCmd() *cobra.Command {
 	var prompt string
 	var cwd string
+	var runtimeID string
 
 	cmd := &cobra.Command{
 		Use:   "acp-test",
@@ -32,26 +34,32 @@ func NewCmd() *cobra.Command {
 					return err
 				}
 			}
-			return run(cmd, prompt, cwd)
+			return run(cmd, prompt, cwd, runtimeID)
 		},
 	}
 
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text to send (default: \"say hello\")")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "Working directory for agent (default: current dir)")
+	cmd.Flags().StringVar(&runtimeID, "runtime", "", "Runtime ID to test (required when multiple runtimes are configured)")
 	return cmd
 }
 
-func run(cmd *cobra.Command, promptText, cwd string) error {
+func run(cmd *cobra.Command, promptText, cwd, requestedRuntime string) error {
 	cfg, err := config.LoadEffective()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	rtSettings, err := cfg.ActiveRuntimeSettings()
+	runtimeID, err := selectRuntime(cfg, requestedRuntime)
+	if err != nil {
+		return err
+	}
+
+	rtSettings, err := cfg.RuntimeSettingsFor(runtimeID)
 	if err != nil {
 		return fmt.Errorf("runtime settings: %w", err)
 	}
-	if cfg.ActiveRuntime == config.RuntimeClaudeCode {
+	if runtimeID == config.RuntimeClaudeCode {
 		resolved, err := acpbin.Resolve(cfg, nil)
 		if err != nil {
 			return fmt.Errorf("resolve Claude Code runtime: %w", err)
@@ -60,6 +68,14 @@ func run(cmd *cobra.Command, promptText, cwd string) error {
 		rtSettings, err = acpbin.InjectClaudeCodeExecutable(rtSettings)
 		if err != nil {
 			return fmt.Errorf("configure Claude Code executable wrapper: %w", err)
+		}
+	} else if runtimeID == config.RuntimeCodex {
+		if !(config.IsRuntimeCommandOverridden(runtimeID) && rtSettings.Command != "") {
+			resolved, err := codexbin.Resolve(cfg, nil)
+			if err != nil {
+				return fmt.Errorf("resolve Codex runtime: %w", err)
+			}
+			rtSettings.Command = resolved
 		}
 	}
 
@@ -102,6 +118,29 @@ func run(cmd *cobra.Command, promptText, cwd string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "[done] stopReason: %s\n", stopReason)
 	return nil
+}
+
+func selectRuntime(cfg config.Config, requestedRuntime string) (config.RuntimeID, error) {
+	if requestedRuntime != "" {
+		id := config.RuntimeID(requestedRuntime)
+		if !config.IsSupportedRuntime(id) {
+			return "", fmt.Errorf("runtime %q is not supported", requestedRuntime)
+		}
+		if _, ok := cfg.Runtimes[id]; !ok {
+			return "", fmt.Errorf("runtime %q is not configured", requestedRuntime)
+		}
+		return id, nil
+	}
+
+	ids := cfg.ConfiguredRuntimeIDs()
+	if len(ids) == 1 {
+		return ids[0], nil
+	}
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		names = append(names, string(id))
+	}
+	return "", fmt.Errorf("multiple runtimes configured; pass --runtime (%s)", strings.Join(names, ", "))
 }
 
 func printEvent(cmd *cobra.Command, ev domain.Event, client *acp.Client, ctx context.Context, sessionID string) {

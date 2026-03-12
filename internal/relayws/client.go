@@ -22,6 +22,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/LaLanMo/muxagent-cli/internal/keyring"
+	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
 	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -43,9 +44,10 @@ var (
 // RuntimeClient is the subset of runtime.Client that the relay needs.
 // Defined here to avoid a circular import with the runtime package.
 type RuntimeClient interface {
-	NewSession(ctx context.Context, cwd string, permissionMode string) (string, []domain.ConfigOption, error)
-	LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) ([]domain.ConfigOption, error)
-	ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error)
+	RuntimeList() []runtimemanager.RuntimeInfo
+	NewSession(ctx context.Context, runtimeID, cwd, permissionMode string) (string, string, []domain.ConfigOption, error)
+	LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, []domain.ConfigOption, error)
+	ResolveSessions(ctx context.Context, runtimeID string, sessionIDs []string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error)
 	Cancel(ctx context.Context, sessionID string) error
 	SetMode(ctx context.Context, sessionID, modeID string) error
@@ -58,7 +60,6 @@ type Client struct {
 	relayURL  string
 	machineID string
 	hostname  string
-	runtimeID string
 
 	creds           *auth.Credentials
 	machineSignPriv ed25519.PrivateKey
@@ -86,7 +87,7 @@ type Client struct {
 }
 
 func NewMachineClient(
-	relayURL, hostname, runtimeID string,
+	relayURL, hostname string,
 	creds *auth.Credentials,
 	machineSignPriv ed25519.PrivateKey,
 	keyringMgr *keyring.Manager,
@@ -107,7 +108,6 @@ func NewMachineClient(
 		relayURL:        relayURL,
 		machineID:       creds.MachineID,
 		hostname:        hostname,
-		runtimeID:       runtimeID,
 		creds:           creds,
 		machineSignPriv: machineSignPriv,
 		keyring:         keyringMgr,
@@ -358,6 +358,8 @@ func (c *Client) handleRPC(connEpoch uint64, enc EncryptedMessage) {
 	var respErr string
 
 	switch payload.Method {
+	case "runtime.list":
+		result, respErr = c.rpcRuntimeList(ctx)
 	case "session.create":
 		result, respErr = c.rpcCreateSession(ctx, payload.Params)
 	case "session.load":
@@ -426,6 +428,15 @@ func stringParam(params map[string]any, key string) string {
 	return ""
 }
 
+func (c *Client) rpcRuntimeList(_ context.Context) (any, string) {
+	if c.runtime == nil {
+		return nil, "runtime not available"
+	}
+	return map[string]any{
+		"runtimes": c.runtime.RuntimeList(),
+	}, ""
+}
+
 func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
@@ -441,6 +452,10 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 	permissionMode := stringParam(params, "permissionMode")
+	requestedRuntime := stringParam(params, "runtime")
+	if requestedRuntime == "" {
+		return nil, "missing runtime"
+	}
 	var useWorktree bool
 	if v, exists := params["useWorktree"]; exists {
 		var ok bool
@@ -479,7 +494,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	sessionID, configOpts, err := c.runtime.NewSession(ctx, actualCWD, permissionMode)
+	sessionID, actualRuntime, configOpts, err := c.runtime.NewSession(ctx, requestedRuntime, actualCWD, permissionMode)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -495,7 +510,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	resp := map[string]any{"sessionId": sessionID, "runtime": c.runtimeID, "cwd": actualCWD}
+	resp := map[string]any{"sessionId": sessionID, "runtime": actualRuntime, "cwd": actualCWD}
 	if len(configOpts) > 0 {
 		resp["configOptions"] = configOpts
 		log.Printf("[relay] session.create response includes %d configOptions", len(configOpts))
@@ -531,7 +546,11 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 
 	permissionMode := stringParam(params, "permissionMode")
 	model := stringParam(params, "model")
-	configOpts, err := c.runtime.LoadSession(ctx, sessionID, cwd, permissionMode, model)
+	requestedRuntime := stringParam(params, "runtime")
+	if requestedRuntime == "" {
+		return nil, "missing runtime"
+	}
+	actualRuntime, configOpts, err := c.runtime.LoadSession(ctx, requestedRuntime, sessionID, cwd, permissionMode, model)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -539,7 +558,7 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = cwd
 	c.sessionCWDMu.Unlock()
-	resp := map[string]any{"ok": true}
+	resp := map[string]any{"ok": true, "runtime": actualRuntime}
 	if len(configOpts) > 0 {
 		resp["configOptions"] = configOpts
 	}
@@ -563,7 +582,12 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 			wanted[id] = struct{}{}
 		}
 	}
-	all, err := c.runtime.ListSessions(ctx, "")
+	runtimeID := stringParam(params, "runtime")
+	targetIDs := make([]string, 0, len(wanted))
+	for id := range wanted {
+		targetIDs = append(targetIDs, id)
+	}
+	all, err := c.runtime.ResolveSessions(ctx, runtimeID, targetIDs)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -944,6 +968,37 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 		results = results[:maxResults]
 	}
 	return map[string]any{"results": results}, ""
+}
+
+func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
+	if c.runtime == nil {
+		return
+	}
+	all, err := c.runtime.ResolveSessions(ctx, "", []string{sessionID})
+	if err != nil {
+		log.Printf("syncSessionStatus: list sessions: %v", err)
+		return
+	}
+	for _, s := range all {
+		if s.SessionID == sessionID {
+			if err := c.SendEvent(domain.Event{
+				Type:      domain.EventSessionStatus,
+				SessionID: sessionID,
+				At:        s.UpdatedAt,
+				Session: &domain.Session{
+					ID:        s.SessionID,
+					Title:     s.Title,
+					Status:    domain.SessionStatusDone,
+					CreatedAt: s.UpdatedAt,
+					UpdatedAt: s.UpdatedAt,
+					Metadata:  map[string]any{"cwd": s.CWD},
+				},
+			}); err != nil && !isExpectedRelayDrop(err) {
+				log.Printf("send session.status event: %v", err)
+			}
+			return
+		}
+	}
 }
 
 // --- Event forwarding ---

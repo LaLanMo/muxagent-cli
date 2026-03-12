@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
+	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -26,11 +27,19 @@ type blockingRuntime struct {
 	unblock     chan struct{}
 }
 
-func (r *blockingRuntime) NewSession(ctx context.Context, cwd string, permissionMode string) (string, []domain.ConfigOption, error) {
-	return "sid", nil, nil
+func (r *blockingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
+	return []runtimemanager.RuntimeInfo{{
+		ID:    "claude-code",
+		Label: "Claude Code",
+		Ready: true,
+	}}
 }
 
-func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) ([]domain.ConfigOption, error) {
+func (r *blockingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, []domain.ConfigOption, error) {
+	return "sid", runtimeID, nil, nil
+}
+
+func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, []domain.ConfigOption, error) {
 	select {
 	case r.loadStarted <- struct{}{}:
 	default:
@@ -38,10 +47,14 @@ func (r *blockingRuntime) LoadSession(ctx context.Context, sessionID, cwd, permi
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return "", nil, ctx.Err()
 	case <-r.unblock:
-		return nil, nil
+		return runtimeID, nil, nil
 	}
+}
+
+func (r *blockingRuntime) ResolveSessions(ctx context.Context, runtimeID string, sessionIDs []string) ([]domain.SessionSummary, error) {
+	return nil, nil
 }
 
 func (r *blockingRuntime) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error) {
@@ -62,10 +75,6 @@ func (r *blockingRuntime) SetConfigOption(ctx context.Context, sessionID, config
 
 func (r *blockingRuntime) ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error {
 	return nil
-}
-
-func (r *blockingRuntime) ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error) {
-	return nil, nil
 }
 
 func (r *blockingRuntime) PendingApprovals() []domain.ApprovalRequest { return nil }
@@ -112,6 +121,7 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 	require.NoError(t, relayConn.WriteJSON(encryptRPC(t, session, "machine-1", "msg-load", "session.load", map[string]any{
 		"sessionId": "sid",
 		"cwd":       "/tmp",
+		"runtime":   "claude-code",
 	})))
 
 	select {
@@ -160,7 +170,7 @@ type listingRuntime struct {
 	sessions []domain.SessionSummary
 }
 
-func (r *listingRuntime) ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error) {
+func (r *listingRuntime) ResolveSessions(ctx context.Context, runtimeID string, sessionIDs []string) ([]domain.SessionSummary, error) {
 	return r.sessions, nil
 }
 
@@ -187,6 +197,24 @@ func (r *promptRuntime) Prompt(ctx context.Context, sessionID string, content []
 	case result := <-r.release:
 		return result.stopReason, result.usage, result.err
 	}
+}
+
+type routingRuntime struct {
+	blockingRuntime
+	runtimes    []runtimemanager.RuntimeInfo
+	lastRuntime string
+}
+
+func (r *routingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
+	if len(r.runtimes) > 0 {
+		return r.runtimes
+	}
+	return r.blockingRuntime.RuntimeList()
+}
+
+func (r *routingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, []domain.ConfigOption, error) {
+	r.lastRuntime = runtimeID
+	return "sid", runtimeID, nil, nil
 }
 
 func TestRunHandlesSessionResolveRPC(t *testing.T) {
@@ -297,6 +325,7 @@ func TestRpcLoadSessionPreservesTrackedStatus(t *testing.T) {
 		_, errStr := client.rpcLoadSession(context.Background(), map[string]any{
 			"sessionId": "sid",
 			"cwd":       "/tmp/project",
+			"runtime":   "claude-code",
 		})
 		require.Empty(t, errStr)
 	}()
@@ -427,6 +456,188 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 	require.True(t, complete)
 	require.Len(t, events, 1)
 	require.Equal(t, domain.EventRunFinished, events[0].Type)
+}
+
+func TestRunHandlesRuntimeListRPC(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverConn := make(chan *websocket.Conn, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		serverConn <- conn
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer clientConn.Close()
+
+	relayConn := <-serverConn
+	defer relayConn.Close()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	rt := &routingRuntime{
+		runtimes: []runtimemanager.RuntimeInfo{
+			{
+				ID:    "claude-code",
+				Label: "Claude Code",
+				Ready: true,
+				ConfigOptions: []domain.ConfigOption{
+					{
+						ID:           "mode",
+						Type:         "select",
+						Category:     "mode",
+						CurrentValue: "default",
+						Options: []domain.ConfigOptionValue{
+							{Value: "default", Name: "Default"},
+						},
+					},
+				},
+			},
+			{
+				ID:    "codex",
+				Label: "Codex",
+				Ready: true,
+				ConfigOptions: []domain.ConfigOption{
+					{
+						ID:           "mode",
+						Type:         "select",
+						Category:     "mode",
+						CurrentValue: "read-only",
+						Options: []domain.ConfigOptionValue{
+							{Value: "read-only", Name: "Read Only"},
+						},
+					},
+				},
+			},
+		},
+	}
+	client := &Client{
+		conn:       clientConn,
+		connEpoch:  1,
+		machineID:  "machine-1",
+		runtime:    rt,
+		session:    session,
+		sessionCWD: map[string]string{},
+	}
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- client.Run(context.Background())
+	}()
+
+	require.NoError(t, relayConn.WriteJSON(encryptRPC(t, session, "machine-1", "msg-runtime-list", "runtime.list", nil)))
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeResponse, msg.Type)
+	require.Equal(t, "msg-runtime-list", msg.MsgID)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, "", payload["error"])
+	result, ok := payload["result"].(map[string]any)
+	require.True(t, ok)
+	runtimes, ok := result["runtimes"].([]any)
+	require.True(t, ok)
+	require.Len(t, runtimes, 2)
+	first, ok := runtimes[0].(map[string]any)
+	require.True(t, ok)
+	configOptions, ok := first["configOptions"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, configOptions)
+
+	require.NoError(t, clientConn.Close())
+	select {
+	case <-runErr:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay run loop did not stop")
+	}
+}
+
+func TestRunPassesRuntimeToSessionCreate(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverConn := make(chan *websocket.Conn, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		serverConn <- conn
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer clientConn.Close()
+
+	relayConn := <-serverConn
+	defer relayConn.Close()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	rt := &routingRuntime{}
+	client := &Client{
+		conn:       clientConn,
+		connEpoch:  1,
+		machineID:  "machine-1",
+		runtime:    rt,
+		session:    session,
+		sessionCWD: map[string]string{},
+	}
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- client.Run(context.Background())
+	}()
+
+	require.NoError(t, relayConn.WriteJSON(encryptRPC(t, session, "machine-1", "msg-create", "session.create", map[string]any{
+		"cwd":     "/tmp",
+		"runtime": "codex",
+	})))
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeResponse, msg.Type)
+	require.Equal(t, "msg-create", msg.MsgID)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, "", payload["error"])
+	result, ok := payload["result"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "codex", result["runtime"])
+	require.Equal(t, "codex", rt.lastRuntime)
+
+	require.NoError(t, clientConn.Close())
+	select {
+	case <-runErr:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay run loop did not stop")
+	}
+}
+
+func TestRpcCreateSessionRequiresRuntime(t *testing.T) {
+	client := &Client{runtime: &routingRuntime{}}
+
+	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
+		"cwd": "/tmp",
+	})
+	require.Nil(t, result)
+	require.Equal(t, "missing runtime", errStr)
+}
+
+func TestRpcLoadSessionRequiresRuntime(t *testing.T) {
+	client := &Client{
+		runtime:    &blockingRuntime{loadStarted: make(chan struct{}, 1), unblock: make(chan struct{})},
+		sessionCWD: map[string]string{},
+	}
+
+	result, errStr := client.rpcLoadSession(context.Background(), map[string]any{
+		"sessionId": "sid",
+		"cwd":       "/tmp",
+	})
+	require.Nil(t, result)
+	require.Equal(t, "missing runtime", errStr)
 }
 
 func TestWriteForSessionErrors(t *testing.T) {
@@ -640,6 +851,7 @@ func TestOldHandleRPCDoesNotWriteToNewConnection(t *testing.T) {
 	require.NoError(t, relayConn1.WriteJSON(encryptRPC(t, oldSession, "machine-1", "msg-load", "session.load", map[string]any{
 		"sessionId": "sid",
 		"cwd":       "/tmp",
+		"runtime":   "claude-code",
 	})))
 
 	select {
@@ -707,6 +919,7 @@ func TestManyHandleRPCDoNotWriteToNewConnection(t *testing.T) {
 			map[string]any{
 				"sessionId": fmt.Sprintf("sid-%d", i),
 				"cwd":       "/tmp",
+				"runtime":   "claude-code",
 			},
 		)))
 	}

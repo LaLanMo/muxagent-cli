@@ -106,7 +106,7 @@ func modeConfigOption(mode string) map[string]any {
 			{"value": "acceptEdits", "name": "Accept Edits"},
 			{"value": "plan", "name": "Plan"},
 			{"value": "dontAsk", "name": "Don't Ask"},
-			{"value": "bypassPermissions", "name": "Bypass Permissions"},
+			{"value": "bypassPermissions", "name": "Skip Perms"},
 		},
 	}
 }

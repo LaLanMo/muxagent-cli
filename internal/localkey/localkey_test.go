@@ -2,6 +2,8 @@ package localkey
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -101,4 +103,33 @@ func TestDecodeMasterKeyWrongSize(t *testing.T) {
 	_, err := decodeMasterKey(shortHex)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "wrong size")
+}
+
+func TestDefaultBackendUsesFileWhenEnvSet(t *testing.T) {
+	t.Setenv(fileBackendEnv, filepath.Join(t.TempDir(), "master.key"))
+
+	backend := defaultBackend()
+	file, ok := backend.(*fileBackend)
+	require.True(t, ok)
+	assert.Equal(t, os.Getenv(fileBackendEnv), file.path)
+}
+
+func TestFileBackendRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "master.key")
+	backend := &fileBackend{path: path}
+
+	require.NoError(t, backend.Set("abcd1234"))
+
+	got, err := backend.Get()
+	require.NoError(t, err)
+	assert.Equal(t, "abcd1234", got)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	require.NoError(t, backend.Delete())
+	_, err = backend.Get()
+	require.Error(t, err)
+	assert.True(t, backend.IsNotFound(err))
 }
