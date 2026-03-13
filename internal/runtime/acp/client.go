@@ -157,6 +157,9 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 			modeApplied = true
 		}
 	}
+	if modeApplied {
+		setConfigOptionCurrentValue(resp.ConfigOptions, "mode", permissionMode)
+	}
 
 	if ev := modeEvent(resp.SessionID, resolveCurrentModeID(permissionMode, modeApplied, resp.Modes, resp.ConfigOptions)); ev != nil {
 		c.emit(*ev)
@@ -218,6 +221,9 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 			modeApplied = true
 		}
 	}
+	if modeApplied {
+		setConfigOptionCurrentValue(loadResp.ConfigOptions, "mode", permissionMode)
+	}
 
 	// Re-apply model if non-default.
 	if model != "" && model != "default" {
@@ -237,12 +243,7 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 
 	// If model was re-applied, override the currentValue in configOptions.
 	if model != "" && model != "default" {
-		for i, opt := range loadResp.ConfigOptions {
-			if opt.Category == "model" {
-				loadResp.ConfigOptions[i].CurrentValue = model
-				break
-			}
-		}
+		setConfigOptionCurrentValue(loadResp.ConfigOptions, "model", model)
 	}
 
 	if ev := configOptionEvent(sessionID, loadResp.ConfigOptions, "model", domain.EventModelChanged); ev != nil {
@@ -1083,6 +1084,18 @@ func configOptionEvent(sessionID string, opts []domain.ConfigOption, category st
 		}
 	}
 	return nil
+}
+
+func setConfigOptionCurrentValue(opts []domain.ConfigOption, category, value string) {
+	if value == "" {
+		return
+	}
+	for i, opt := range opts {
+		if opt.Category == category {
+			opts[i].CurrentValue = value
+			return
+		}
+	}
 }
 
 func resolveCurrentModeID(requestedMode string, requestedApplied bool, modes *sessionModes, opts []domain.ConfigOption) string {

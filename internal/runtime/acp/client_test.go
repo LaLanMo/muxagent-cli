@@ -109,6 +109,15 @@ func findEvent(events []domain.Event, eventType domain.EventType) *domain.Event 
 	return nil
 }
 
+func findCurrentValue(opts []domain.ConfigOption, category string) string {
+	for _, opt := range opts {
+		if opt.Category == category {
+			return opt.CurrentValue
+		}
+	}
+	return ""
+}
+
 func TestClient_InitializeAndNewSession(t *testing.T) {
 	bin := buildMockAgent(t)
 	client := newTestClient(t, bin)
@@ -130,14 +139,33 @@ func TestClient_NewSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
+	sessionID, configOptions, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
 	require.NoError(t, err)
 	assert.Equal(t, "test-session-001", sessionID)
+	assert.Equal(t, "default", findCurrentValue(configOptions, "mode"))
 
 	events := collectEvents(client.Events(), 2*time.Second)
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
 	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
+}
+
+func TestClient_NewSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClient(t, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sessionID, configOptions, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
+	require.NoError(t, err)
+	assert.Equal(t, "test-session-001", sessionID)
+	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(configOptions, "mode"))
+
+	events := collectEvents(client.Events(), 2*time.Second)
+	modeEvent := findEvent(events, domain.EventModeChanged)
+	require.NotNil(t, modeEvent)
+	assert.Equal(t, domain.ModeAcceptEdits, modeEvent.Data["currentModeId"])
 }
 
 func TestClient_PromptStreamsEvents(t *testing.T) {
@@ -377,14 +405,38 @@ func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) 
 		done <- collectEvents(client.Events(), 3*time.Second)
 	}()
 
-	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
+	configOptions, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
 	require.NoError(t, err)
+	assert.Equal(t, "default", findCurrentValue(configOptions, "mode"))
 
 	time.Sleep(200 * time.Millisecond)
 	events := <-done
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
 	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
+}
+
+func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClient(t, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan []domain.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 3*time.Second)
+	}()
+
+	configOptions, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
+	require.NoError(t, err)
+	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(configOptions, "mode"))
+
+	time.Sleep(200 * time.Millisecond)
+	events := <-done
+	modeEvent := findEvent(events, domain.EventModeChanged)
+	require.NotNil(t, modeEvent)
+	assert.Equal(t, domain.ModeAcceptEdits, modeEvent.Data["currentModeId"])
 }
 
 func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {
