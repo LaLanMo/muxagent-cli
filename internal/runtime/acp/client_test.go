@@ -251,11 +251,14 @@ func TestClient_PermissionFlow(t *testing.T) {
 		for ev := range client.Events() {
 			if ev.Type == domain.EventApprovalRequested {
 				require.NotNil(t, ev.Approval)
-				assert.Equal(t, "Bash", ev.Approval.ToolName)
-				assert.Len(t, ev.Approval.Options, 2)
+				require.NotNil(t, ev.Approval.ACP)
+				assert.Equal(t, "Bash", ev.Approval.App.Title)
+				assert.Equal(t, "call-001", ev.Approval.App.ToolCallID)
+				assert.Equal(t, "execute", ev.Approval.App.ToolKind)
+				assert.Len(t, ev.Approval.ACP.Options, 2)
 
 				// Reply with "once"
-				err := client.ReplyPermission(ctx, sessionID, ev.Approval.ID, "once")
+				err := client.ReplyPermission(ctx, sessionID, ev.Approval.RequestID(), "once")
 				assert.NoError(t, err)
 				close(approvalHandled)
 			}

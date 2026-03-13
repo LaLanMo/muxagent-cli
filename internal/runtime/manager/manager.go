@@ -303,10 +303,11 @@ func (m *Manager) ensureRuntime(ctx context.Context, runtimeID string) (runtime.
 	}
 
 	client := acp.NewClient(acp.Config{
-		Command: settings.Command,
-		Args:    settings.Args,
-		CWD:     settings.CWD,
-		Env:     settings.Env,
+		RuntimeID: string(rid),
+		Command:   settings.Command,
+		Args:      settings.Args,
+		CWD:       settings.CWD,
+		Env:       settings.Env,
 	})
 	if err := client.Start(ctx); err != nil {
 		return nil, "", fmt.Errorf("start runtime %q: %w", rid, err)

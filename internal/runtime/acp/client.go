@@ -12,16 +12,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/google/uuid"
 )
 
 // Config holds the configuration for an ACP client.
 type Config struct {
-	Command string
-	Args    []string
-	CWD     string
-	Env     map[string]string
+	RuntimeID string
+	Command   string
+	Args      []string
+	CWD       string
+	Env       map[string]string
 }
 
 // sessionMsgState tracks streamed message IDs for a session when ACP updates
@@ -389,12 +391,7 @@ func (c *Client) ReplyPermission(ctx context.Context, sessionID, requestID, opti
 		return fmt.Errorf("no pending permission request with ID %q", requestID)
 	}
 
-	resp := domain.PermissionResponse{
-		Outcome: domain.PermOutcome{
-			Outcome:  "selected",
-			OptionID: optionID,
-		},
-	}
+	resp := selectedPermissionResponse(optionID)
 	return c.transport.Respond(perm.rpcID, resp)
 }
 
@@ -450,31 +447,15 @@ func (c *Client) handlePermissionRequest(req *IncomingMessage) {
 		return
 	}
 
-	var permReq domain.PermissionRequest
+	var permReq acpprotocol.RequestPermissionRequest
 	if err := json.Unmarshal(req.Params, &permReq); err != nil {
 		log.Printf("[acp] failed to parse permission request: %v", err)
-		_ = c.transport.Respond(*req.ID, domain.PermissionResponse{
-			Outcome: domain.PermOutcome{Outcome: "selected", OptionID: "reject"},
-		})
+		_ = c.transport.Respond(*req.ID, selectedPermissionResponse("reject"))
 		return
 	}
 
-	// Build an approval request for the mobile client
 	requestID := strconv.FormatInt(*req.ID, 10)
-	approval := domain.ApprovalRequest{
-		ID:        requestID,
-		SessionID: permReq.SessionID,
-		CreatedAt: time.Now(),
-		Options:   permReq.Options,
-	}
-
-	if permReq.ToolCall != nil {
-		approval.ToolCallID = permReq.ToolCall.ToolCallID
-		approval.ToolName = permReq.ToolCall.Title
-		approval.Title = permReq.ToolCall.Title
-		approval.Kind = permReq.ToolCall.Kind
-		approval.Input = permReq.ToolCall.RawInput
-	}
+	approval := buildApprovalRequest(requestID, c.cfg.RuntimeID, permReq, time.Now())
 
 	// Store pending permission
 	c.permMu.Lock()
@@ -1031,7 +1012,7 @@ func (c *Client) cancelPendingPermissions(sessionID string) error {
 	c.permMu.Lock()
 	toCancel := make([]*pendingPermission, 0)
 	for id, perm := range c.pendingPerm {
-		if perm.request.SessionID != sessionID {
+		if perm.request.SessionID() != sessionID {
 			continue
 		}
 		toCancel = append(toCancel, perm)
@@ -1041,11 +1022,7 @@ func (c *Client) cancelPendingPermissions(sessionID string) error {
 
 	var firstErr error
 	for _, perm := range toCancel {
-		err := c.transport.Respond(perm.rpcID, domain.PermissionResponse{
-			Outcome: domain.PermOutcome{
-				Outcome: "cancelled",
-			},
-		})
+		err := c.transport.Respond(perm.rpcID, cancelledPermissionResponse())
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}

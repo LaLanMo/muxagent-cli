@@ -785,7 +785,7 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 		Type:      domain.EventApprovalReplied,
 		SessionID: sessionID,
 		At:        time.Now(),
-		Approval:  &domain.ApprovalRequest{ID: requestID, SessionID: sessionID},
+		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: requestID}},
 	}); err != nil && !isExpectedRelayDrop(err) {
 		log.Printf("send approval.replied event: %v", err)
 	}

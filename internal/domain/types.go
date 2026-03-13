@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+)
 
 // --- Session ---
 
@@ -122,18 +126,60 @@ type Message struct {
 // --- Approval ---
 
 type ApprovalRequest struct {
-	ID         string         `json:"id"`
-	SessionID  string         `json:"sessionId"`
-	ToolCallID string         `json:"toolCallId,omitempty"`
-	ToolName   string         `json:"toolName"`
-	Title      string         `json:"title"`
-	Kind       string         `json:"kind,omitempty"`
-	Input      map[string]any `json:"input,omitempty"`
-	Options    []PermOption   `json:"options,omitempty"`
-	CreatedAt  time.Time      `json:"createdAt"`
+	ACP *acpprotocol.RequestPermissionRequest `json:"acp,omitempty"`
+	App ApprovalApp                           `json:"app"`
 }
 
-// --- ACP types ---
+type ApprovalApp struct {
+	RequestID  string           `json:"requestId"`
+	CreatedAt  *time.Time       `json:"createdAt,omitempty"`
+	Runtime    string           `json:"runtime,omitempty"`
+	ToolCallID string           `json:"toolCallId,omitempty"`
+	ToolKind   string           `json:"toolKind,omitempty"`
+	Title      string           `json:"title,omitempty"`
+	BodyText   string           `json:"bodyText,omitempty"`
+	Command    *ApprovalCommand `json:"command,omitempty"`
+	CWD        string           `json:"cwd,omitempty"`
+	Reason     string           `json:"reason,omitempty"`
+	Plan       *ApprovalPlan    `json:"plan,omitempty"`
+}
+
+type ApprovalCommand struct {
+	Argv    []string `json:"argv"`
+	Display string   `json:"display,omitempty"`
+}
+
+type ApprovalPlan struct {
+	Markdown       string                  `json:"markdown,omitempty"`
+	AllowedPrompts []ApprovalAllowedPrompt `json:"allowedPrompts,omitempty"`
+}
+
+type ApprovalAllowedPrompt struct {
+	Prompt string `json:"prompt"`
+}
+
+func (r ApprovalRequest) RequestID() string {
+	return r.App.RequestID
+}
+
+func (r ApprovalRequest) SessionID() string {
+	if r.ACP == nil {
+		return ""
+	}
+	return r.ACP.SessionID
+}
+
+func (r ApprovalRequest) ToolCallID() string {
+	if r.App.ToolCallID != "" {
+		return r.App.ToolCallID
+	}
+	if r.ACP == nil {
+		return ""
+	}
+	return r.ACP.ToolCall.ToolCallID
+}
+
+// --- ACP session/update types ---
 
 // SessionUpdateType is the discriminated union type for ACP session/update notifications.
 type SessionUpdateType string
@@ -162,39 +208,6 @@ type ContentBlock struct {
 }
 
 // PermToolCall describes a tool call in an ACP permission request.
-type PermToolCall struct {
-	ToolCallID string         `json:"toolCallId"`
-	Title      string         `json:"title"`
-	Status     string         `json:"status"`
-	Kind       string         `json:"kind,omitempty"`
-	RawInput   map[string]any `json:"rawInput,omitempty"`
-}
-
-// PermOption describes an available response option in an ACP permission request.
-type PermOption struct {
-	OptionID string `json:"optionId"`
-	Kind     string `json:"kind"`
-	Name     string `json:"name"`
-}
-
-// PermissionRequest is the full ACP permission request from agent to client.
-type PermissionRequest struct {
-	SessionID string        `json:"sessionId"`
-	ToolCall  *PermToolCall `json:"toolCall,omitempty"`
-	Options   []PermOption  `json:"options"`
-}
-
-// PermissionResponse is the ACP permission response from client to agent.
-type PermissionResponse struct {
-	Outcome PermOutcome `json:"outcome"`
-}
-
-// PermOutcome describes the selected permission outcome.
-type PermOutcome struct {
-	Outcome  string `json:"outcome"`
-	OptionID string `json:"optionId,omitempty"`
-}
-
 // --- Events ---
 
 type EventType string
@@ -284,10 +297,10 @@ type ConfigOptionValue struct {
 
 // ConfigOption is an ACP configOptions entry (e.g. model select).
 type ConfigOption struct {
-	ID       string              `json:"id"`
-	Type     string              `json:"type"` // "select"
-	Category string              `json:"category,omitempty"`
-	Label    string              `json:"label,omitempty"`
+	ID           string              `json:"id"`
+	Type         string              `json:"type"` // "select"
+	Category     string              `json:"category,omitempty"`
+	Label        string              `json:"label,omitempty"`
 	CurrentValue string              `json:"currentValue"`
 	Options      []ConfigOptionValue `json:"options,omitempty"`
 }

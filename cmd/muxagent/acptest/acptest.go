@@ -185,13 +185,17 @@ func printEvent(cmd *cobra.Command, ev domain.Event, client *acp.Client, ctx con
 		}
 	case domain.EventApprovalRequested:
 		if ev.Approval != nil {
-			fmt.Fprintf(out, "[event] approval.requested: %s → auto-approving (once)\n", ev.Approval.ToolName)
+			title := ev.Approval.App.Title
+			if title == "" && ev.Approval.ACP != nil && ev.Approval.ACP.ToolCall.Title != nil {
+				title = *ev.Approval.ACP.ToolCall.Title
+			}
+			fmt.Fprintf(out, "[event] approval.requested: %s → auto-approving (once)\n", title)
 			// Auto-approve with "once"
 			optionID := "once"
-			if len(ev.Approval.Options) > 0 {
-				optionID = ev.Approval.Options[0].OptionID
+			if ev.Approval.ACP != nil && len(ev.Approval.ACP.Options) > 0 {
+				optionID = ev.Approval.ACP.Options[0].OptionID
 			}
-			if err := client.ReplyPermission(ctx, sessionID, ev.Approval.ID, optionID); err != nil {
+			if err := client.ReplyPermission(ctx, sessionID, ev.Approval.RequestID(), optionID); err != nil {
 				fmt.Fprintf(out, "[error] reply permission: %v\n", err)
 			}
 		}

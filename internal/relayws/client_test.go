@@ -363,7 +363,7 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 		Type:      domain.EventApprovalRequested,
 		SessionID: "sid",
 		At:        time.Now(),
-		Approval:  &domain.ApprovalRequest{ID: "req-1", SessionID: "sid"},
+		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: "req-1"}},
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
 
