@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/codexbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
@@ -17,10 +18,10 @@ import (
 )
 
 type RuntimeInfo struct {
-	ID            string                `json:"id"`
-	Label         string                `json:"label"`
-	Ready         bool                  `json:"ready"`
-	ConfigOptions []domain.ConfigOption `json:"configOptions,omitempty"`
+	ID            string                            `json:"id"`
+	Label         string                            `json:"label"`
+	Ready         bool                              `json:"ready"`
+	ConfigOptions []acpprotocol.SessionConfigOption `json:"configOptions,omitempty"`
 }
 
 type Manager struct {
@@ -130,20 +131,20 @@ func (m *Manager) NewSession(
 	runtimeID string,
 	cwd string,
 	permissionMode string,
-) (string, string, []domain.ConfigOption, error) {
+) (string, string, acpprotocol.NewSessionResponse, error) {
 	if strings.TrimSpace(runtimeID) == "" {
-		return "", "", nil, fmt.Errorf("missing runtime")
+		return "", "", acpprotocol.NewSessionResponse{}, fmt.Errorf("missing runtime")
 	}
 	client, rid, err := m.ensureRuntime(ctx, runtimeID)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", acpprotocol.NewSessionResponse{}, err
 	}
-	sessionID, configOptions, err := client.NewSession(ctx, cwd, permissionMode)
+	resp, err := client.NewSession(ctx, cwd, permissionMode)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", acpprotocol.NewSessionResponse{}, err
 	}
-	m.setSessionRuntime(sessionID, rid)
-	return sessionID, string(rid), configOptions, nil
+	m.setSessionRuntime(resp.SessionID, rid)
+	return resp.SessionID, string(rid), resp, nil
 }
 
 func (m *Manager) LoadSession(
@@ -153,21 +154,21 @@ func (m *Manager) LoadSession(
 	cwd string,
 	permissionMode string,
 	model string,
-) (string, []domain.ConfigOption, error) {
+) (string, acpprotocol.LoadSessionResponse, error) {
 	rid := m.resolveRuntimeID(sessionID, runtimeID)
 	if rid == "" {
-		return "", nil, fmt.Errorf("missing runtime")
+		return "", acpprotocol.LoadSessionResponse{}, fmt.Errorf("missing runtime")
 	}
 	client, rid, err := m.ensureRuntime(ctx, string(rid))
 	if err != nil {
-		return "", nil, err
+		return "", acpprotocol.LoadSessionResponse{}, err
 	}
-	configOptions, err := client.LoadSession(ctx, sessionID, cwd, permissionMode, model)
+	resp, err := client.LoadSession(ctx, sessionID, cwd, permissionMode, model)
 	if err != nil {
-		return "", nil, err
+		return "", acpprotocol.LoadSessionResponse{}, err
 	}
 	m.setSessionRuntime(sessionID, rid)
-	return string(rid), configOptions, nil
+	return string(rid), resp, nil
 }
 
 func (m *Manager) ResolveSessions(
@@ -430,66 +431,72 @@ func runtimeLabel(id config.RuntimeID) string {
 	}
 }
 
-func runtimeConfigOptions(id config.RuntimeID) []domain.ConfigOption {
+func runtimeConfigOptions(id config.RuntimeID) []acpprotocol.SessionConfigOption {
 	switch id {
 	case config.RuntimeClaudeCode:
-		return []domain.ConfigOption{
+		return []acpprotocol.SessionConfigOption{
 			{
 				ID:           "mode",
+				Name:         "Approval Preset",
 				Type:         "select",
-				Category:     "mode",
+				Category:     stringPtr("mode"),
 				CurrentValue: "bypassPermissions",
-				Options: []domain.ConfigOptionValue{
-					{
-						Value:       "default",
-						Name:        "Default",
-						Description: "Standard behavior, prompts for dangerous operations",
-					},
-					{
-						Value:       "acceptEdits",
-						Name:        "Accept Edits",
-						Description: "Auto-accept file edit operations",
-					},
-					{
-						Value:       "plan",
-						Name:        "Plan",
-						Description: "Planning mode, no actual tool execution",
-					},
-					{
-						Value:       "dontAsk",
-						Name:        "Don't Ask",
-						Description: "Don't prompt for permissions, deny if not pre-approved",
-					},
-					{
-						Value:       "bypassPermissions",
-						Name:        "Skip Perms",
-						Description: "Bypass all permission checks",
+				Options: acpprotocol.SessionConfigSelectOptions{
+					Ungrouped: []acpprotocol.SessionConfigSelectOption{
+						{
+							Value:       "default",
+							Name:        "Default",
+							Description: stringPtr("Standard behavior, prompts for dangerous operations"),
+						},
+						{
+							Value:       "acceptEdits",
+							Name:        "Accept Edits",
+							Description: stringPtr("Auto-accept file edit operations"),
+						},
+						{
+							Value:       "plan",
+							Name:        "Plan",
+							Description: stringPtr("Planning mode, no actual tool execution"),
+						},
+						{
+							Value:       "dontAsk",
+							Name:        "Don't Ask",
+							Description: stringPtr("Don't prompt for permissions, deny if not pre-approved"),
+						},
+						{
+							Value:       "bypassPermissions",
+							Name:        "Skip Perms",
+							Description: stringPtr("Bypass all permission checks"),
+						},
 					},
 				},
 			},
 		}
 	case config.RuntimeCodex:
-		return []domain.ConfigOption{
+		return []acpprotocol.SessionConfigOption{
 			{
 				ID:           "mode",
+				Name:         "Approval Preset",
 				Type:         "select",
-				Category:     "mode",
+				Category:     stringPtr("mode"),
 				CurrentValue: "read-only",
-				Options: []domain.ConfigOptionValue{
-					{
-						Value:       "read-only",
-						Name:        "Read Only",
-						Description: "Codex can read files in the current workspace. Approval is required to edit files or access the internet.",
-					},
-					{
-						Value:       "auto",
-						Name:        "Default",
-						Description: "Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files.",
-					},
-					{
-						Value:       "full-access",
-						Name:        "Full Access",
-						Description: "Codex can edit files outside this workspace and access the internet without asking for approval.",
+				Options: acpprotocol.SessionConfigSelectOptions{
+					Ungrouped: []acpprotocol.SessionConfigSelectOption{
+						{
+							Value:       "read-only",
+							Name:        "Read Only",
+							Description: stringPtr("Codex can read files in the current workspace. Approval is required to edit files or access the internet."),
+						},
+						{
+							Value:       "auto",
+							Name:        "Default",
+							Description: stringPtr("Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files."),
+						},
+						{
+							Value:       "full-access",
+							Name:        "Full Access",
+							Description: stringPtr("Codex can edit files outside this workspace and access the internet without asking for approval."),
+						},
 					},
 				},
 			},
@@ -497,4 +504,8 @@ func runtimeConfigOptions(id config.RuntimeID) []domain.ConfigOption {
 	default:
 		return nil
 	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

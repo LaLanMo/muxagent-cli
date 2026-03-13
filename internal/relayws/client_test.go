@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
 	"github.com/gorilla/websocket"
@@ -35,11 +36,11 @@ func (r *blockingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
 	}}
 }
 
-func (r *blockingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, []domain.ConfigOption, error) {
-	return "sid", runtimeID, nil, nil
+func (r *blockingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, acpprotocol.NewSessionResponse, error) {
+	return "sid", runtimeID, acpprotocol.NewSessionResponse{SessionID: "sid"}, nil
 }
 
-func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, []domain.ConfigOption, error) {
+func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, acpprotocol.LoadSessionResponse, error) {
 	select {
 	case r.loadStarted <- struct{}{}:
 	default:
@@ -47,9 +48,9 @@ func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID,
 
 	select {
 	case <-ctx.Done():
-		return "", nil, ctx.Err()
+		return "", acpprotocol.LoadSessionResponse{}, ctx.Err()
 	case <-r.unblock:
-		return runtimeID, nil, nil
+		return runtimeID, acpprotocol.LoadSessionResponse{}, nil
 	}
 }
 
@@ -154,7 +155,9 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 	require.Equal(t, "", payload["error"])
 	result, ok = payload["result"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, true, result["ok"])
+	app, ok := result["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, app["ok"])
 
 	require.NoError(t, clientConn.Close())
 	select {
@@ -212,9 +215,13 @@ func (r *routingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
 	return r.blockingRuntime.RuntimeList()
 }
 
-func (r *routingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, []domain.ConfigOption, error) {
+func (r *routingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, acpprotocol.NewSessionResponse, error) {
 	r.lastRuntime = runtimeID
-	return "sid", runtimeID, nil, nil
+	return "sid", runtimeID, acpprotocol.NewSessionResponse{SessionID: "sid"}, nil
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func TestRunHandlesSessionResolveRPC(t *testing.T) {
@@ -485,14 +492,17 @@ func TestRunHandlesRuntimeListRPC(t *testing.T) {
 				ID:    "claude-code",
 				Label: "Claude Code",
 				Ready: true,
-				ConfigOptions: []domain.ConfigOption{
+				ConfigOptions: []acpprotocol.SessionConfigOption{
 					{
 						ID:           "mode",
+						Name:         "Approval Preset",
 						Type:         "select",
-						Category:     "mode",
+						Category:     stringPtr("mode"),
 						CurrentValue: "default",
-						Options: []domain.ConfigOptionValue{
-							{Value: "default", Name: "Default"},
+						Options: acpprotocol.SessionConfigSelectOptions{
+							Ungrouped: []acpprotocol.SessionConfigSelectOption{
+								{Value: "default", Name: "Default"},
+							},
 						},
 					},
 				},
@@ -501,14 +511,17 @@ func TestRunHandlesRuntimeListRPC(t *testing.T) {
 				ID:    "codex",
 				Label: "Codex",
 				Ready: true,
-				ConfigOptions: []domain.ConfigOption{
+				ConfigOptions: []acpprotocol.SessionConfigOption{
 					{
 						ID:           "mode",
+						Name:         "Approval Preset",
 						Type:         "select",
-						Category:     "mode",
+						Category:     stringPtr("mode"),
 						CurrentValue: "read-only",
-						Options: []domain.ConfigOptionValue{
-							{Value: "read-only", Name: "Read Only"},
+						Options: acpprotocol.SessionConfigSelectOptions{
+							Ungrouped: []acpprotocol.SessionConfigSelectOption{
+								{Value: "read-only", Name: "Read Only"},
+							},
 						},
 					},
 				},
@@ -605,7 +618,12 @@ func TestRunPassesRuntimeToSessionCreate(t *testing.T) {
 	require.Equal(t, "", payload["error"])
 	result, ok := payload["result"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "codex", result["runtime"])
+	app, ok := result["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "codex", app["runtime"])
+	acp, ok := result["acp"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "sid", acp["sessionId"])
 	require.Equal(t, "codex", rt.lastRuntime)
 
 	require.NoError(t, clientConn.Close())

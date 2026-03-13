@@ -288,23 +288,6 @@ type Event struct {
 	Data        map[string]any    `json:"data,omitempty"`
 }
 
-// ConfigOptionValue is one option within a config select.
-type ConfigOptionValue struct {
-	Value       string `json:"value"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
-// ConfigOption is an ACP configOptions entry (e.g. model select).
-type ConfigOption struct {
-	ID           string              `json:"id"`
-	Type         string              `json:"type"` // "select"
-	Category     string              `json:"category,omitempty"`
-	Label        string              `json:"label,omitempty"`
-	CurrentValue string              `json:"currentValue"`
-	Options      []ConfigOptionValue `json:"options,omitempty"`
-}
-
 type ConnectionState string
 
 const (

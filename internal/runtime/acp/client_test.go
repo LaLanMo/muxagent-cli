@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/LaLanMo/muxagent-cli/internal/runtime/acp"
 	"github.com/stretchr/testify/assert"
@@ -109,9 +110,20 @@ func findEvent(events []domain.Event, eventType domain.EventType) *domain.Event 
 	return nil
 }
 
-func findCurrentValue(opts []domain.ConfigOption, category string) string {
+func eventAppField(event *domain.Event, key string) any {
+	if event == nil || event.Data == nil {
+		return nil
+	}
+	app, ok := event.Data["app"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return app[key]
+}
+
+func findCurrentValue(opts []acpprotocol.SessionConfigOption, category string) string {
 	for _, opt := range opts {
-		if opt.Category == category {
+		if opt.Category != nil && *opt.Category == category {
 			return opt.CurrentValue
 		}
 	}
@@ -125,9 +137,9 @@ func TestClient_InitializeAndNewSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
-	assert.Equal(t, "test-session-001", sessionID)
+	assert.Equal(t, "test-session-001", resp.SessionID)
 }
 
 func TestClient_NewSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
@@ -139,15 +151,15 @@ func TestClient_NewSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, configOptions, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
+	resp, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
 	require.NoError(t, err)
-	assert.Equal(t, "test-session-001", sessionID)
-	assert.Equal(t, "default", findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, "test-session-001", resp.SessionID)
+	assert.Equal(t, "default", findCurrentValue(resp.ConfigOptions, "mode"))
 
 	events := collectEvents(client.Events(), 2*time.Second)
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
+	assert.Equal(t, "default", eventAppField(modeEvent, "currentModeId"))
 }
 
 func TestClient_NewSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
@@ -157,15 +169,15 @@ func TestClient_NewSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, configOptions, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
+	resp, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
 	require.NoError(t, err)
-	assert.Equal(t, "test-session-001", sessionID)
-	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, "test-session-001", resp.SessionID)
+	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(resp.ConfigOptions, "mode"))
 
 	events := collectEvents(client.Events(), 2*time.Second)
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, domain.ModeAcceptEdits, modeEvent.Data["currentModeId"])
+	assert.Equal(t, domain.ModeAcceptEdits, eventAppField(modeEvent, "currentModeId"))
 }
 
 func TestClient_PromptStreamsEvents(t *testing.T) {
@@ -175,7 +187,7 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Start collecting events before prompt
@@ -184,7 +196,7 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 		done <- collectEvents(client.Events(), 5*time.Second)
 	}()
 
-	stopReason, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+	stopReason, _, err := client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 		{Type: "text", Text: "hello"},
 	})
 	require.NoError(t, err)
@@ -242,7 +254,7 @@ func TestClient_PermissionFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Monitor events for approval request
@@ -258,7 +270,7 @@ func TestClient_PermissionFlow(t *testing.T) {
 				assert.Len(t, ev.Approval.ACP.Options, 2)
 
 				// Reply with "once"
-				err := client.ReplyPermission(ctx, sessionID, ev.Approval.RequestID(), "once")
+				err := client.ReplyPermission(ctx, resp.SessionID, ev.Approval.RequestID(), "once")
 				assert.NoError(t, err)
 				close(approvalHandled)
 			}
@@ -266,7 +278,7 @@ func TestClient_PermissionFlow(t *testing.T) {
 	}()
 
 	// Send prompt that triggers permission flow
-	stopReason, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+	stopReason, _, err := client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 		{Type: "text", Text: "test permission flow"},
 	})
 	require.NoError(t, err)
@@ -288,11 +300,11 @@ func TestClient_Cancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Cancel should not hang or error (it's a notification)
-	err = client.Cancel(ctx, sessionID)
+	err = client.Cancel(ctx, resp.SessionID)
 	assert.NoError(t, err)
 }
 
@@ -303,14 +315,14 @@ func TestClient_CancelRespondsPendingPermission(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	approvalSeen := make(chan struct{}, 1)
 	promptDone := make(chan error, 1)
 
 	go func() {
-		_, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+		_, _, err := client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 			{Type: "text", Text: "trigger permission"},
 		})
 		promptDone <- err
@@ -331,7 +343,7 @@ func TestClient_CancelRespondsPendingPermission(t *testing.T) {
 		t.Fatal("approval request was never received")
 	}
 
-	err = client.Cancel(ctx, sessionID)
+	err = client.Cancel(ctx, resp.SessionID)
 	require.NoError(t, err)
 
 	select {
@@ -408,15 +420,15 @@ func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) 
 		done <- collectEvents(client.Events(), 3*time.Second)
 	}()
 
-	configOptions, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
+	resp, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
 	require.NoError(t, err)
-	assert.Equal(t, "default", findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, "default", findCurrentValue(resp.ConfigOptions, "mode"))
 
 	time.Sleep(200 * time.Millisecond)
 	events := <-done
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
+	assert.Equal(t, "default", eventAppField(modeEvent, "currentModeId"))
 }
 
 func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
@@ -431,15 +443,15 @@ func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T)
 		done <- collectEvents(client.Events(), 3*time.Second)
 	}()
 
-	configOptions, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
+	resp, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
 	require.NoError(t, err)
-	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(resp.ConfigOptions, "mode"))
 
 	time.Sleep(200 * time.Millisecond)
 	events := <-done
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, domain.ModeAcceptEdits, modeEvent.Data["currentModeId"])
+	assert.Equal(t, domain.ModeAcceptEdits, eventAppField(modeEvent, "currentModeId"))
 }
 
 func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {
@@ -458,18 +470,18 @@ func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() { client.Stop() })
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
-	assert.NotEmpty(t, sessionID)
+	assert.NotEmpty(t, resp.SessionID)
 }
 
 func TestClient_RequiresAbsoluteCWD(t *testing.T) {
 	client := acp.NewClient(acp.Config{})
 
-	_, _, err := client.NewSession(context.Background(), "", "")
+	_, err := client.NewSession(context.Background(), "", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 
-	_, _, err = client.NewSession(context.Background(), "relative/path", "")
+	_, err = client.NewSession(context.Background(), "relative/path", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 
 	_, err = client.LoadSession(context.Background(), "sid", "", "", "")

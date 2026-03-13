@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 )
 
@@ -11,8 +12,8 @@ type Client interface {
 	Start(ctx context.Context) error
 	Stop() error
 
-	NewSession(ctx context.Context, cwd string, permissionMode string) (string, []domain.ConfigOption, error)
-	LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) ([]domain.ConfigOption, error)
+	NewSession(ctx context.Context, cwd string, permissionMode string) (acpprotocol.NewSessionResponse, error)
+	LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) (acpprotocol.LoadSessionResponse, error)
 	ListSessions(ctx context.Context, cwd string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error)
 	Cancel(ctx context.Context, sessionID string) error

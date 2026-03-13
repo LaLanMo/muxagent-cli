@@ -96,10 +96,11 @@ func run(cmd *cobra.Command, promptText, cwd, requestedRuntime string) error {
 	defer client.Stop()
 	fmt.Fprintln(cmd.OutOrStdout(), "[init] ACP initialized")
 
-	sessionID, _, err := client.NewSession(ctx, cwd, "")
+	sessionResp, err := client.NewSession(ctx, cwd, "")
 	if err != nil {
 		return fmt.Errorf("new session: %w", err)
 	}
+	sessionID := sessionResp.SessionID
 	fmt.Fprintf(cmd.OutOrStdout(), "[session] created: %s\n", sessionID)
 
 	// Consume events in background

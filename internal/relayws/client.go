@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
@@ -45,8 +46,8 @@ var (
 // Defined here to avoid a circular import with the runtime package.
 type RuntimeClient interface {
 	RuntimeList() []runtimemanager.RuntimeInfo
-	NewSession(ctx context.Context, runtimeID, cwd, permissionMode string) (string, string, []domain.ConfigOption, error)
-	LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, []domain.ConfigOption, error)
+	NewSession(ctx context.Context, runtimeID, cwd, permissionMode string) (string, string, acpprotocol.NewSessionResponse, error)
+	LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, acpprotocol.LoadSessionResponse, error)
 	ResolveSessions(ctx context.Context, runtimeID string, sessionIDs []string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error)
 	Cancel(ctx context.Context, sessionID string) error
@@ -494,7 +495,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	sessionID, actualRuntime, configOpts, err := c.runtime.NewSession(ctx, requestedRuntime, actualCWD, permissionMode)
+	sessionID, actualRuntime, acpResp, err := c.runtime.NewSession(ctx, requestedRuntime, actualCWD, permissionMode)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -510,10 +511,15 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	resp := map[string]any{"sessionId": sessionID, "runtime": actualRuntime, "cwd": actualCWD}
-	if len(configOpts) > 0 {
-		resp["configOptions"] = configOpts
-		log.Printf("[relay] session.create response includes %d configOptions", len(configOpts))
+	resp := map[string]any{
+		"app": map[string]any{
+			"runtime": actualRuntime,
+			"cwd":     actualCWD,
+		},
+		"acp": acpResp,
+	}
+	if len(acpResp.ConfigOptions) > 0 {
+		log.Printf("[relay] session.create response includes %d configOptions", len(acpResp.ConfigOptions))
 	} else {
 		log.Printf("[relay] session.create response has NO configOptions")
 	}
@@ -550,7 +556,7 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	if requestedRuntime == "" {
 		return nil, "missing runtime"
 	}
-	actualRuntime, configOpts, err := c.runtime.LoadSession(ctx, requestedRuntime, sessionID, cwd, permissionMode, model)
+	actualRuntime, acpResp, err := c.runtime.LoadSession(ctx, requestedRuntime, sessionID, cwd, permissionMode, model)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -558,9 +564,12 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = cwd
 	c.sessionCWDMu.Unlock()
-	resp := map[string]any{"ok": true, "runtime": actualRuntime}
-	if len(configOpts) > 0 {
-		resp["configOptions"] = configOpts
+	resp := map[string]any{
+		"app": map[string]any{
+			"ok":      true,
+			"runtime": actualRuntime,
+		},
+		"acp": acpResp,
 	}
 	return resp, ""
 }
