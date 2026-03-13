@@ -671,19 +671,11 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 }
 
 func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
-	var update struct {
-		ToolCallID string         `json:"toolCallId"`
-		Title      string         `json:"title"`
-		Kind       string         `json:"kind"`
-		Status     string         `json:"status"`
-		RawInput   map[string]any `json:"rawInput"`
-		Locations  []struct {
-			Path string `json:"path"`
-			Line *int   `json:"line"`
-		} `json:"locations"`
-		Meta map[string]any `json:"_meta"`
-	}
+	var update acpprotocol.ToolCallUpdate
 	if err := json.Unmarshal(raw, &update); err != nil {
+		return
+	}
+	if update.ToolCallID == "" || update.Title == nil || *update.Title == "" {
 		return
 	}
 	c.msgMu.Lock()
@@ -701,7 +693,8 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 
 	var locations []domain.ToolLocation
 	for _, loc := range update.Locations {
-		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: loc.Line})
+		line := intPtrFromUint32(loc.Line)
+		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: line})
 	}
 
 	c.emit(domain.Event{
@@ -712,38 +705,25 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 			PartID:    partID,
 			MessageID: msgID,
 			CallID:    update.ToolCallID,
-			Name:      update.Title,
-			Kind:      update.Kind,
-			Title:     update.Title,
+			Name:      *update.Title,
+			Kind:      stringPtrValue(update.Kind),
+			Title:     *update.Title,
 			Status:    domain.ToolStatusPending,
-			Input:     update.RawInput,
-			Metadata:  update.Meta,
+			Input:     rawInputMap(update.RawInput),
+			Metadata:  mapFromMeta(update.Meta),
 			Locations: locations,
 		},
 	})
 }
 
 func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
-	var update struct {
-		ToolCallID string          `json:"toolCallId"`
-		Status     string          `json:"status"`
-		Kind       string          `json:"kind"`
-		Title      string          `json:"title"`
-		RawInput   map[string]any  `json:"rawInput"`
-		RawOutput  json.RawMessage `json:"rawOutput"`
-		Content    json.RawMessage `json:"content"`
-		Locations  []struct {
-			Path string `json:"path"`
-			Line *int   `json:"line"`
-		} `json:"locations"`
-		Meta map[string]any `json:"_meta"`
-	}
+	var update acpprotocol.ToolCallUpdate
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
 
 	// Skip updates that carry no actionable fields (e.g. only _meta).
-	if update.Status == "" && update.Title == "" && update.RawInput == nil {
+	if update.Status == nil && update.Title == nil && len(update.RawInput) == 0 {
 		return
 	}
 
@@ -759,24 +739,25 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 
 	var locations []domain.ToolLocation
 	for _, loc := range update.Locations {
-		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: loc.Line})
+		line := intPtrFromUint32(loc.Line)
+		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: line})
 	}
 
 	toolEvent := domain.ToolEvent{
 		PartID:    partID,
 		MessageID: msgID,
 		CallID:    update.ToolCallID,
-		Name:      update.Title,
-		Kind:      update.Kind,
-		Title:     update.Title,
-		Input:     update.RawInput,
-		Metadata:  update.Meta,
+		Name:      stringValue(update.Title),
+		Kind:      stringPtrValue(update.Kind),
+		Title:     stringValue(update.Title),
+		Input:     rawInputMap(update.RawInput),
+		Metadata:  mapFromMeta(update.Meta),
 		Locations: locations,
 	}
 
 	var eventType domain.EventType
 
-	switch update.Status {
+	switch toolCallStatusValue(update.Status) {
 	case "in_progress":
 		eventType = domain.EventToolUpdated
 		toolEvent.Status = domain.ToolStatusInProgress
@@ -786,15 +767,15 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		// rawOutput can be a string or an object — handle both.
 		toolEvent.Output = extractRawOutput(update.RawOutput)
 		if toolEvent.Output == "" {
-			toolEvent.Output = extractTextFromContent(update.Content)
+			toolEvent.Output = extractTextFromContent(rawJSONFromMessages(update.Content))
 		}
-		toolEvent.Diffs = extractDiffsFromContent(update.Content)
+		toolEvent.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
 	case "failed":
 		eventType = domain.EventToolFailed
 		toolEvent.Status = domain.ToolStatusFailed
 		toolEvent.Error = extractRawOutput(update.RawOutput)
 		if toolEvent.Error == "" {
-			toolEvent.Error = extractTextFromContent(update.Content)
+			toolEvent.Error = extractTextFromContent(rawJSONFromMessages(update.Content))
 		}
 	default:
 		eventType = domain.EventToolUpdated
@@ -807,6 +788,64 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		At:        time.Now(),
 		Tool:      &toolEvent,
 	})
+}
+
+func rawInputMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil
+	}
+	return input
+}
+
+func mapFromMeta(meta acpprotocol.Meta) map[string]any {
+	if len(meta) == 0 {
+		return nil
+	}
+	return map[string]any(meta)
+}
+
+func stringPtrValue(value *acpprotocol.ToolKind) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func toolCallStatusValue(value *acpprotocol.ToolCallStatus) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
+}
+
+func intPtrFromUint32(value *uint32) *int {
+	if value == nil {
+		return nil
+	}
+	v := int(*value)
+	return &v
+}
+
+func rawJSONFromMessages(items []json.RawMessage) json.RawMessage {
+	if len(items) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 // extractRawOutput handles rawOutput that may be a JSON string or an object
