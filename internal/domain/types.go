@@ -214,7 +214,6 @@ type EventType string
 
 const (
 	EventMessageDelta      EventType = "message.delta"
-	EventMessageFinal      EventType = "message.final"
 	EventToolStarted       EventType = "tool.started"
 	EventToolUpdated       EventType = "tool.updated"
 	EventToolCompleted     EventType = "tool.completed"
@@ -225,7 +224,6 @@ const (
 	EventSessionStatus     EventType = "session.status"
 	EventRunFailed         EventType = "run.failed"
 	EventRunFinished       EventType = "run.finished"
-	EventConnectionState   EventType = "connection.state"
 	EventPlanUpdated       EventType = "plan.updated"
 	EventModeChanged       EventType = "mode.changed"
 	EventModelChanged      EventType = "model.changed"
@@ -346,28 +344,48 @@ type SessionStatusEvent struct {
 	App SessionStatusEventApp `json:"app"`
 }
 
-type Event struct {
-	Type      EventType `json:"type"`
-	SessionID string    `json:"sessionId,omitempty"`
-	Seq       uint64    `json:"seq"`
-	At        time.Time `json:"at"`
-
-	MessagePart *MessagePartEvent   `json:"messagePart,omitempty"`
-	Message     *Message            `json:"message,omitempty"`
-	Tool        *ToolEvent          `json:"tool,omitempty"`
-	Approval    *ApprovalRequest    `json:"approval,omitempty"`
-	Plan        *PlanEvent          `json:"plan,omitempty"`
-	Usage       *UsageEvent         `json:"usage,omitempty"`
-	RunFinished *RunFinishedEvent   `json:"runFinished,omitempty"`
-	RunFailed   *RunFailedEvent     `json:"runFailed,omitempty"`
-	SessionInfo *SessionStatusEvent `json:"sessionStatus,omitempty"`
-	Data        map[string]any      `json:"data,omitempty"`
+type ModeChangedEventApp struct {
+	CurrentModeID string `json:"currentModeId"`
 }
 
-type ConnectionState string
+type ModeChangedEvent struct {
+	ACPCurrentMode  *acpprotocol.CurrentModeUpdate  `json:"-"`
+	ACPConfigOption *acpprotocol.ConfigOptionUpdate `json:"-"`
+	App             ModeChangedEventApp             `json:"app"`
+}
 
-const (
-	ConnectionConnected    ConnectionState = "connected"
-	ConnectionDisconnected ConnectionState = "disconnected"
-	ConnectionReconnecting ConnectionState = "reconnecting"
-)
+type SessionConfigValue struct {
+	Value       string  `json:"value"`
+	Name        string  `json:"name"`
+	Description *string `json:"description,omitempty"`
+}
+
+type ConfigChangedEventApp struct {
+	ConfigID     string               `json:"configId"`
+	CurrentValue string               `json:"currentValue"`
+	Category     string               `json:"category,omitempty"`
+	Values       []SessionConfigValue `json:"values,omitempty"`
+}
+
+type ConfigChangedEvent struct {
+	ACP *acpprotocol.ConfigOptionUpdate `json:"-"`
+	App ConfigChangedEventApp           `json:"app"`
+}
+
+type Event struct {
+	Type      EventType
+	SessionID string
+	Seq       uint64
+	At        time.Time
+
+	MessagePart   *MessagePartEvent
+	Tool          *ToolEvent
+	Approval      *ApprovalRequest
+	Plan          *PlanEvent
+	Usage         *UsageEvent
+	RunFinished   *RunFinishedEvent
+	RunFailed     *RunFailedEvent
+	SessionInfo   *SessionStatusEvent
+	ModeChanged   *ModeChangedEvent
+	ConfigChanged *ConfigChangedEvent
+}

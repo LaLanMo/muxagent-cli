@@ -122,15 +122,11 @@ func findToolEvent(events []domain.Event, eventType domain.EventType, match func
 	return nil
 }
 
-func eventAppField(event *domain.Event, key string) any {
-	if event == nil || event.Data == nil {
-		return nil
+func eventCurrentModeID(event *domain.Event) string {
+	if event == nil || event.ModeChanged == nil {
+		return ""
 	}
-	app, ok := event.Data["app"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	return app[key]
+	return event.ModeChanged.App.CurrentModeID
 }
 
 func findCurrentValue(opts []acpprotocol.SessionConfigOption, category string) string {
@@ -171,7 +167,7 @@ func TestClient_NewSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
 	events := collectEvents(client.Events(), 2*time.Second)
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, "default", eventAppField(modeEvent, "currentModeId"))
+	assert.Equal(t, "default", eventCurrentModeID(modeEvent))
 }
 
 func TestClient_NewSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
@@ -189,7 +185,7 @@ func TestClient_NewSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) 
 	events := collectEvents(client.Events(), 2*time.Second)
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, domain.ModeAcceptEdits, eventAppField(modeEvent, "currentModeId"))
+	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))
 }
 
 func TestClient_PromptStreamsEvents(t *testing.T) {
@@ -476,7 +472,7 @@ func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) 
 	events := <-done
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, "default", eventAppField(modeEvent, "currentModeId"))
+	assert.Equal(t, "default", eventCurrentModeID(modeEvent))
 }
 
 func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
@@ -499,7 +495,7 @@ func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T)
 	events := <-done
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, domain.ModeAcceptEdits, eventAppField(modeEvent, "currentModeId"))
+	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))
 }
 
 func TestClient_SetModeEmitsWrappedModeChangedEvent(t *testing.T) {
@@ -515,7 +511,7 @@ func TestClient_SetModeEmitsWrappedModeChangedEvent(t *testing.T) {
 	events := collectEvents(client.Events(), 2*time.Second)
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, domain.ModeAcceptEdits, eventAppField(modeEvent, "currentModeId"))
+	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))
 }
 
 func TestClient_LoadSessionReturnsParseErrorForInvalidACPResponse(t *testing.T) {

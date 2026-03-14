@@ -1033,32 +1033,40 @@ func configOptionEvent(
 			continue
 		}
 		flattened := opt.Options.Flatten()
-		values := make([]map[string]any, 0, len(flattened))
+		values := make([]domain.SessionConfigValue, 0, len(flattened))
 		for _, v := range flattened {
-			m := map[string]any{"value": v.Value, "name": v.Name}
-			if v.Description != nil && *v.Description != "" {
-				m["description"] = *v.Description
-			}
-			values = append(values, m)
-		}
-		appData := map[string]any{
-			"configId":     opt.ID,
-			"category":     category,
-			"currentValue": opt.CurrentValue,
-			"values":       values,
-		}
-		data := map[string]any{"app": appData}
-		if acpUpdate != nil {
-			data["acp"] = acpUpdate
+			values = append(values, domain.SessionConfigValue{
+				Value:       v.Value,
+				Name:        v.Name,
+				Description: v.Description,
+			})
 		}
 		if eventType == domain.EventModeChanged {
-			data["app"] = map[string]any{"currentModeId": opt.CurrentValue}
+			return &domain.Event{
+				Type:      eventType,
+				SessionID: sessionID,
+				At:        time.Now(),
+				ModeChanged: &domain.ModeChangedEvent{
+					ACPConfigOption: acpUpdate,
+					App: domain.ModeChangedEventApp{
+						CurrentModeID: opt.CurrentValue,
+					},
+				},
+			}
 		}
 		return &domain.Event{
 			Type:      eventType,
 			SessionID: sessionID,
 			At:        time.Now(),
-			Data:      data,
+			ConfigChanged: &domain.ConfigChangedEvent{
+				ACP: acpUpdate,
+				App: domain.ConfigChangedEventApp{
+					ConfigID:     opt.ID,
+					Category:     category,
+					CurrentValue: opt.CurrentValue,
+					Values:       values,
+				},
+			},
 		}
 	}
 	return nil
@@ -1105,15 +1113,16 @@ func modeEvent(
 	if modeID == "" {
 		return nil
 	}
-	data := map[string]any{"app": map[string]any{"currentModeId": modeID}}
-	if acpUpdate != nil {
-		data["acp"] = acpUpdate
-	}
 	return &domain.Event{
 		Type:      domain.EventModeChanged,
 		SessionID: sessionID,
 		At:        time.Now(),
-		Data:      data,
+		ModeChanged: &domain.ModeChangedEvent{
+			ACPCurrentMode: acpUpdate,
+			App: domain.ModeChangedEventApp{
+				CurrentModeID: modeID,
+			},
+		},
 	}
 }
 

@@ -517,52 +517,93 @@ func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
 	require.Equal(t, "runtime failed", errorPayload["message"])
 }
 
-func TestSyncSessionStatusUsesSessionStatusEnvelope(t *testing.T) {
+func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
 	clientConn, relayConn, cleanup := newWSPair(t)
 	defer cleanup()
 
 	var key [32]byte
 	key[0] = 1
 	session := newSession("machine-1", key, 1)
-	updatedAt := time.Now().UTC().Truncate(time.Second)
 	client := &Client{
 		conn:      clientConn,
 		connEpoch: 1,
 		machineID: "machine-1",
 		session:   session,
-		runtime: &listingRuntime{
-			sessions: []domain.SessionSummary{
-				{
-					SessionID: "sid",
-					CWD:       "/tmp/project",
-					Title:     "Title",
-					UpdatedAt: updatedAt,
-				},
-			},
-		},
-		sessionStatus: map[string]domain.SessionStatus{},
 	}
 
-	client.syncSessionStatus(context.Background(), "sid", "/tmp/project")
+	err := client.SendEvent(domain.Event{
+		Type:      domain.EventModeChanged,
+		SessionID: "sid",
+		At:        time.Now(),
+		ModeChanged: &domain.ModeChangedEvent{
+			App: domain.ModeChangedEventApp{CurrentModeID: "read-only"},
+		},
+	})
+	require.NoError(t, err)
 
 	msg := readEncryptedMessage(t, relayConn)
 	require.Equal(t, MessageTypeEvent, msg.Type)
 
 	payload := decryptResponse(t, session, msg)
-	require.Equal(t, string(domain.EventSessionStatus), payload["type"])
-	_, hasTopLevelSession := payload["session"]
-	require.False(t, hasTopLevelSession)
+	require.Equal(t, string(domain.EventModeChanged), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasData := payload["data"]
+	require.False(t, hasData)
 
-	sessionStatus, ok := payload["sessionStatus"].(map[string]any)
+	modeChanged, ok := payload["modeChanged"].(map[string]any)
 	require.True(t, ok)
-	app, ok := sessionStatus["app"].(map[string]any)
+	app, ok := modeChanged["app"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "sid", app["id"])
-	require.Equal(t, "Title", app["title"])
-	require.Equal(t, string(domain.SessionStatusDone), app["status"])
-	metadata, ok := app["metadata"].(map[string]any)
+	require.Equal(t, "read-only", app["currentModeId"])
+}
+
+func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(domain.Event{
+		Type:      domain.EventModelChanged,
+		SessionID: "sid",
+		At:        time.Now(),
+		ConfigChanged: &domain.ConfigChangedEvent{
+			App: domain.ConfigChangedEventApp{
+				ConfigID:     "model",
+				Category:     "model",
+				CurrentValue: "gpt-5.4",
+				Values: []domain.SessionConfigValue{{
+					Value: "gpt-5.4",
+					Name:  "gpt-5.4",
+				}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(domain.EventModelChanged), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasData := payload["data"]
+	require.False(t, hasData)
+
+	configChanged, ok := payload["configChanged"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "/tmp/project", metadata["cwd"])
+	app, ok := configChanged["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "model", app["configId"])
+	require.Equal(t, "gpt-5.4", app["currentValue"])
 }
 
 func TestRunHandlesRuntimeListRPC(t *testing.T) {

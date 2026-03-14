@@ -988,39 +988,6 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 	return map[string]any{"results": results}, ""
 }
 
-func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
-	if c.runtime == nil {
-		return
-	}
-	all, err := c.runtime.ResolveSessions(ctx, "", []string{sessionID})
-	if err != nil {
-		log.Printf("syncSessionStatus: list sessions: %v", err)
-		return
-	}
-	for _, s := range all {
-		if s.SessionID == sessionID {
-			if err := c.SendEvent(domain.Event{
-				Type:      domain.EventSessionStatus,
-				SessionID: sessionID,
-				At:        s.UpdatedAt,
-				SessionInfo: &domain.SessionStatusEvent{
-					App: domain.SessionStatusEventApp{
-						ID:        s.SessionID,
-						Title:     s.Title,
-						Status:    domain.SessionStatusDone,
-						CreatedAt: s.UpdatedAt,
-						UpdatedAt: s.UpdatedAt,
-						Metadata:  map[string]any{"cwd": s.CWD},
-					},
-				},
-			}); err != nil && !isExpectedRelayDrop(err) {
-				log.Printf("send session.status event: %v", err)
-			}
-			return
-		}
-	}
-}
-
 // --- Event forwarding ---
 
 // SendEvent encrypts a domain event and sends it to the connected client via WS.
@@ -1042,7 +1009,7 @@ func (c *Client) SendEvent(event domain.Event) error {
 	}
 
 	msgID := uuid.New().String()
-	body, err := json.Marshal(event)
+	body, err := marshalEvent(event)
 	if err != nil {
 		return err
 	}
