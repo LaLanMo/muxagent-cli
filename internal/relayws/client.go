@@ -696,19 +696,21 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 			}
 			return
 		}
-		data := map[string]any{"stopReason": stopReason}
+		runFinished := domain.RunFinishedEventApp{StopReason: stopReason}
 		if usage != nil {
-			data["totalTokens"] = usage.TotalTokens
-			data["inputTokens"] = usage.InputTokens
-			data["outputTokens"] = usage.OutputTokens
-			data["cachedReadTokens"] = usage.CachedReadTokens
-			data["cachedWriteTokens"] = usage.CachedWriteTokens
+			runFinished.TotalTokens = usage.TotalTokens
+			runFinished.InputTokens = usage.InputTokens
+			runFinished.OutputTokens = usage.OutputTokens
+			runFinished.CachedReadTokens = usage.CachedReadTokens
+			runFinished.CachedWriteTokens = usage.CachedWriteTokens
 		}
 		if evErr := c.SendEvent(domain.Event{
 			Type:      domain.EventRunFinished,
 			SessionID: sessionID,
 			At:        now,
-			Data:      data,
+			RunFinished: &domain.RunFinishedEvent{
+				App: runFinished,
+			},
 		}); evErr != nil && !isExpectedRelayDrop(evErr) {
 			log.Printf("send run.finished event: %v", evErr)
 		}

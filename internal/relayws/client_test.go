@@ -385,7 +385,9 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 		Type:      domain.EventRunFinished,
 		SessionID: "sid",
 		At:        time.Now(),
-		Data:      map[string]any{"stopReason": "end_turn"},
+		RunFinished: &domain.RunFinishedEvent{
+			App: domain.RunFinishedEventApp{StopReason: "end_turn"},
+		},
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
 
@@ -463,6 +465,8 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 	require.True(t, complete)
 	require.Len(t, events, 1)
 	require.Equal(t, domain.EventRunFinished, events[0].Type)
+	require.NotNil(t, events[0].RunFinished)
+	require.Equal(t, "end_turn", events[0].RunFinished.App.StopReason)
 }
 
 func TestRunHandlesRuntimeListRPC(t *testing.T) {

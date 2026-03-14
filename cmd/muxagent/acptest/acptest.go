@@ -149,7 +149,7 @@ func printEvent(cmd *cobra.Command, ev domain.Event, client *acp.Client, ctx con
 	switch ev.Type {
 	case domain.EventMessageDelta:
 		if ev.MessagePart != nil {
-			text := ev.MessagePart.Delta
+			text := ev.MessagePart.App.Delta
 			if len(text) > 80 {
 				text = text[:80] + "..."
 			}
@@ -157,7 +157,7 @@ func printEvent(cmd *cobra.Command, ev domain.Event, client *acp.Client, ctx con
 		}
 	case domain.EventReasoning:
 		if ev.MessagePart != nil {
-			text := ev.MessagePart.Delta
+			text := ev.MessagePart.App.Delta
 			if len(text) > 80 {
 				text = text[:80] + "..."
 			}

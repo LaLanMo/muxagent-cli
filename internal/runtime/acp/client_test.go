@@ -234,9 +234,10 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 	for _, ev := range events {
 		if ev.Type == domain.EventMessageDelta {
 			require.NotNil(t, ev.MessagePart)
-			assert.NotEmpty(t, ev.MessagePart.MessageID)
-			assert.NotEmpty(t, ev.MessagePart.PartID)
-			assert.Equal(t, domain.MessageRoleAgent, ev.MessagePart.Role)
+			require.NotNil(t, ev.MessagePart.ACP)
+			assert.NotEmpty(t, ev.MessagePart.App.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.App.PartID)
+			assert.Equal(t, domain.MessageRoleAgent, ev.MessagePart.App.Role)
 		}
 		if ev.Type == domain.EventToolStarted {
 			require.NotNil(t, ev.Tool)
@@ -254,10 +255,11 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 		}
 		if ev.Type == domain.EventReasoning {
 			require.NotNil(t, ev.MessagePart)
-			assert.NotEmpty(t, ev.MessagePart.MessageID)
-			assert.NotEmpty(t, ev.MessagePart.PartID)
-			assert.Equal(t, "reasoning", ev.MessagePart.PartType)
-			assert.Contains(t, ev.MessagePart.Delta, "thinking")
+			require.NotNil(t, ev.MessagePart.ACP)
+			assert.NotEmpty(t, ev.MessagePart.App.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.App.PartID)
+			assert.Equal(t, "reasoning", ev.MessagePart.App.PartType)
+			assert.Contains(t, ev.MessagePart.App.Delta, "thinking")
 		}
 	}
 }
@@ -435,10 +437,10 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	var roleMap = map[domain.MessageRole]int{}
 	for _, ev := range events {
 		if ev.Type == domain.EventMessageDelta && ev.MessagePart != nil {
-			messageParts = append(messageParts, ev.MessagePart.Delta)
-			assert.NotEmpty(t, ev.MessagePart.MessageID)
-			assert.NotEmpty(t, ev.MessagePart.PartID)
-			roleMap[ev.MessagePart.Role]++
+			messageParts = append(messageParts, ev.MessagePart.App.Delta)
+			assert.NotEmpty(t, ev.MessagePart.App.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.App.PartID)
+			roleMap[ev.MessagePart.App.Role]++
 		}
 		if (ev.Type == domain.EventToolStarted || ev.Type == domain.EventToolCompleted) && ev.Tool != nil {
 			assert.NotEmpty(t, ev.Tool.App.MessageID)

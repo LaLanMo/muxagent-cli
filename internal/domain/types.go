@@ -232,13 +232,18 @@ const (
 	EventUsageUpdate       EventType = "usage.update"
 )
 
-type MessagePartEvent struct {
+type MessagePartEventApp struct {
 	PartID    string      `json:"partId"`
 	MessageID string      `json:"messageId"`
 	Role      MessageRole `json:"role,omitempty"`
 	Delta     string      `json:"delta"`
 	PartType  string      `json:"partType"`
 	FullText  string      `json:"fullText"`
+}
+
+type MessagePartEvent struct {
+	ACP *acpprotocol.ContentChunk `json:"acp,omitempty"`
+	App MessagePartEventApp       `json:"app"`
 }
 
 type ToolDiff struct {
@@ -300,6 +305,19 @@ type UsageEvent struct {
 	App UsageEventApp            `json:"app"`
 }
 
+type RunFinishedEventApp struct {
+	StopReason        string `json:"stopReason"`
+	InputTokens       int64  `json:"inputTokens,omitempty"`
+	OutputTokens      int64  `json:"outputTokens,omitempty"`
+	CachedReadTokens  int64  `json:"cachedReadTokens,omitempty"`
+	CachedWriteTokens int64  `json:"cachedWriteTokens,omitempty"`
+	TotalTokens       int64  `json:"totalTokens,omitempty"`
+}
+
+type RunFinishedEvent struct {
+	App RunFinishedEventApp `json:"app"`
+}
+
 type SessionError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -317,6 +335,7 @@ type Event struct {
 	Approval    *ApprovalRequest  `json:"approval,omitempty"`
 	Plan        *PlanEvent        `json:"plan,omitempty"`
 	Usage       *UsageEvent       `json:"usage,omitempty"`
+	RunFinished *RunFinishedEvent `json:"runFinished,omitempty"`
 	Session     *Session          `json:"session,omitempty"`
 	Error       *SessionError     `json:"error,omitempty"`
 	Data        map[string]any    `json:"data,omitempty"`

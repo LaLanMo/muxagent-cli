@@ -525,14 +525,7 @@ func (c *Client) handleSessionUpdate(params json.RawMessage) {
 }
 
 func (c *Client) handleAgentMessageChunk(sessionID string, raw json.RawMessage) {
-	var update struct {
-		MessageID string `json:"messageId"`
-		PartID    string `json:"partId"`
-		Content   struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var update acpprotocol.ContentChunk
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
@@ -541,7 +534,47 @@ func (c *Client) handleAgentMessageChunk(sessionID string, raw json.RawMessage) 
 	// A new assistant chunk closes the previous user chunk grouping.
 	state.userMsgID = ""
 	state.userPartID = ""
-	msgID := update.MessageID
+	msgID := ""
+	if update.MessageID != nil {
+		msgID = *update.MessageID
+	}
+	if msgID == "" {
+		if state.agentMsgID == "" {
+			state.agentMsgID = uuid.NewString()
+		}
+		msgID = state.agentMsgID
+	} else {
+		if state.agentMsgID != msgID {
+			state.agentPartID = ""
+		}
+		state.agentMsgID = msgID
+	}
+	if state.agentPartID == "" {
+		state.agentPartID = uuid.NewString()
+	}
+	partID := state.agentPartID
+	c.msgMu.Unlock()
+
+	c.emit(messagePartEvent(domain.EventMessageDelta, sessionID, &update, domain.MessagePartEventApp{
+		MessageID: msgID,
+		PartID:    partID,
+		Role:      domain.MessageRoleAgent,
+		Delta:     contentChunkDisplayText(update.Content),
+		PartType:  "text",
+	}))
+}
+
+func (c *Client) handleAgentThoughtChunk(sessionID string, raw json.RawMessage) {
+	var update acpprotocol.ContentChunk
+	if err := json.Unmarshal(raw, &update); err != nil {
+		return
+	}
+	c.msgMu.Lock()
+	state := c.ensureSessionMsgStateLocked(sessionID)
+	msgID := ""
+	if update.MessageID != nil {
+		msgID = *update.MessageID
+	}
 	if msgID == "" {
 		if state.agentMsgID == "" {
 			state.agentMsgID = uuid.NewString()
@@ -550,106 +583,50 @@ func (c *Client) handleAgentMessageChunk(sessionID string, raw json.RawMessage) 
 	} else {
 		state.agentMsgID = msgID
 	}
-	partID := update.PartID
-	if partID == "" {
-		if state.agentPartID == "" {
-			state.agentPartID = uuid.NewString()
-		}
-		partID = state.agentPartID
-	} else {
-		state.agentPartID = partID
-	}
-	c.msgMu.Unlock()
-
-	c.emit(domain.Event{
-		Type:      domain.EventMessageDelta,
-		SessionID: sessionID,
-		At:        time.Now(),
-		MessagePart: &domain.MessagePartEvent{
-			MessageID: msgID,
-			PartID:    partID,
-			Role:      domain.MessageRoleAgent,
-			Delta:     update.Content.Text,
-			PartType:  "text",
-		},
-	})
-}
-
-func (c *Client) handleAgentThoughtChunk(sessionID string, raw json.RawMessage) {
-	var update struct {
-		Content struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &update); err != nil {
-		return
-	}
-	c.msgMu.Lock()
-	state := c.ensureSessionMsgStateLocked(sessionID)
 	if state.agentMsgID == "" {
 		state.agentMsgID = uuid.NewString()
 	}
-	msgID := state.agentMsgID
 	// Clear agentPartID so any text chunk after a thought chunk creates
 	// a new message part instead of appending to pre-thought text.
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	c.emit(domain.Event{
-		Type:      domain.EventReasoning,
-		SessionID: sessionID,
-		At:        time.Now(),
-		MessagePart: &domain.MessagePartEvent{
-			MessageID: msgID,
-			PartID:    uuid.NewString(),
-			Role:      domain.MessageRoleAgent,
-			Delta:     update.Content.Text,
-			PartType:  "reasoning",
-		},
-	})
+	c.emit(messagePartEvent(domain.EventReasoning, sessionID, &update, domain.MessagePartEventApp{
+		MessageID: msgID,
+		PartID:    uuid.NewString(),
+		Role:      domain.MessageRoleAgent,
+		Delta:     contentChunkDisplayText(update.Content),
+		PartType:  "reasoning",
+	}))
 }
 
 func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
-	var update struct {
-		MessageID string `json:"messageId"`
-		PartID    string `json:"partId"`
-		Content   struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var update acpprotocol.ContentChunk
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
 
-	// For image content during session replay, emit a placeholder instead of
-	// sending the full base64 data back to the mobile client.
-	delta := update.Content.Text
-	if update.Content.Type == "image" {
-		delta = "[Image]"
-	}
-
 	c.msgMu.Lock()
 	state := c.ensureSessionMsgStateLocked(sessionID)
-	msgID := update.MessageID
-	partID := update.PartID
+	msgID := ""
+	if update.MessageID != nil {
+		msgID = *update.MessageID
+	}
 	if msgID == "" {
 		if state.userMsgID == "" {
 			state.userMsgID = uuid.NewString()
 		}
 		msgID = state.userMsgID
 	} else {
+		if state.userMsgID != msgID {
+			state.userPartID = ""
+		}
 		state.userMsgID = msgID
 	}
-	if partID == "" {
-		if state.userPartID == "" {
-			state.userPartID = uuid.NewString()
-		}
-		partID = state.userPartID
-	} else {
-		state.userPartID = partID
+	if state.userPartID == "" {
+		state.userPartID = uuid.NewString()
 	}
+	partID := state.userPartID
 	state.userMsgID = msgID
 	state.userPartID = partID
 	// A new user message marks the next assistant response boundary.
@@ -657,18 +634,13 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	c.emit(domain.Event{
-		Type:      domain.EventMessageDelta,
-		SessionID: sessionID,
-		At:        time.Now(),
-		MessagePart: &domain.MessagePartEvent{
-			MessageID: msgID,
-			PartID:    partID,
-			Role:      domain.MessageRoleUser,
-			Delta:     delta,
-			PartType:  "text",
-		},
-	})
+	c.emit(messagePartEvent(domain.EventMessageDelta, sessionID, &update, domain.MessagePartEventApp{
+		MessageID: msgID,
+		PartID:    partID,
+		Role:      domain.MessageRoleUser,
+		Delta:     contentChunkDisplayText(update.Content),
+		PartType:  "text",
+	}))
 }
 
 func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
