@@ -690,7 +690,14 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 				Type:      domain.EventRunFailed,
 				SessionID: sessionID,
 				At:        now,
-				Error:     &domain.SessionError{Code: "prompt_error", Message: err.Error()},
+				RunFailed: &domain.RunFailedEvent{
+					App: domain.RunFailedEventApp{
+						Error: domain.SessionError{
+							Code:    "prompt_error",
+							Message: err.Error(),
+						},
+					},
+				},
 			}); evErr != nil && !isExpectedRelayDrop(evErr) {
 				log.Printf("send run.failed event: %v", evErr)
 			}
@@ -996,13 +1003,15 @@ func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
 				Type:      domain.EventSessionStatus,
 				SessionID: sessionID,
 				At:        s.UpdatedAt,
-				Session: &domain.Session{
-					ID:        s.SessionID,
-					Title:     s.Title,
-					Status:    domain.SessionStatusDone,
-					CreatedAt: s.UpdatedAt,
-					UpdatedAt: s.UpdatedAt,
-					Metadata:  map[string]any{"cwd": s.CWD},
+				SessionInfo: &domain.SessionStatusEvent{
+					App: domain.SessionStatusEventApp{
+						ID:        s.SessionID,
+						Title:     s.Title,
+						Status:    domain.SessionStatusDone,
+						CreatedAt: s.UpdatedAt,
+						UpdatedAt: s.UpdatedAt,
+						Metadata:  map[string]any{"cwd": s.CWD},
+					},
 				},
 			}); err != nil && !isExpectedRelayDrop(err) {
 				log.Printf("send session.status event: %v", err)
@@ -1069,8 +1078,8 @@ func (c *Client) applyEventStatus(event domain.Event) {
 	case domain.EventRunFailed:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusError)
 	case domain.EventSessionStatus:
-		if event.Session != nil {
-			c.setSessionStatus(event.SessionID, event.Session.Status)
+		if event.SessionInfo != nil {
+			c.setSessionStatus(event.SessionID, event.SessionInfo.App.Status)
 		}
 	}
 }

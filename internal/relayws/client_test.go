@@ -469,6 +469,102 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 	require.Equal(t, "end_turn", events[0].RunFinished.App.StopReason)
 }
 
+func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(domain.Event{
+		Type:      domain.EventRunFailed,
+		SessionID: "sid",
+		At:        time.Now(),
+		RunFailed: &domain.RunFailedEvent{
+			App: domain.RunFailedEventApp{
+				Error: domain.SessionError{
+					Code:    "prompt_error",
+					Message: "runtime failed",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(domain.EventRunFailed), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasTopLevelError := payload["error"]
+	require.False(t, hasTopLevelError)
+
+	runFailed, ok := payload["runFailed"].(map[string]any)
+	require.True(t, ok)
+	app, ok := runFailed["app"].(map[string]any)
+	require.True(t, ok)
+	errorPayload, ok := app["error"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "prompt_error", errorPayload["code"])
+	require.Equal(t, "runtime failed", errorPayload["message"])
+}
+
+func TestSyncSessionStatusUsesSessionStatusEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	updatedAt := time.Now().UTC().Truncate(time.Second)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+		runtime: &listingRuntime{
+			sessions: []domain.SessionSummary{
+				{
+					SessionID: "sid",
+					CWD:       "/tmp/project",
+					Title:     "Title",
+					UpdatedAt: updatedAt,
+				},
+			},
+		},
+		sessionStatus: map[string]domain.SessionStatus{},
+	}
+
+	client.syncSessionStatus(context.Background(), "sid", "/tmp/project")
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(domain.EventSessionStatus), payload["type"])
+	_, hasTopLevelSession := payload["session"]
+	require.False(t, hasTopLevelSession)
+
+	sessionStatus, ok := payload["sessionStatus"].(map[string]any)
+	require.True(t, ok)
+	app, ok := sessionStatus["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "sid", app["id"])
+	require.Equal(t, "Title", app["title"])
+	require.Equal(t, string(domain.SessionStatusDone), app["status"])
+	metadata, ok := app["metadata"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "/tmp/project", metadata["cwd"])
+}
+
 func TestRunHandlesRuntimeListRPC(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverConn := make(chan *websocket.Conn, 1)

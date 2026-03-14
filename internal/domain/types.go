@@ -323,22 +323,45 @@ type SessionError struct {
 	Message string `json:"message"`
 }
 
+type RunFailedEventApp struct {
+	Error SessionError `json:"error"`
+}
+
+type RunFailedEvent struct {
+	App RunFailedEventApp `json:"app"`
+}
+
+type SessionStatusEventApp struct {
+	ID        string         `json:"id"`
+	Title     string         `json:"title"`
+	Status    SessionStatus  `json:"status"`
+	Model     string         `json:"model,omitempty"`
+	Cost      *CostInfo      `json:"cost,omitempty"`
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type SessionStatusEvent struct {
+	App SessionStatusEventApp `json:"app"`
+}
+
 type Event struct {
 	Type      EventType `json:"type"`
 	SessionID string    `json:"sessionId,omitempty"`
 	Seq       uint64    `json:"seq"`
 	At        time.Time `json:"at"`
 
-	MessagePart *MessagePartEvent `json:"messagePart,omitempty"`
-	Message     *Message          `json:"message,omitempty"`
-	Tool        *ToolEvent        `json:"tool,omitempty"`
-	Approval    *ApprovalRequest  `json:"approval,omitempty"`
-	Plan        *PlanEvent        `json:"plan,omitempty"`
-	Usage       *UsageEvent       `json:"usage,omitempty"`
-	RunFinished *RunFinishedEvent `json:"runFinished,omitempty"`
-	Session     *Session          `json:"session,omitempty"`
-	Error       *SessionError     `json:"error,omitempty"`
-	Data        map[string]any    `json:"data,omitempty"`
+	MessagePart *MessagePartEvent   `json:"messagePart,omitempty"`
+	Message     *Message            `json:"message,omitempty"`
+	Tool        *ToolEvent          `json:"tool,omitempty"`
+	Approval    *ApprovalRequest    `json:"approval,omitempty"`
+	Plan        *PlanEvent          `json:"plan,omitempty"`
+	Usage       *UsageEvent         `json:"usage,omitempty"`
+	RunFinished *RunFinishedEvent   `json:"runFinished,omitempty"`
+	RunFailed   *RunFailedEvent     `json:"runFailed,omitempty"`
+	SessionInfo *SessionStatusEvent `json:"sessionStatus,omitempty"`
+	Data        map[string]any      `json:"data,omitempty"`
 }
 
 type ConnectionState string
