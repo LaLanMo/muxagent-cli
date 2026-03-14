@@ -3,6 +3,7 @@ package acpprotocol
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 )
 
 type SessionMode struct {
@@ -101,6 +102,122 @@ type SessionConfigOption struct {
 	Type         string                     `json:"type"`
 	CurrentValue string                     `json:"currentValue"`
 	Options      SessionConfigSelectOptions `json:"options"`
+}
+
+type PlanEntryPriority string
+
+const (
+	PlanEntryPriorityHigh   PlanEntryPriority = "high"
+	PlanEntryPriorityMedium PlanEntryPriority = "medium"
+	PlanEntryPriorityLow    PlanEntryPriority = "low"
+)
+
+type PlanEntryStatus string
+
+const (
+	PlanEntryStatusPending    PlanEntryStatus = "pending"
+	PlanEntryStatusInProgress PlanEntryStatus = "in_progress"
+	PlanEntryStatusCompleted  PlanEntryStatus = "completed"
+)
+
+type PlanEntry struct {
+	Meta     Meta              `json:"_meta,omitempty"`
+	Content  string            `json:"content"`
+	Priority PlanEntryPriority `json:"priority"`
+	Status   PlanEntryStatus   `json:"status"`
+}
+
+func (e *PlanEntry) UnmarshalJSON(data []byte) error {
+	type alias PlanEntry
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"content", "priority", "status"} {
+		if _, ok := fields[key]; !ok {
+			return fmt.Errorf("missing required field %q", key)
+		}
+	}
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*e = PlanEntry(decoded)
+	return nil
+}
+
+type PlanUpdate struct {
+	Meta          Meta        `json:"_meta,omitempty"`
+	SessionUpdate string      `json:"sessionUpdate,omitempty"`
+	Entries       []PlanEntry `json:"entries"`
+}
+
+func (p *PlanUpdate) UnmarshalJSON(data []byte) error {
+	type alias PlanUpdate
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["entries"]; !ok {
+		return fmt.Errorf("missing required field %q", "entries")
+	}
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = PlanUpdate(decoded)
+	return nil
+}
+
+type UsageCost struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
+func (c *UsageCost) UnmarshalJSON(data []byte) error {
+	type alias UsageCost
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"amount", "currency"} {
+		if _, ok := fields[key]; !ok {
+			return fmt.Errorf("missing required field %q", key)
+		}
+	}
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = UsageCost(decoded)
+	return nil
+}
+
+type UsageUpdate struct {
+	Meta          Meta       `json:"_meta,omitempty"`
+	SessionUpdate string     `json:"sessionUpdate,omitempty"`
+	Used          int64      `json:"used"`
+	Size          int64      `json:"size"`
+	Cost          *UsageCost `json:"cost,omitempty"`
+}
+
+func (u *UsageUpdate) UnmarshalJSON(data []byte) error {
+	type alias UsageUpdate
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"used", "size"} {
+		if _, ok := fields[key]; !ok {
+			return fmt.Errorf("missing required field %q", key)
+		}
+	}
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*u = UsageUpdate(decoded)
+	return nil
 }
 
 type ConfigOptionUpdate struct {

@@ -165,24 +165,24 @@ func printEvent(cmd *cobra.Command, ev domain.Event, client *acp.Client, ctx con
 		}
 	case domain.EventToolStarted:
 		if ev.Tool != nil {
-			fmt.Fprintf(out, "[event] tool.started: %s (call: %s)\n", ev.Tool.Name, ev.Tool.CallID)
+			fmt.Fprintf(out, "[event] tool.started: %s (call: %s)\n", ev.Tool.App.Name, ev.Tool.App.CallID)
 		}
 	case domain.EventToolUpdated:
 		if ev.Tool != nil {
-			fmt.Fprintf(out, "[event] tool.updated: %s → %s\n", ev.Tool.Name, ev.Tool.Status)
+			fmt.Fprintf(out, "[event] tool.updated: %s → %s\n", ev.Tool.App.Name, ev.Tool.App.Status)
 		}
 	case domain.EventToolCompleted:
 		if ev.Tool != nil {
-			output := ev.Tool.Output
+			output := ev.Tool.App.Output
 			if len(output) > 80 {
 				output = output[:80] + "..."
 			}
 			output = strings.ReplaceAll(output, "\n", "\\n")
-			fmt.Fprintf(out, "[event] tool.completed: %s → %q\n", ev.Tool.Name, output)
+			fmt.Fprintf(out, "[event] tool.completed: %s → %q\n", ev.Tool.App.Name, output)
 		}
 	case domain.EventToolFailed:
 		if ev.Tool != nil {
-			fmt.Fprintf(out, "[event] tool.failed: %s → %q\n", ev.Tool.Name, ev.Tool.Error)
+			fmt.Fprintf(out, "[event] tool.failed: %s → %q\n", ev.Tool.App.Name, ev.Tool.App.Error)
 		}
 	case domain.EventApprovalRequested:
 		if ev.Approval != nil {

@@ -110,6 +110,18 @@ func findEvent(events []domain.Event, eventType domain.EventType) *domain.Event 
 	return nil
 }
 
+func findToolEvent(events []domain.Event, eventType domain.EventType, match func(*domain.ToolEvent) bool) *domain.Event {
+	for i := range events {
+		if events[i].Type != eventType || events[i].Tool == nil {
+			continue
+		}
+		if match == nil || match(events[i].Tool) {
+			return &events[i]
+		}
+	}
+	return nil
+}
+
 func eventAppField(event *domain.Event, key string) any {
 	if event == nil || event.Data == nil {
 		return nil
@@ -228,14 +240,17 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 		}
 		if ev.Type == domain.EventToolStarted {
 			require.NotNil(t, ev.Tool)
-			assert.Equal(t, "call-001", ev.Tool.CallID)
-			assert.Equal(t, "Bash", ev.Tool.Name)
-			assert.NotEmpty(t, ev.Tool.MessageID)
+			require.NotNil(t, ev.Tool.ACP)
+			assert.Equal(t, "call-001", ev.Tool.App.CallID)
+			assert.Equal(t, "Bash", ev.Tool.App.Name)
+			assert.Equal(t, "call-001", ev.Tool.ACP.ToolCallID)
+			assert.NotEmpty(t, ev.Tool.App.MessageID)
 		}
 		if ev.Type == domain.EventToolCompleted {
 			require.NotNil(t, ev.Tool)
-			assert.Equal(t, "file1.go\nfile2.go", ev.Tool.Output)
-			assert.NotEmpty(t, ev.Tool.MessageID)
+			require.NotNil(t, ev.Tool.ACP)
+			assert.Equal(t, "file1.go\nfile2.go", ev.Tool.App.Output)
+			assert.NotEmpty(t, ev.Tool.App.MessageID)
 		}
 		if ev.Type == domain.EventReasoning {
 			require.NotNil(t, ev.MessagePart)
@@ -245,6 +260,37 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 			assert.Contains(t, ev.MessagePart.Delta, "thinking")
 		}
 	}
+}
+
+func TestClient_PromptStreamsLocationsOnlyToolUpdate(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_LOCATIONS_ONLY_TOOL_UPDATE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.NewSession(ctx, "/tmp", "")
+	require.NoError(t, err)
+
+	done := make(chan []domain.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 5*time.Second)
+	}()
+
+	_, _, err = client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
+		{Type: "text", Text: "show location update"},
+	})
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	events := <-done
+	locationUpdate := findToolEvent(events, domain.EventToolUpdated, func(tool *domain.ToolEvent) bool {
+		return len(tool.App.Locations) == 1 && tool.App.Locations[0].Path == "/tmp/output.txt"
+	})
+	require.NotNil(t, locationUpdate)
+	assert.Equal(t, 7, *locationUpdate.Tool.App.Locations[0].Line)
 }
 
 func TestClient_PermissionFlow(t *testing.T) {
@@ -395,7 +441,7 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 			roleMap[ev.MessagePart.Role]++
 		}
 		if (ev.Type == domain.EventToolStarted || ev.Type == domain.EventToolCompleted) && ev.Tool != nil {
-			assert.NotEmpty(t, ev.Tool.MessageID)
+			assert.NotEmpty(t, ev.Tool.App.MessageID)
 		}
 	}
 	assert.GreaterOrEqual(t, roleMap[domain.MessageRoleUser], 1, "expected replayed user message chunk")
@@ -452,6 +498,48 @@ func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T)
 	modeEvent := findEvent(events, domain.EventModeChanged)
 	require.NotNil(t, modeEvent)
 	assert.Equal(t, domain.ModeAcceptEdits, eventAppField(modeEvent, "currentModeId"))
+}
+
+func TestClient_SetModeEmitsWrappedModeChangedEvent(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClient(t, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.SetMode(ctx, "test-session-001", domain.ModeAcceptEdits)
+	require.NoError(t, err)
+
+	events := collectEvents(client.Events(), 2*time.Second)
+	modeEvent := findEvent(events, domain.EventModeChanged)
+	require.NotNil(t, modeEvent)
+	assert.Equal(t, domain.ModeAcceptEdits, eventAppField(modeEvent, "currentModeId"))
+}
+
+func TestClient_LoadSessionReturnsParseErrorForInvalidACPResponse(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_INVALID_LOAD_RESPONSE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
+	require.ErrorContains(t, err, "parse session/load result")
+}
+
+func TestClient_SetConfigOptionReturnsParseErrorForInvalidACPResponse(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_INVALID_SET_CONFIG_RESPONSE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.SetConfigOption(ctx, "test-session-001", "model", "opus")
+	require.ErrorContains(t, err, "parse session/set_config_option result")
 }
 
 func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {

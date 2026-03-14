@@ -202,7 +202,9 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 
 	var loadResp acpprotocol.LoadSessionResponse
 	if loadResult != nil {
-		_ = json.Unmarshal(loadResult, &loadResp)
+		if err := json.Unmarshal(loadResult, &loadResp); err != nil {
+			return acpprotocol.LoadSessionResponse{}, fmt.Errorf("parse session/load result: %w", err)
+		}
 	}
 
 	// Re-apply permission mode if requested and different from default.
@@ -339,12 +341,9 @@ func (c *Client) SetMode(ctx context.Context, sessionID, modeID string) error {
 	if err != nil {
 		return fmt.Errorf("session/set_mode: %w", err)
 	}
-	c.emit(domain.Event{
-		Type:      domain.EventModeChanged,
-		SessionID: sessionID,
-		At:        time.Now(),
-		Data:      map[string]any{"currentModeId": modeID},
-	})
+	if ev := modeEvent(sessionID, modeID, nil); ev != nil {
+		c.emit(*ev)
+	}
 	return nil
 }
 
@@ -363,7 +362,9 @@ func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value
 	// Parse response configOptions and emit events.
 	var resp acpprotocol.SetSessionConfigOptionResponse
 	if result != nil {
-		_ = json.Unmarshal(result, &resp)
+		if err := json.Unmarshal(result, &resp); err != nil {
+			return fmt.Errorf("parse session/set_config_option result: %w", err)
+		}
 	}
 	if ev := configOptionEvent(sessionID, resp.ConfigOptions, "model", domain.EventModelChanged, nil); ev != nil {
 		c.emit(*ev)
@@ -702,16 +703,19 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 		SessionID: sessionID,
 		At:        time.Now(),
 		Tool: &domain.ToolEvent{
-			PartID:    partID,
-			MessageID: msgID,
-			CallID:    update.ToolCallID,
-			Name:      *update.Title,
-			Kind:      stringPtrValue(update.Kind),
-			Title:     *update.Title,
-			Status:    domain.ToolStatusPending,
-			Input:     rawInputMap(update.RawInput),
-			Metadata:  mapFromMeta(update.Meta),
-			Locations: locations,
+			ACP: &update,
+			App: domain.ToolEventApp{
+				PartID:    partID,
+				MessageID: msgID,
+				CallID:    update.ToolCallID,
+				Name:      *update.Title,
+				Kind:      stringPtrValue(update.Kind),
+				Title:     *update.Title,
+				Status:    domain.ToolStatusPending,
+				Input:     rawInputMap(update.RawInput),
+				Metadata:  mapFromMeta(update.Meta),
+				Locations: locations,
+			},
 		},
 	})
 }
@@ -723,7 +727,13 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	}
 
 	// Skip updates that carry no actionable fields (e.g. only _meta).
-	if update.Status == nil && update.Title == nil && len(update.RawInput) == 0 {
+	if update.Status == nil &&
+		update.Title == nil &&
+		update.Kind == nil &&
+		update.Content == nil &&
+		update.Locations == nil &&
+		len(update.RawInput) == 0 &&
+		len(update.RawOutput) == 0 {
 		return
 	}
 
@@ -744,15 +754,18 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	}
 
 	toolEvent := domain.ToolEvent{
-		PartID:    partID,
-		MessageID: msgID,
-		CallID:    update.ToolCallID,
-		Name:      stringValue(update.Title),
-		Kind:      stringPtrValue(update.Kind),
-		Title:     stringValue(update.Title),
-		Input:     rawInputMap(update.RawInput),
-		Metadata:  mapFromMeta(update.Meta),
-		Locations: locations,
+		ACP: &update,
+		App: domain.ToolEventApp{
+			PartID:    partID,
+			MessageID: msgID,
+			CallID:    update.ToolCallID,
+			Name:      stringValue(update.Title),
+			Kind:      stringPtrValue(update.Kind),
+			Title:     stringValue(update.Title),
+			Input:     rawInputMap(update.RawInput),
+			Metadata:  mapFromMeta(update.Meta),
+			Locations: locations,
+		},
 	}
 
 	var eventType domain.EventType
@@ -760,26 +773,26 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	switch toolCallStatusValue(update.Status) {
 	case "in_progress":
 		eventType = domain.EventToolUpdated
-		toolEvent.Status = domain.ToolStatusInProgress
+		toolEvent.App.Status = domain.ToolStatusInProgress
 	case "completed":
 		eventType = domain.EventToolCompleted
-		toolEvent.Status = domain.ToolStatusCompleted
+		toolEvent.App.Status = domain.ToolStatusCompleted
 		// rawOutput can be a string or an object — handle both.
-		toolEvent.Output = extractRawOutput(update.RawOutput)
-		if toolEvent.Output == "" {
-			toolEvent.Output = extractTextFromContent(rawJSONFromMessages(update.Content))
+		toolEvent.App.Output = extractRawOutput(update.RawOutput)
+		if toolEvent.App.Output == "" {
+			toolEvent.App.Output = extractTextFromContent(rawJSONFromMessages(update.Content))
 		}
-		toolEvent.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
+		toolEvent.App.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
 	case "failed":
 		eventType = domain.EventToolFailed
-		toolEvent.Status = domain.ToolStatusFailed
-		toolEvent.Error = extractRawOutput(update.RawOutput)
-		if toolEvent.Error == "" {
-			toolEvent.Error = extractTextFromContent(rawJSONFromMessages(update.Content))
+		toolEvent.App.Status = domain.ToolStatusFailed
+		toolEvent.App.Error = extractRawOutput(update.RawOutput)
+		if toolEvent.App.Error == "" {
+			toolEvent.App.Error = extractTextFromContent(rawJSONFromMessages(update.Content))
 		}
 	default:
 		eventType = domain.EventToolUpdated
-		toolEvent.Status = domain.ToolStatusInProgress
+		toolEvent.App.Status = domain.ToolStatusInProgress
 	}
 
 	c.emit(domain.Event{
@@ -873,18 +886,14 @@ func extractRawOutput(raw json.RawMessage) string {
 }
 
 func (c *Client) handlePlan(sessionID string, raw json.RawMessage) {
-	var update struct {
-		Entries json.RawMessage `json:"entries"`
-	}
+	var update acpprotocol.PlanUpdate
 	if err := json.Unmarshal(raw, &update); err != nil {
+		log.Printf("[acp] failed to parse plan update: %v", err)
 		return
 	}
-	c.emit(domain.Event{
-		Type:      domain.EventPlanUpdated,
-		SessionID: sessionID,
-		At:        time.Now(),
-		Data:      map[string]any{"entries": json.RawMessage(update.Entries)},
-	})
+	if ev := planEvent(sessionID, &update); ev != nil {
+		c.emit(*ev)
+	}
 }
 
 func (c *Client) handleCurrentModeUpdate(sessionID string, raw json.RawMessage) {
@@ -916,31 +925,14 @@ func (c *Client) handleConfigOptionUpdate(sessionID string, raw json.RawMessage)
 }
 
 func (c *Client) handleUsageUpdate(sessionID string, raw json.RawMessage) {
-	var update struct {
-		Used int64 `json:"used"`
-		Size int64 `json:"size"`
-		Cost *struct {
-			Amount   float64 `json:"amount"`
-			Currency string  `json:"currency"`
-		} `json:"cost"`
-	}
+	var update acpprotocol.UsageUpdate
 	if err := json.Unmarshal(raw, &update); err != nil {
+		log.Printf("[acp] failed to parse usage_update: %v", err)
 		return
 	}
-	data := map[string]any{
-		"contextUsed": update.Used,
-		"contextSize": update.Size,
+	if ev := usageEvent(sessionID, &update); ev != nil {
+		c.emit(*ev)
 	}
-	if update.Cost != nil {
-		data["costAmount"] = update.Cost.Amount
-		data["costCurrency"] = update.Cost.Currency
-	}
-	c.emit(domain.Event{
-		Type:      domain.EventUsageUpdate,
-		SessionID: sessionID,
-		At:        time.Now(),
-		Data:      data,
-	})
 }
 
 func (c *Client) emit(ev domain.Event) {

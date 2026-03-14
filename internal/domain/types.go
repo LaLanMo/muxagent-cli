@@ -252,7 +252,7 @@ type ToolLocation struct {
 	Line *int   `json:"line,omitempty"`
 }
 
-type ToolEvent struct {
+type ToolEventApp struct {
 	PartID    string         `json:"partId"`
 	MessageID string         `json:"messageId"`
 	CallID    string         `json:"callId"`
@@ -266,6 +266,38 @@ type ToolEvent struct {
 	Diffs     []ToolDiff     `json:"diffs,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	Locations []ToolLocation `json:"locations,omitempty"`
+}
+
+type ToolEvent struct {
+	ACP *acpprotocol.ToolCallUpdate `json:"acp,omitempty"`
+	App ToolEventApp                `json:"app"`
+}
+
+type PlanEntryApp struct {
+	Content  string `json:"content"`
+	Status   string `json:"status"`
+	Priority string `json:"priority"`
+}
+
+type PlanEventApp struct {
+	Entries []PlanEntryApp `json:"entries"`
+}
+
+type PlanEvent struct {
+	ACP *acpprotocol.PlanUpdate `json:"acp,omitempty"`
+	App PlanEventApp            `json:"app"`
+}
+
+type UsageEventApp struct {
+	ContextUsed  int64    `json:"contextUsed"`
+	ContextSize  int64    `json:"contextSize"`
+	CostAmount   *float64 `json:"costAmount,omitempty"`
+	CostCurrency *string  `json:"costCurrency,omitempty"`
+}
+
+type UsageEvent struct {
+	ACP *acpprotocol.UsageUpdate `json:"acp,omitempty"`
+	App UsageEventApp            `json:"app"`
 }
 
 type SessionError struct {
@@ -283,6 +315,8 @@ type Event struct {
 	Message     *Message          `json:"message,omitempty"`
 	Tool        *ToolEvent        `json:"tool,omitempty"`
 	Approval    *ApprovalRequest  `json:"approval,omitempty"`
+	Plan        *PlanEvent        `json:"plan,omitempty"`
+	Usage       *UsageEvent       `json:"usage,omitempty"`
 	Session     *Session          `json:"session,omitempty"`
 	Error       *SessionError     `json:"error,omitempty"`
 	Data        map[string]any    `json:"data,omitempty"`
