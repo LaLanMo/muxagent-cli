@@ -677,16 +677,16 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 		Tool: &domain.ToolEvent{
 			ACP: &update,
 			App: domain.ToolEventApp{
-				PartID:    partID,
-				MessageID: msgID,
-				CallID:    update.ToolCallID,
-				Name:      *update.Title,
-				Kind:      stringPtrValue(update.Kind),
-				Title:     *update.Title,
-				Status:    domain.ToolStatusPending,
-				Input:     rawInputMap(update.RawInput),
-				Metadata:  mapFromMeta(update.Meta),
-				Locations: locations,
+				PartID:     partID,
+				MessageID:  msgID,
+				CallID:     update.ToolCallID,
+				Name:       *update.Title,
+				Kind:       stringPtrValue(update.Kind),
+				Title:      *update.Title,
+				Status:     domain.ToolStatusPending,
+				Input:      rawInputMap(update.RawInput),
+				ClaudeCode: claudeCodeToolFromMeta(update.Meta),
+				Locations:  locations,
 			},
 		},
 	})
@@ -728,15 +728,15 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	toolEvent := domain.ToolEvent{
 		ACP: &update,
 		App: domain.ToolEventApp{
-			PartID:    partID,
-			MessageID: msgID,
-			CallID:    update.ToolCallID,
-			Name:      stringValue(update.Title),
-			Kind:      stringPtrValue(update.Kind),
-			Title:     stringValue(update.Title),
-			Input:     rawInputMap(update.RawInput),
-			Metadata:  mapFromMeta(update.Meta),
-			Locations: locations,
+			PartID:     partID,
+			MessageID:  msgID,
+			CallID:     update.ToolCallID,
+			Name:       stringValue(update.Title),
+			Kind:       stringPtrValue(update.Kind),
+			Title:      stringValue(update.Title),
+			Input:      rawInputMap(update.RawInput),
+			ClaudeCode: claudeCodeToolFromMeta(update.Meta),
+			Locations:  locations,
 		},
 	}
 
@@ -786,11 +786,26 @@ func rawInputMap(raw json.RawMessage) map[string]any {
 	return input
 }
 
-func mapFromMeta(meta acpprotocol.Meta) map[string]any {
+func claudeCodeToolFromMeta(meta acpprotocol.Meta) *domain.ClaudeCodeTool {
 	if len(meta) == 0 {
 		return nil
 	}
-	return map[string]any(meta)
+
+	claudeCode, ok := meta["claudeCode"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	parentToolUseID, _ := claudeCode["parentToolUseId"].(string)
+	toolName, _ := claudeCode["toolName"].(string)
+	if parentToolUseID == "" && toolName == "" {
+		return nil
+	}
+
+	return &domain.ClaudeCodeTool{
+		ParentToolUseID: parentToolUseID,
+		ToolName:        toolName,
+	}
 }
 
 func stringPtrValue(value *acpprotocol.ToolKind) string {

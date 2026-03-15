@@ -66,15 +66,15 @@ const (
 )
 
 type ToolActivity struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Kind     string         `json:"kind,omitempty"`
-	Status   ToolStatus     `json:"status"`
-	Title    string         `json:"title,omitempty"`
-	Input    map[string]any `json:"input,omitempty"`
-	Output   string         `json:"output,omitempty"`
-	Error    string         `json:"error,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Kind       string          `json:"kind,omitempty"`
+	Status     ToolStatus      `json:"status"`
+	Title      string          `json:"title,omitempty"`
+	Input      map[string]any  `json:"input,omitempty"`
+	Output     string          `json:"output,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	ClaudeCode *ClaudeCodeTool `json:"claudeCode,omitempty"`
 }
 
 // --- Message ---
@@ -256,19 +256,24 @@ type ToolLocation struct {
 }
 
 type ToolEventApp struct {
-	PartID    string         `json:"partId"`
-	MessageID string         `json:"messageId"`
-	CallID    string         `json:"callId"`
-	Name      string         `json:"name"`
-	Kind      string         `json:"kind,omitempty"`
-	Title     string         `json:"title,omitempty"`
-	Status    ToolStatus     `json:"status"`
-	Input     map[string]any `json:"input,omitempty"`
-	Output    string         `json:"output,omitempty"`
-	Error     string         `json:"error,omitempty"`
-	Diffs     []ToolDiff     `json:"diffs,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Locations []ToolLocation `json:"locations,omitempty"`
+	PartID     string          `json:"partId"`
+	MessageID  string          `json:"messageId"`
+	CallID     string          `json:"callId"`
+	Name       string          `json:"name"`
+	Kind       string          `json:"kind,omitempty"`
+	Title      string          `json:"title,omitempty"`
+	Status     ToolStatus      `json:"status"`
+	Input      map[string]any  `json:"input,omitempty"`
+	Output     string          `json:"output,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Diffs      []ToolDiff      `json:"diffs,omitempty"`
+	ClaudeCode *ClaudeCodeTool `json:"claudeCode,omitempty"`
+	Locations  []ToolLocation  `json:"locations,omitempty"`
+}
+
+type ClaudeCodeTool struct {
+	ParentToolUseID string `json:"parentToolUseId,omitempty"`
+	ToolName        string `json:"toolName,omitempty"`
 }
 
 type ToolEvent struct {
