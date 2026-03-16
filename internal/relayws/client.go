@@ -654,27 +654,20 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
+	promptParams, err := decodePromptParams(params)
+	if err != nil {
+		return nil, "invalid prompt params: " + err.Error()
+	}
+	sessionID := promptParams.SessionID
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-
-	// Parse content blocks from params
-	var content []domain.ContentBlock
-	if contentRaw, ok := params["content"]; ok {
-		contentBytes, err := json.Marshal(contentRaw)
-		if err != nil {
-			return nil, "invalid content: " + err.Error()
-		}
-		if err := json.Unmarshal(contentBytes, &content); err != nil {
-			return nil, "invalid content: " + err.Error()
-		}
-	}
+	content := promptParams.Content
 
 	// If no content blocks but there's a text field, create a text block
 	if len(content) == 0 {
-		if text, ok := params["text"].(string); ok && text != "" {
-			content = []domain.ContentBlock{{Type: "text", Text: text}}
+		if promptParams.Text != "" {
+			content = []domain.ContentBlock{{Type: "text", Text: promptParams.Text}}
 		}
 	}
 
@@ -725,6 +718,24 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 	}()
 
 	return map[string]any{"accepted": true}, ""
+}
+
+type promptParams struct {
+	SessionID string                `json:"sessionId"`
+	Content   []domain.ContentBlock `json:"content,omitempty"`
+	Text      string                `json:"text,omitempty"`
+}
+
+func decodePromptParams(params map[string]any) (promptParams, error) {
+	var decoded promptParams
+	payload, err := json.Marshal(params)
+	if err != nil {
+		return promptParams{}, err
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return promptParams{}, err
+	}
+	return decoded, nil
 }
 
 func (c *Client) rpcCancel(ctx context.Context, params map[string]any) (any, string) {

@@ -186,11 +186,13 @@ type promptResult struct {
 
 type promptRuntime struct {
 	listingRuntime
-	started chan struct{}
-	release chan promptResult
+	started     chan struct{}
+	release     chan promptResult
+	lastContent []domain.ContentBlock
 }
 
 func (r *promptRuntime) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error) {
+	r.lastContent = append([]domain.ContentBlock(nil), content...)
 	select {
 	case r.started <- struct{}{}:
 	default:
@@ -468,6 +470,62 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 	require.Equal(t, appwire.EventRunFinished, events[0].Type)
 	require.NotNil(t, events[0].RunFinished)
 	require.Equal(t, "end_turn", events[0].RunFinished.App.StopReason)
+}
+
+func TestRpcPromptParsesTypedContentBlocks(t *testing.T) {
+	rt := &promptRuntime{
+		listingRuntime: listingRuntime{
+			sessions: []domain.SessionSummary{
+				{
+					SessionID: "sid",
+					CWD:       "/tmp/project",
+					Title:     "Title",
+					UpdatedAt: time.Now(),
+				},
+			},
+		},
+		started: make(chan struct{}, 1),
+		release: make(chan promptResult, 1),
+	}
+	client := &Client{
+		machineID:     "machine-1",
+		runtime:       rt,
+		eventBuf:      NewEventBuffer(8),
+		sessionCWD:    map[string]string{"sid": "/tmp/project"},
+		sessionStatus: map[string]domain.SessionStatus{},
+	}
+
+	result, errStr := client.rpcPrompt(context.Background(), map[string]any{
+		"sessionId": "sid",
+		"content": []map[string]any{
+			{
+				"type":     "image",
+				"mimeType": "image/png",
+				"data":     "ZmFrZQ==",
+			},
+			{
+				"type": "text",
+				"text": "hello",
+			},
+		},
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, true, result.(map[string]any)["accepted"])
+
+	select {
+	case <-rt.started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+
+	require.Len(t, rt.lastContent, 2)
+	require.Equal(t, "image", rt.lastContent[0].Type)
+	require.Equal(t, "image/png", rt.lastContent[0].MimeType)
+	require.Equal(t, "ZmFrZQ==", rt.lastContent[0].Data)
+	require.Equal(t, "text", rt.lastContent[1].Type)
+	require.Equal(t, "hello", rt.lastContent[1].Text)
+
+	rt.release <- promptResult{stopReason: "end_turn"}
 }
 
 func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
