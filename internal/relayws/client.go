@@ -422,9 +422,17 @@ func (c *Client) rpcRuntimeList(_ context.Context) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	return map[string]any{
-		"runtimes": c.runtime.RuntimeList(),
-	}, ""
+	runtimes := c.runtime.RuntimeList()
+	items := make([]appwire.RuntimeInfo, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		items = append(items, appwire.RuntimeInfo{
+			ID:            runtime.ID,
+			Label:         runtime.Label,
+			Ready:         runtime.Ready,
+			ConfigOptions: runtime.ConfigOptions,
+		})
+	}
+	return appwire.RuntimeListResult{Runtimes: items}, ""
 }
 
 type createSessionParams struct {
@@ -518,12 +526,12 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	resp := map[string]any{
-		"app": map[string]any{
-			"runtime": actualRuntime,
-			"cwd":     actualCWD,
+	resp := appwire.SessionCreateResult{
+		App: appwire.SessionCreateResultApp{
+			Runtime: actualRuntime,
+			CWD:     actualCWD,
 		},
-		"acp": acpResp,
+		ACP: acpResp,
 	}
 	if len(acpResp.ConfigOptions) > 0 {
 		log.Printf("[relay] session.create response includes %d configOptions", len(acpResp.ConfigOptions))
@@ -575,12 +583,12 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = cwd
 	c.sessionCWDMu.Unlock()
-	resp := map[string]any{
-		"app": map[string]any{
-			"ok":      true,
-			"runtime": actualRuntime,
+	resp := appwire.SessionLoadResult{
+		App: appwire.SessionLoadResultApp{
+			OK:      true,
+			Runtime: actualRuntime,
 		},
-		"acp": acpResp,
+		ACP: acpResp,
 	}
 	return resp, ""
 }
@@ -622,18 +630,11 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 		c.clearMissingSessionStatuses(present)
 	}
 	// If caller provided specific IDs, filter to those only.
-	type resolvedSessionSummary struct {
-		SessionID string               `json:"sessionId"`
-		CWD       string               `json:"cwd"`
-		Title     string               `json:"title"`
-		UpdatedAt time.Time            `json:"updatedAt"`
-		Status    domain.SessionStatus `json:"status"`
-	}
 	if len(wanted) > 0 {
-		filtered := make([]resolvedSessionSummary, 0, len(wanted))
+		filtered := make([]appwire.ResolvedSession, 0, len(wanted))
 		for _, s := range all {
 			if _, ok := wanted[s.SessionID]; ok {
-				filtered = append(filtered, resolvedSessionSummary{
+				filtered = append(filtered, appwire.ResolvedSession{
 					SessionID: s.SessionID,
 					CWD:       s.CWD,
 					Title:     s.Title,
@@ -642,11 +643,11 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 				})
 			}
 		}
-		return map[string]any{"sessions": filtered}, ""
+		return appwire.SessionResolveResult{Sessions: filtered}, ""
 	}
-	resolved := make([]resolvedSessionSummary, 0, len(all))
+	resolved := make([]appwire.ResolvedSession, 0, len(all))
 	for _, s := range all {
-		resolved = append(resolved, resolvedSessionSummary{
+		resolved = append(resolved, appwire.ResolvedSession{
 			SessionID: s.SessionID,
 			CWD:       s.CWD,
 			Title:     s.Title,
@@ -654,7 +655,7 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 			Status:    c.resolvedSessionStatus(s.SessionID),
 		})
 	}
-	return map[string]any{"sessions": resolved}, ""
+	return appwire.SessionResolveResult{Sessions: resolved}, ""
 }
 
 func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, string) {
@@ -724,7 +725,7 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		}
 	}()
 
-	return map[string]any{"accepted": true}, ""
+	return appwire.AcceptedResult{Accepted: true}, ""
 }
 
 type promptParams struct {
@@ -798,7 +799,7 @@ func (c *Client) rpcCancel(ctx context.Context, params map[string]any) (any, str
 	if err := c.runtime.Cancel(ctx, decoded.SessionID); err != nil {
 		return nil, err.Error()
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
 func (c *Client) rpcSetMode(ctx context.Context, params map[string]any) (any, string) {
@@ -818,7 +819,7 @@ func (c *Client) rpcSetMode(ctx context.Context, params map[string]any) (any, st
 	if err := c.runtime.SetMode(ctx, decoded.SessionID, decoded.PermissionMode); err != nil {
 		return nil, err.Error()
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
 func (c *Client) rpcSetConfigOption(ctx context.Context, params map[string]any) (any, string) {
@@ -841,7 +842,7 @@ func (c *Client) rpcSetConfigOption(ctx context.Context, params map[string]any) 
 	if err := c.runtime.SetConfigOption(ctx, decoded.SessionID, decoded.ConfigID, decoded.Value); err != nil {
 		return nil, err.Error()
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
 func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) (any, string) {
@@ -872,7 +873,7 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 	}); err != nil && !isExpectedRelayDrop(err) {
 		log.Printf("send approval.replied event: %v", err)
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
 func (c *Client) rpcPendingApprovals(ctx context.Context, params map[string]any) (any, string) {
@@ -880,7 +881,7 @@ func (c *Client) rpcPendingApprovals(ctx context.Context, params map[string]any)
 		return nil, "runtime not available"
 	}
 	approvals := c.runtime.PendingApprovals()
-	return map[string]any{"approvals": approvals}, ""
+	return appwire.PendingApprovalsResult{Approvals: approvals}, ""
 }
 
 func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (any, string) {
@@ -901,17 +902,6 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (an
 }
 
 // --- Filesystem RPCs ---
-
-type fsEntry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	IsDir bool   `json:"isDir"`
-}
-
-type fsSearchResult struct {
-	Path  string `json:"path"`
-	IsDir bool   `json:"isDir"`
-}
 
 // safePath resolves relPath under cwd and rejects traversal / symlink escapes.
 func safePath(cwd, relPath string) (string, error) {
@@ -974,7 +964,7 @@ func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, strin
 	})
 
 	const maxEntries = 200
-	entries := make([]fsEntry, 0, min(len(dirEntries), maxEntries))
+	entries := make([]appwire.FsEntry, 0, min(len(dirEntries), maxEntries))
 	// Normalize relPath so entry paths are clean.
 	if relPath == "." {
 		relPath = ""
@@ -987,13 +977,13 @@ func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, strin
 		if relPath != "" {
 			entryPath = filepath.Join(relPath, e.Name())
 		}
-		entries = append(entries, fsEntry{
+		entries = append(entries, appwire.FsEntry{
 			Name:  e.Name(),
 			Path:  entryPath,
 			IsDir: e.IsDir(),
 		})
 	}
-	return map[string]any{"entries": entries}, ""
+	return appwire.FsListResult{Entries: entries}, ""
 }
 
 func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, string) {
@@ -1019,7 +1009,7 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 
 	const maxResults = 50
 	lowerQuery := strings.ToLower(decoded.Query)
-	var results []fsSearchResult
+	var results []appwire.FsSearchEntry
 
 	_ = filepath.WalkDir(cwd, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -1036,7 +1026,7 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 		}
 		if strings.Contains(strings.ToLower(d.Name()), lowerQuery) {
 			rel, _ := filepath.Rel(cwd, path)
-			results = append(results, fsSearchResult{
+			results = append(results, appwire.FsSearchEntry{
 				Path:  rel,
 				IsDir: d.IsDir(),
 			})
@@ -1055,7 +1045,7 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 	if len(results) > maxResults {
 		results = results[:maxResults]
 	}
-	return map[string]any{"results": results}, ""
+	return appwire.FsSearchResult{Results: results}, ""
 }
 
 // --- Event forwarding ---

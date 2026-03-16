@@ -476,7 +476,7 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 		"text":      "hello",
 	})
 	require.Empty(t, errStr)
-	require.Equal(t, true, result.(map[string]any)["accepted"])
+	require.Equal(t, appwire.AcceptedResult{Accepted: true}, result)
 
 	select {
 	case <-rt.started:
@@ -548,7 +548,7 @@ func TestRpcPromptParsesTypedContentBlocks(t *testing.T) {
 		},
 	})
 	require.Empty(t, errStr)
-	require.Equal(t, true, result.(map[string]any)["accepted"])
+	require.Equal(t, appwire.AcceptedResult{Accepted: true}, result)
 
 	select {
 	case <-rt.started:
@@ -577,7 +577,7 @@ func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
 		"sessionId": "sid-cancel",
 	})
 	require.Empty(t, errStr)
-	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-cancel", rt.cancelSessionID)
 
 	result, errStr = client.rpcSetMode(context.Background(), map[string]any{
@@ -585,7 +585,7 @@ func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
 		"permissionMode": "read-only",
 	})
 	require.Empty(t, errStr)
-	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-mode", rt.modeSessionID)
 	require.Equal(t, "read-only", rt.modeID)
 
@@ -595,7 +595,7 @@ func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
 		"value":     "gpt-5.4",
 	})
 	require.Empty(t, errStr)
-	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-config", rt.configSessionID)
 	require.Equal(t, "model", rt.configID)
 	require.Equal(t, "gpt-5.4", rt.configValue)
@@ -606,7 +606,7 @@ func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
 		"optionId":  "allow",
 	})
 	require.Empty(t, errStr)
-	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-approval", rt.replySessionID)
 	require.Equal(t, "req-1", rt.replyRequestID)
 	require.Equal(t, "allow", rt.replyOptionID)
@@ -1620,8 +1620,7 @@ func TestRpcFsList(t *testing.T) {
 			"sessionId": "sid",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 
 		// Should contain src (dir), empty (dir), README.md (file)
 		names := make([]string, len(entries))
@@ -1653,8 +1652,7 @@ func TestRpcFsList(t *testing.T) {
 			"path":      "src",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 
 		require.Len(t, entries, 1)
 		require.Equal(t, "main.go", entries[0].Name)
@@ -1688,8 +1686,7 @@ func TestRpcFsList(t *testing.T) {
 			"path":      "empty",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 		require.Empty(t, entries)
 	})
 
@@ -1713,8 +1710,7 @@ func TestRpcFsList(t *testing.T) {
 			"sessionId": "sid",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 		require.LessOrEqual(t, len(entries), 200)
 	})
 }
@@ -1746,8 +1742,7 @@ func TestRpcFsSearch(t *testing.T) {
 			"query":     "helper",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		require.Len(t, results, 1)
 		require.Equal(t, filepath.Join("src", "util", "helper.go"), results[0].Path)
@@ -1760,8 +1755,7 @@ func TestRpcFsSearch(t *testing.T) {
 			"query":     "model",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		paths := make([]string, len(results))
 		for i, r := range results {
@@ -1776,8 +1770,7 @@ func TestRpcFsSearch(t *testing.T) {
 			"query":     "makefile",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		paths := make([]string, len(results))
 		for i, r := range results {
@@ -1792,14 +1785,13 @@ func TestRpcFsSearch(t *testing.T) {
 			"query":     "main",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		require.GreaterOrEqual(t, len(results), 3)
 		// First result should be a directory (cmd/main)
 		require.True(t, results[0].IsDir, "first result should be a directory")
 		// Among files, shorter path comes first
-		fileResults := make([]fsSearchResult, 0)
+		fileResults := make([]appwire.FsSearchEntry, 0)
 		for _, r := range results {
 			if !r.IsDir {
 				fileResults = append(fileResults, r)
@@ -1824,8 +1816,7 @@ func TestRpcFsSearch(t *testing.T) {
 			"query":     "test",
 		})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 		require.LessOrEqual(t, len(results), 50)
 	})
 
