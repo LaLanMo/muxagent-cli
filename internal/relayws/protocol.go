@@ -88,8 +88,3 @@ type ErrorMessage struct {
 	Type  MessageType `json:"type"`
 	Error string      `json:"error"`
 }
-
-type RPCPayload struct {
-	Method string         `json:"method"`
-	Params map[string]any `json:"params"`
-}

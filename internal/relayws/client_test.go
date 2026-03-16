@@ -379,10 +379,10 @@ func TestRpcLoadSessionPreservesTrackedStatus(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, errStr := client.rpcLoadSession(context.Background(), map[string]any{
-			"sessionId": "sid",
-			"cwd":       "/tmp/project",
-			"runtime":   "claude-code",
+		_, errStr := client.rpcLoadSession(context.Background(), appwire.LoadSessionParams{
+			SessionID: "sid",
+			CWD:       "/tmp/project",
+			Runtime:   "claude-code",
 		})
 		require.Empty(t, errStr)
 	}()
@@ -401,9 +401,10 @@ func TestRpcLoadSessionPreservesTrackedStatus(t *testing.T) {
 		t.Fatal("session.load did not finish")
 	}
 
-	result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	result, errStr := client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	require.Equal(t, string(domain.SessionStatusRunning), resolvedStatusFromRPCResult(t, result))
 }
@@ -424,9 +425,10 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
 
-	result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	result, errStr := client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	status := resolvedStatusFromRPCResult(t, result)
 	require.Equal(t, string(domain.SessionStatusWaitingApproval), status)
@@ -441,9 +443,10 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
 
-	result, errStr = client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	result, errStr = client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	status = resolvedStatusFromRPCResult(t, result)
 	require.Equal(t, string(domain.SessionStatusIdle), status)
@@ -480,9 +483,9 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 		sessionStatus: map[string]domain.SessionStatus{},
 	}
 
-	result, errStr := client.rpcPrompt(context.Background(), map[string]any{
-		"sessionId": "sid",
-		"text":      "hello",
+	result, errStr := client.rpcPrompt(context.Background(), appwire.PromptParams{
+		SessionID: "sid",
+		Text:      "hello",
 	})
 	require.Empty(t, errStr)
 	require.Equal(t, appwire.AcceptedResult{Accepted: true}, result)
@@ -493,18 +496,20 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 		t.Fatal("prompt did not start")
 	}
 
-	resolveResult, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	resolveResult, errStr := client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	require.Equal(t, string(domain.SessionStatusRunning), resolvedStatusFromRPCResult(t, resolveResult))
 
 	rt.release <- promptResult{stopReason: "end_turn"}
 
 	require.Eventually(t, func() bool {
-		result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-			"sessionIds": []any{"sid"},
-		})
+		result, errStr := client.rpcResolveSessions(
+			context.Background(),
+			appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+		)
 		if errStr != "" {
 			return false
 		}
@@ -542,17 +547,17 @@ func TestRpcPromptParsesTypedContentBlocks(t *testing.T) {
 		sessionStatus: map[string]domain.SessionStatus{},
 	}
 
-	result, errStr := client.rpcPrompt(context.Background(), map[string]any{
-		"sessionId": "sid",
-		"content": []map[string]any{
+	result, errStr := client.rpcPrompt(context.Background(), appwire.PromptParams{
+		SessionID: "sid",
+		Content: []appwire.PromptContentBlock{
 			{
-				"type":     "image",
-				"mimeType": "image/png",
-				"data":     "ZmFrZQ==",
+				Type:     "image",
+				MimeType: "image/png",
+				Data:     "ZmFrZQ==",
 			},
 			{
-				"type": "text",
-				"text": "hello",
+				Type: "text",
+				Text: "hello",
 			},
 		},
 	})
@@ -582,38 +587,45 @@ func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
 		runtime:   rt,
 	}
 
-	result, errStr := client.rpcCancel(context.Background(), map[string]any{
-		"sessionId": "sid-cancel",
-	})
+	result, errStr := client.rpcCancel(
+		context.Background(),
+		appwire.CancelParams{SessionID: "sid-cancel"},
+	)
 	require.Empty(t, errStr)
 	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-cancel", rt.cancelSessionID)
 
-	result, errStr = client.rpcSetMode(context.Background(), map[string]any{
-		"sessionId":      "sid-mode",
-		"permissionMode": "read-only",
+	result, errStr = client.rpcSetMode(context.Background(), appwire.SetModeParams{
+		SessionID:      "sid-mode",
+		PermissionMode: "read-only",
 	})
 	require.Empty(t, errStr)
 	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-mode", rt.modeSessionID)
 	require.Equal(t, "read-only", rt.modeID)
 
-	result, errStr = client.rpcSetConfigOption(context.Background(), map[string]any{
-		"sessionId": "sid-config",
-		"configId":  "model",
-		"value":     "gpt-5.4",
-	})
+	result, errStr = client.rpcSetConfigOption(
+		context.Background(),
+		appwire.SetConfigOptionParams{
+			SessionID: "sid-config",
+			ConfigID:  "model",
+			Value:     "gpt-5.4",
+		},
+	)
 	require.Empty(t, errStr)
 	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-config", rt.configSessionID)
 	require.Equal(t, "model", rt.configID)
 	require.Equal(t, "gpt-5.4", rt.configValue)
 
-	result, errStr = client.rpcReplyPermission(context.Background(), map[string]any{
-		"sessionId": "sid-approval",
-		"requestId": "req-1",
-		"optionId":  "allow",
-	})
+	result, errStr = client.rpcReplyPermission(
+		context.Background(),
+		appwire.ReplyPermissionParams{
+			SessionID: "sid-approval",
+			RequestID: "req-1",
+			OptionID:  "allow",
+		},
+	)
 	require.Empty(t, errStr)
 	require.Equal(t, appwire.OKResult{OK: true}, result)
 	require.Equal(t, "sid-approval", rt.replySessionID)
@@ -639,7 +651,7 @@ func TestRpcPendingApprovalsMapsDomainApprovalIntoAppwire(t *testing.T) {
 	}
 	client := &Client{runtime: rt}
 
-	result, errStr := client.rpcPendingApprovals(context.Background(), map[string]any{})
+	result, errStr := client.rpcPendingApprovals(context.Background())
 	require.Empty(t, errStr)
 
 	wire, ok := result.(appwire.PendingApprovalsResult)
@@ -656,97 +668,6 @@ func TestRpcPendingApprovalsMapsDomainApprovalIntoAppwire(t *testing.T) {
 		wire.Approvals[0].App.Command.Argv,
 	)
 	require.Equal(t, "/workspace", wire.Approvals[0].App.CWD)
-}
-
-func TestRpcActionHandlersRejectMalformedTypedParams(t *testing.T) {
-	client := &Client{runtime: &actionRuntime{}}
-
-	tests := []struct {
-		name   string
-		call   func() (any, string)
-		errMsg string
-	}{
-		{
-			name: "cancel rejects invalid sessionId type",
-			call: func() (any, string) {
-				return client.rpcCancel(context.Background(), map[string]any{
-					"sessionId": map[string]any{"bad": true},
-				})
-			},
-			errMsg: "invalid cancel params:",
-		},
-		{
-			name: "set mode rejects invalid permissionMode type",
-			call: func() (any, string) {
-				return client.rpcSetMode(context.Background(), map[string]any{
-					"sessionId":      "sid",
-					"permissionMode": []any{"bad"},
-				})
-			},
-			errMsg: "invalid setMode params:",
-		},
-		{
-			name: "set config rejects invalid value type",
-			call: func() (any, string) {
-				return client.rpcSetConfigOption(context.Background(), map[string]any{
-					"sessionId": "sid",
-					"configId":  "model",
-					"value":     map[string]any{"bad": true},
-				})
-			},
-			errMsg: "invalid setConfigOption params:",
-		},
-		{
-			name: "reply permission rejects invalid optionId type",
-			call: func() (any, string) {
-				return client.rpcReplyPermission(context.Background(), map[string]any{
-					"sessionId": "sid",
-					"requestId": "req-1",
-					"optionId":  123,
-				})
-			},
-			errMsg: "invalid replyPermission params:",
-		},
-		{
-			name: "resync rejects invalid lastSeq type",
-			call: func() (any, string) {
-				client.eventBuf = NewEventBuffer(8)
-				return client.rpcResyncEvents(context.Background(), map[string]any{
-					"lastSeq": "bad",
-				})
-			},
-			errMsg: "invalid resync params:",
-		},
-		{
-			name: "fs list rejects invalid path type",
-			call: func() (any, string) {
-				client.sessionCWD = map[string]string{"sid": t.TempDir()}
-				return client.rpcFsList(context.Background(), map[string]any{
-					"sessionId": "sid",
-					"path":      []any{"bad"},
-				})
-			},
-			errMsg: "invalid fs.list params:",
-		},
-		{
-			name: "fs search rejects invalid query type",
-			call: func() (any, string) {
-				client.sessionCWD = map[string]string{"sid": t.TempDir()}
-				return client.rpcFsSearch(context.Background(), map[string]any{
-					"sessionId": "sid",
-					"query":     []any{"bad"},
-				})
-			},
-			errMsg: "invalid fs.search params:",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, errStr := tt.call()
-			require.Contains(t, errStr, tt.errMsg)
-		})
-	}
 }
 
 func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
@@ -1286,62 +1207,55 @@ func TestRunPassesRuntimeToSessionCreate(t *testing.T) {
 func TestRpcCreateSessionRequiresRuntime(t *testing.T) {
 	client := &Client{runtime: &routingRuntime{}}
 
-	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
-		"cwd": "/tmp",
-	})
+	result, errStr := client.rpcCreateSession(
+		context.Background(),
+		appwire.CreateSessionParams{CWD: "/tmp"},
+	)
 	require.Nil(t, result)
 	require.Equal(t, "missing runtime", errStr)
 }
 
-func TestRpcSessionHandlersRejectMalformedTypedParams(t *testing.T) {
-	client := &Client{
-		runtime:    &routingRuntime{},
-		sessionCWD: map[string]string{},
-	}
-
+func TestRPCParamDecodersRejectMalformedPayloads(t *testing.T) {
 	tests := []struct {
 		name   string
-		call   func() (any, string)
+		decode func() error
 		errMsg string
 	}{
 		{
 			name: "create rejects invalid useWorktree type",
-			call: func() (any, string) {
-				return client.rpcCreateSession(context.Background(), map[string]any{
-					"cwd":         "/tmp",
-					"runtime":     "codex",
-					"useWorktree": "yes",
-				})
+			decode: func() error {
+				_, err := appwire.DecodeCreateSessionParams(
+					json.RawMessage(`{"cwd":"/tmp","runtime":"codex","useWorktree":"yes"}`),
+				)
+				return err
 			},
-			errMsg: "invalid create params:",
+			errMsg: "cannot unmarshal string into Go struct field CreateSessionParams.useWorktree of type bool",
 		},
 		{
 			name: "load rejects invalid model type",
-			call: func() (any, string) {
-				return client.rpcLoadSession(context.Background(), map[string]any{
-					"sessionId": "sid",
-					"cwd":       "/tmp",
-					"runtime":   "codex",
-					"model":     []any{"bad"},
-				})
+			decode: func() error {
+				_, err := appwire.DecodeLoadSessionParams(
+					json.RawMessage(`{"sessionId":"sid","cwd":"/tmp","runtime":"codex","model":["bad"]}`),
+				)
+				return err
 			},
-			errMsg: "invalid load params:",
+			errMsg: "cannot unmarshal array into Go struct field LoadSessionParams.model of type string",
 		},
 		{
 			name: "resolve rejects invalid sessionIds type",
-			call: func() (any, string) {
-				return client.rpcResolveSessions(context.Background(), map[string]any{
-					"sessionIds": []any{"sid", 1},
-				})
+			decode: func() error {
+				_, err := appwire.DecodeResolveSessionsParams(
+					json.RawMessage(`{"sessionIds":["sid",1]}`),
+				)
+				return err
 			},
-			errMsg: "invalid resolve params:",
+			errMsg: "cannot unmarshal number into Go struct field ResolveSessionsParams.sessionIds of type string",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, errStr := tt.call()
-			require.Contains(t, errStr, tt.errMsg)
+			require.ErrorContains(t, tt.decode(), tt.errMsg)
 		})
 	}
 }
@@ -1352,10 +1266,13 @@ func TestRpcLoadSessionRequiresRuntime(t *testing.T) {
 		sessionCWD: map[string]string{},
 	}
 
-	result, errStr := client.rpcLoadSession(context.Background(), map[string]any{
-		"sessionId": "sid",
-		"cwd":       "/tmp",
-	})
+	result, errStr := client.rpcLoadSession(
+		context.Background(),
+		appwire.LoadSessionParams{
+			SessionID: "sid",
+			CWD:       "/tmp",
+		},
+	)
 	require.Nil(t, result)
 	require.Equal(t, "missing runtime", errStr)
 }
@@ -1733,10 +1650,7 @@ func encryptRPC(
 ) EncryptedMessage {
 	t.Helper()
 
-	body, err := json.Marshal(RPCPayload{
-		Method: method,
-		Params: params,
-	})
+	body, err := appwire.MarshalRPCRequest(method, params)
 	require.NoError(t, err)
 
 	nonce, ciphertext, err := session.encrypt(string(MessageTypeRPC), msgID, body)
@@ -1769,6 +1683,11 @@ func decryptResponse(t *testing.T, session *Session, msg EncryptedMessage) map[s
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
+	if msg.Type == MessageTypeResponse {
+		if _, ok := payload["error"]; !ok {
+			payload["error"] = ""
+		}
+	}
 	return payload
 }
 
@@ -1834,9 +1753,7 @@ func TestRpcFsList(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("list root directory", func(t *testing.T) {
-		result, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-		})
+		result, errStr := client.rpcFsList(ctx, appwire.FsListParams{SessionID: "sid"})
 		require.Empty(t, errStr)
 		entries := result.(appwire.FsListResult).Entries
 
@@ -1865,10 +1782,10 @@ func TestRpcFsList(t *testing.T) {
 	})
 
 	t.Run("list subdirectory", func(t *testing.T) {
-		result, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "src",
-		})
+		result, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "src"},
+		)
 		require.Empty(t, errStr)
 		entries := result.(appwire.FsListResult).Entries
 
@@ -1879,10 +1796,10 @@ func TestRpcFsList(t *testing.T) {
 	})
 
 	t.Run("path traversal rejected", func(t *testing.T) {
-		_, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "../../etc",
-		})
+		_, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "../../etc"},
+		)
 		require.Equal(t, "path outside project", errStr)
 	})
 
@@ -1891,27 +1808,28 @@ func TestRpcFsList(t *testing.T) {
 		require.NoError(t, os.Symlink(os.TempDir(), symPath))
 		t.Cleanup(func() { os.Remove(symPath) })
 
-		_, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "escape",
-		})
+		_, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "escape"},
+		)
 		require.Equal(t, "symlink escape detected", errStr)
 	})
 
 	t.Run("empty directory", func(t *testing.T) {
-		result, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "empty",
-		})
+		result, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "empty"},
+		)
 		require.Empty(t, errStr)
 		entries := result.(appwire.FsListResult).Entries
 		require.Empty(t, entries)
 	})
 
 	t.Run("unknown session", func(t *testing.T) {
-		_, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "nonexistent",
-		})
+		_, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "nonexistent"},
+		)
 		require.Equal(t, "unknown session", errStr)
 	})
 
@@ -1924,9 +1842,7 @@ func TestRpcFsList(t *testing.T) {
 			))
 		}
 		c := &Client{sessionCWD: map[string]string{"sid": bigRoot}}
-		result, errStr := c.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-		})
+		result, errStr := c.rpcFsList(ctx, appwire.FsListParams{SessionID: "sid"})
 		require.Empty(t, errStr)
 		entries := result.(appwire.FsListResult).Entries
 		require.LessOrEqual(t, len(entries), 200)
@@ -1955,10 +1871,10 @@ func TestRpcFsSearch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("match file name", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "helper",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "helper"},
+		)
 		require.Empty(t, errStr)
 		results := result.(appwire.FsSearchResult).Results
 
@@ -1968,10 +1884,10 @@ func TestRpcFsSearch(t *testing.T) {
 	})
 
 	t.Run("match directory name", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "model",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "model"},
+		)
 		require.Empty(t, errStr)
 		results := result.(appwire.FsSearchResult).Results
 
@@ -1983,10 +1899,10 @@ func TestRpcFsSearch(t *testing.T) {
 	})
 
 	t.Run("case insensitive", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "makefile",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "makefile"},
+		)
 		require.Empty(t, errStr)
 		results := result.(appwire.FsSearchResult).Results
 
@@ -1998,10 +1914,10 @@ func TestRpcFsSearch(t *testing.T) {
 	})
 
 	t.Run("sort dirs first then short paths", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "main",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "main"},
+		)
 		require.Empty(t, errStr)
 		results := result.(appwire.FsSearchResult).Results
 
@@ -2029,35 +1945,36 @@ func TestRpcFsSearch(t *testing.T) {
 			))
 		}
 		c := &Client{sessionCWD: map[string]string{"sid": bigRoot}}
-		result, errStr := c.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "test",
-		})
+		result, errStr := c.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "test"},
+		)
 		require.Empty(t, errStr)
 		results := result.(appwire.FsSearchResult).Results
 		require.LessOrEqual(t, len(results), 50)
 	})
 
 	t.Run("empty query error", func(t *testing.T) {
-		_, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "",
-		})
+		_, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: ""},
+		)
 		require.Equal(t, "missing query", errStr)
 	})
 
 	t.Run("missing query error", func(t *testing.T) {
-		_, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-		})
+		_, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid"},
+		)
 		require.Equal(t, "missing query", errStr)
 	})
 
 	t.Run("unknown session", func(t *testing.T) {
-		_, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "nonexistent",
-			"query":     "main",
-		})
+		_, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "nonexistent", Query: "main"},
+		)
 		require.Equal(t, "unknown session", errStr)
 	})
 }
