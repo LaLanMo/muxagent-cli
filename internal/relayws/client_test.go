@@ -606,6 +606,62 @@ func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
 	require.Equal(t, "gpt-5.4", app["currentValue"])
 }
 
+func TestSendEventUsesSessionStatusEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(domain.Event{
+		Type:      domain.EventSessionStatus,
+		SessionID: "sid",
+		At:        time.Now(),
+		SessionInfo: &domain.SessionStatusEvent{
+			App: domain.SessionStatusEventApp{
+				ID:        "sid",
+				Title:     "Example",
+				Status:    domain.SessionStatusRunning,
+				Model:     "opus",
+				MachineID: "machine-1",
+				Runtime:   "claude-code",
+				CWD:       "/workspace",
+				Mode:      "default",
+				CreatedAt: time.Unix(100, 0).UTC(),
+				UpdatedAt: time.Unix(200, 0).UTC(),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(domain.EventSessionStatus), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasData := payload["data"]
+	require.False(t, hasData)
+
+	sessionStatus, ok := payload["sessionStatus"].(map[string]any)
+	require.True(t, ok)
+	app, ok := sessionStatus["app"].(map[string]any)
+	require.True(t, ok)
+	_, hasMetadata := app["metadata"]
+	require.False(t, hasMetadata)
+	require.Equal(t, "machine-1", app["machineId"])
+	require.Equal(t, "claude-code", app["runtime"])
+	require.Equal(t, "/workspace", app["cwd"])
+	require.Equal(t, "default", app["mode"])
+}
+
 func TestRunHandlesRuntimeListRPC(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverConn := make(chan *websocket.Conn, 1)

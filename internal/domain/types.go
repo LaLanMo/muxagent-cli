@@ -359,14 +359,17 @@ type RunFailedEvent struct {
 }
 
 type SessionStatusEventApp struct {
-	ID        string         `json:"id"`
-	Title     string         `json:"title"`
-	Status    SessionStatus  `json:"status"`
-	Model     string         `json:"model,omitempty"`
-	Cost      *CostInfo      `json:"cost,omitempty"`
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
+	ID        string        `json:"id"`
+	Title     string        `json:"title"`
+	Status    SessionStatus `json:"status"`
+	Model     string        `json:"model,omitempty"`
+	Cost      *CostInfo     `json:"cost,omitempty"`
+	MachineID string        `json:"machineId,omitempty"`
+	Runtime   string        `json:"runtime,omitempty"`
+	CWD       string        `json:"cwd,omitempty"`
+	Mode      string        `json:"mode,omitempty"`
+	CreatedAt time.Time     `json:"createdAt"`
+	UpdatedAt time.Time     `json:"updatedAt"`
 }
 
 type SessionStatusEvent struct {
