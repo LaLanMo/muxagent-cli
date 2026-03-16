@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -136,7 +137,7 @@ func (m *Manager) NewSession(
 	if strings.TrimSpace(runtimeID) == "" {
 		return "", "", acpprotocol.NewSessionResponse{}, fmt.Errorf("missing runtime")
 	}
-	client, rid, err := m.ensureRuntime(ctx, runtimeID)
+	client, rid, err := m.ensureRuntime(ctx, runtimeID, cwd)
 	if err != nil {
 		return "", "", acpprotocol.NewSessionResponse{}, err
 	}
@@ -160,7 +161,7 @@ func (m *Manager) LoadSession(
 	if rid == "" {
 		return "", acpprotocol.LoadSessionResponse{}, fmt.Errorf("missing runtime")
 	}
-	client, rid, err := m.ensureRuntime(ctx, string(rid))
+	client, rid, err := m.ensureRuntime(ctx, string(rid), cwd)
 	if err != nil {
 		return "", acpprotocol.LoadSessionResponse{}, err
 	}
@@ -178,7 +179,7 @@ func (m *Manager) ResolveSessions(
 	sessionIDs []string,
 ) ([]domain.SessionSummary, error) {
 	if runtimeID != "" {
-		client, _, err := m.ensureRuntime(ctx, runtimeID)
+		client, _, err := m.ensureRuntime(ctx, runtimeID, "")
 		if err != nil {
 			return nil, err
 		}
@@ -188,7 +189,7 @@ func (m *Manager) ResolveSessions(
 	seen := make(map[string]struct{}, len(sessionIDs))
 	list := make([]domain.SessionSummary, 0)
 	for _, rid := range m.configuredRuntimeIDs() {
-		client, _, err := m.ensureRuntime(ctx, string(rid))
+		client, _, err := m.ensureRuntime(ctx, string(rid), "")
 		if err != nil {
 			log.Printf("[runtime] resolve start %s failed: %v", rid, err)
 			continue
@@ -277,10 +278,10 @@ func (m *Manager) runtimeForSession(ctx context.Context, sessionID string) (runt
 	if rid == "" {
 		return nil, "", fmt.Errorf("unknown runtime for session %q", sessionID)
 	}
-	return m.ensureRuntime(ctx, string(rid))
+	return m.ensureRuntime(ctx, string(rid), "")
 }
 
-func (m *Manager) ensureRuntime(ctx context.Context, runtimeID string) (runtime.Client, config.RuntimeID, error) {
+func (m *Manager) ensureRuntime(ctx context.Context, runtimeID string, startupCWD string) (runtime.Client, config.RuntimeID, error) {
 	if strings.TrimSpace(runtimeID) == "" {
 		return nil, "", fmt.Errorf("missing runtime")
 	}
@@ -299,7 +300,7 @@ func (m *Manager) ensureRuntime(ctx context.Context, runtimeID string) (runtime.
 		return rt.client, rid, nil
 	}
 
-	settings, err := m.resolveSettings(rid, rt.settings)
+	settings, err := m.resolveSettings(rid, rt.settings, startupCWD)
 	if err != nil {
 		return nil, "", err
 	}
@@ -319,7 +320,7 @@ func (m *Manager) ensureRuntime(ctx context.Context, runtimeID string) (runtime.
 	return client, rid, nil
 }
 
-func (m *Manager) resolveSettings(id config.RuntimeID, settings config.RuntimeSettings) (config.RuntimeSettings, error) {
+func (m *Manager) resolveSettings(id config.RuntimeID, settings config.RuntimeSettings, startupCWD string) (config.RuntimeSettings, error) {
 	if id == config.RuntimeClaudeCode {
 		resolved, err := acpbin.Resolve(m.cfg, func(ev acpbin.ProgressEvent) {
 			log.Printf("[runtime] %s: %d/%d bytes", ev.Phase, ev.BytesRead, ev.TotalBytes)
@@ -350,7 +351,22 @@ func (m *Manager) resolveSettings(id config.RuntimeID, settings config.RuntimeSe
 	if strings.TrimSpace(settings.Command) == "" {
 		return config.RuntimeSettings{}, fmt.Errorf("runtime %q has no command configured", id)
 	}
+	settings.CWD = selectRuntimeStartupCWD(settings.CWD, startupCWD)
 	return settings, nil
+}
+
+func selectRuntimeStartupCWD(configuredCWD string, startupCWD string) string {
+	if strings.TrimSpace(configuredCWD) != "" {
+		return configuredCWD
+	}
+	if strings.TrimSpace(startupCWD) != "" {
+		return startupCWD
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 func (m *Manager) forwardEvents(events <-chan appwire.Event) {
