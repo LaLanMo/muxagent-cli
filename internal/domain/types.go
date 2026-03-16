@@ -19,14 +19,13 @@ const (
 )
 
 type Session struct {
-	ID        string         `json:"id"`
-	Title     string         `json:"title"`
-	Status    SessionStatus  `json:"status"`
-	Model     string         `json:"model,omitempty"`
-	Cost      *CostInfo      `json:"cost,omitempty"`
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
+	ID        string        `json:"id"`
+	Title     string        `json:"title"`
+	Status    SessionStatus `json:"status"`
+	Model     string        `json:"model,omitempty"`
+	Cost      *CostInfo     `json:"cost,omitempty"`
+	CreatedAt time.Time     `json:"createdAt"`
+	UpdatedAt time.Time     `json:"updatedAt"`
 }
 
 // SessionSummary is a lightweight ACP session list entry.
@@ -93,7 +92,6 @@ const (
 	PartTypeReasoning PartType = "reasoning"
 	PartTypeFile      PartType = "file"
 	PartTypeTool      PartType = "tool"
-	PartTypeData      PartType = "data"
 )
 
 type MediaPart struct {
@@ -105,22 +103,20 @@ type MediaPart struct {
 }
 
 type MessagePart struct {
-	Type  PartType       `json:"type"`
-	Text  string         `json:"text,omitempty"`
-	Media *MediaPart     `json:"media,omitempty"`
-	Tool  *ToolActivity  `json:"tool,omitempty"`
-	Data  map[string]any `json:"data,omitempty"`
+	Type  PartType      `json:"type"`
+	Text  string        `json:"text,omitempty"`
+	Media *MediaPart    `json:"media,omitempty"`
+	Tool  *ToolActivity `json:"tool,omitempty"`
 }
 
 type Message struct {
-	ID        string         `json:"id"`
-	SessionID string         `json:"sessionId"`
-	Role      MessageRole    `json:"role"`
-	Parts     []MessagePart  `json:"parts"`
-	Cost      *CostInfo      `json:"cost,omitempty"`
-	Model     string         `json:"model,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	CreatedAt time.Time      `json:"createdAt"`
+	ID        string        `json:"id"`
+	SessionID string        `json:"sessionId"`
+	Role      MessageRole   `json:"role"`
+	Parts     []MessagePart `json:"parts"`
+	Cost      *CostInfo     `json:"cost,omitempty"`
+	Model     string        `json:"model,omitempty"`
+	CreatedAt time.Time     `json:"createdAt"`
 }
 
 // --- Approval ---
