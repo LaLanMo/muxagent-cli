@@ -50,6 +50,12 @@ type SessionResolveResult struct {
 	Sessions []ResolvedSession `json:"sessions"`
 }
 
+type ResyncEventsResult struct {
+	Events   []Event `json:"events"`
+	Complete bool    `json:"complete"`
+	Seq      uint64  `json:"seq"`
+}
+
 type AcceptedResult struct {
 	Accepted bool `json:"accepted"`
 }

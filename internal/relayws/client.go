@@ -894,10 +894,10 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (an
 	}
 
 	events, complete := c.eventBuf.Since(decoded.LastSeq)
-	return map[string]any{
-		"events":   events,
-		"complete": complete,
-		"seq":      c.eventBuf.Seq(),
+	return appwire.ResyncEventsResult{
+		Events:   events,
+		Complete: complete,
+		Seq:      c.eventBuf.Seq(),
 	}, ""
 }
 
