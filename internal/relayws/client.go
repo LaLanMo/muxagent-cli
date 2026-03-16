@@ -726,27 +726,69 @@ type promptParams struct {
 	Text      string                `json:"text,omitempty"`
 }
 
-func decodePromptParams(params map[string]any) (promptParams, error) {
-	var decoded promptParams
+type cancelParams struct {
+	SessionID string `json:"sessionId"`
+}
+
+type setModeParams struct {
+	SessionID      string `json:"sessionId"`
+	PermissionMode string `json:"permissionMode"`
+}
+
+type setConfigOptionParams struct {
+	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
+type replyPermissionParams struct {
+	SessionID string `json:"sessionId"`
+	RequestID string `json:"requestId"`
+	OptionID  string `json:"optionId"`
+}
+
+type resyncEventsParams struct {
+	LastSeq uint64 `json:"lastSeq,omitempty"`
+}
+
+type fsListParams struct {
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path,omitempty"`
+}
+
+type fsSearchParams struct {
+	SessionID string `json:"sessionId"`
+	Query     string `json:"query"`
+}
+
+func decodeRPCParams[T any](params map[string]any) (T, error) {
+	var decoded T
 	payload, err := json.Marshal(params)
 	if err != nil {
-		return promptParams{}, err
+		return decoded, err
 	}
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return promptParams{}, err
+		return decoded, err
 	}
 	return decoded, nil
+}
+
+func decodePromptParams(params map[string]any) (promptParams, error) {
+	return decodeRPCParams[promptParams](params)
 }
 
 func (c *Client) rpcCancel(ctx context.Context, params map[string]any) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	decoded, err := decodeRPCParams[cancelParams](params)
+	if err != nil {
+		return nil, "invalid cancel params: " + err.Error()
+	}
+	if decoded.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	if err := c.runtime.Cancel(ctx, sessionID); err != nil {
+	if err := c.runtime.Cancel(ctx, decoded.SessionID); err != nil {
 		return nil, err.Error()
 	}
 	return map[string]bool{"ok": true}, ""
@@ -756,15 +798,17 @@ func (c *Client) rpcSetMode(ctx context.Context, params map[string]any) (any, st
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	decoded, err := decodeRPCParams[setModeParams](params)
+	if err != nil {
+		return nil, "invalid setMode params: " + err.Error()
+	}
+	if decoded.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	modeID := stringParam(params, "permissionMode")
-	if modeID == "" {
+	if decoded.PermissionMode == "" {
 		return nil, "missing permissionMode"
 	}
-	if err := c.runtime.SetMode(ctx, sessionID, modeID); err != nil {
+	if err := c.runtime.SetMode(ctx, decoded.SessionID, decoded.PermissionMode); err != nil {
 		return nil, err.Error()
 	}
 	return map[string]bool{"ok": true}, ""
@@ -774,19 +818,20 @@ func (c *Client) rpcSetConfigOption(ctx context.Context, params map[string]any) 
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	decoded, err := decodeRPCParams[setConfigOptionParams](params)
+	if err != nil {
+		return nil, "invalid setConfigOption params: " + err.Error()
+	}
+	if decoded.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	configID := stringParam(params, "configId")
-	if configID == "" {
+	if decoded.ConfigID == "" {
 		return nil, "missing configId"
 	}
-	value := stringParam(params, "value")
-	if value == "" {
+	if decoded.Value == "" {
 		return nil, "missing value"
 	}
-	if err := c.runtime.SetConfigOption(ctx, sessionID, configID, value); err != nil {
+	if err := c.runtime.SetConfigOption(ctx, decoded.SessionID, decoded.ConfigID, decoded.Value); err != nil {
 		return nil, err.Error()
 	}
 	return map[string]bool{"ok": true}, ""
@@ -796,26 +841,27 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	decoded, err := decodeRPCParams[replyPermissionParams](params)
+	if err != nil {
+		return nil, "invalid replyPermission params: " + err.Error()
+	}
+	if decoded.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	requestID := stringParam(params, "requestId")
-	if requestID == "" {
+	if decoded.RequestID == "" {
 		return nil, "missing requestId"
 	}
-	optionID := stringParam(params, "optionId")
-	if optionID == "" {
+	if decoded.OptionID == "" {
 		return nil, "missing optionId"
 	}
-	if err := c.runtime.ReplyPermission(ctx, sessionID, requestID, optionID); err != nil {
+	if err := c.runtime.ReplyPermission(ctx, decoded.SessionID, decoded.RequestID, decoded.OptionID); err != nil {
 		return nil, err.Error()
 	}
 	if err := c.SendEvent(appwire.Event{
 		Type:      appwire.EventApprovalReplied,
-		SessionID: sessionID,
+		SessionID: decoded.SessionID,
 		At:        time.Now(),
-		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: requestID}},
+		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: decoded.RequestID}},
 	}); err != nil && !isExpectedRelayDrop(err) {
 		log.Printf("send approval.replied event: %v", err)
 	}
@@ -834,12 +880,12 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (an
 	if c.eventBuf == nil {
 		return nil, "event buffer not available"
 	}
-	var lastSeq uint64
-	if v, ok := params["lastSeq"].(float64); ok {
-		lastSeq = uint64(v)
+	decoded, err := decodeRPCParams[resyncEventsParams](params)
+	if err != nil {
+		return nil, "invalid resync params: " + err.Error()
 	}
 
-	events, complete := c.eventBuf.Since(lastSeq)
+	events, complete := c.eventBuf.Since(decoded.LastSeq)
 	return map[string]any{
 		"events":   events,
 		"complete": complete,
@@ -884,18 +930,21 @@ func safePath(cwd, relPath string) (string, error) {
 }
 
 func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, string) {
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	decoded, err := decodeRPCParams[fsListParams](params)
+	if err != nil {
+		return nil, "invalid fs.list params: " + err.Error()
+	}
+	if decoded.SessionID == "" {
 		return nil, "missing sessionId"
 	}
 	c.sessionCWDMu.RLock()
-	cwd, ok := c.sessionCWD[sessionID]
+	cwd, ok := c.sessionCWD[decoded.SessionID]
 	c.sessionCWDMu.RUnlock()
 	if !ok || cwd == "" {
 		return nil, "unknown session"
 	}
 
-	relPath := stringParam(params, "path")
+	relPath := decoded.Path
 	target, err := safePath(cwd, relPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "path outside project") || strings.Contains(err.Error(), "symlink escape") {
@@ -941,16 +990,18 @@ func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, strin
 }
 
 func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, string) {
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	decoded, err := decodeRPCParams[fsSearchParams](params)
+	if err != nil {
+		return nil, "invalid fs.search params: " + err.Error()
+	}
+	if decoded.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	query := stringParam(params, "query")
-	if query == "" {
+	if decoded.Query == "" {
 		return nil, "missing query"
 	}
 	c.sessionCWDMu.RLock()
-	cwd, ok := c.sessionCWD[sessionID]
+	cwd, ok := c.sessionCWD[decoded.SessionID]
 	c.sessionCWDMu.RUnlock()
 	if !ok || cwd == "" {
 		return nil, "unknown session"
@@ -960,7 +1011,7 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 	defer cancel()
 
 	const maxResults = 50
-	lowerQuery := strings.ToLower(query)
+	lowerQuery := strings.ToLower(decoded.Query)
 	var results []fsSearchResult
 
 	_ = filepath.WalkDir(cwd, func(path string, d fs.DirEntry, err error) error {

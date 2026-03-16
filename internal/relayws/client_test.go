@@ -205,6 +205,44 @@ func (r *promptRuntime) Prompt(ctx context.Context, sessionID string, content []
 	}
 }
 
+type actionRuntime struct {
+	listingRuntime
+	cancelSessionID string
+	modeSessionID   string
+	modeID          string
+	configSessionID string
+	configID        string
+	configValue     string
+	replySessionID  string
+	replyRequestID  string
+	replyOptionID   string
+}
+
+func (r *actionRuntime) Cancel(ctx context.Context, sessionID string) error {
+	r.cancelSessionID = sessionID
+	return nil
+}
+
+func (r *actionRuntime) SetMode(ctx context.Context, sessionID, modeID string) error {
+	r.modeSessionID = sessionID
+	r.modeID = modeID
+	return nil
+}
+
+func (r *actionRuntime) SetConfigOption(ctx context.Context, sessionID, configID, value string) error {
+	r.configSessionID = sessionID
+	r.configID = configID
+	r.configValue = value
+	return nil
+}
+
+func (r *actionRuntime) ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error {
+	r.replySessionID = sessionID
+	r.replyRequestID = requestID
+	r.replyOptionID = optionID
+	return nil
+}
+
 type routingRuntime struct {
 	blockingRuntime
 	runtimes    []runtimemanager.RuntimeInfo
@@ -526,6 +564,143 @@ func TestRpcPromptParsesTypedContentBlocks(t *testing.T) {
 	require.Equal(t, "hello", rt.lastContent[1].Text)
 
 	rt.release <- promptResult{stopReason: "end_turn"}
+}
+
+func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
+	rt := &actionRuntime{}
+	client := &Client{
+		machineID: "machine-1",
+		runtime:   rt,
+	}
+
+	result, errStr := client.rpcCancel(context.Background(), map[string]any{
+		"sessionId": "sid-cancel",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, "sid-cancel", rt.cancelSessionID)
+
+	result, errStr = client.rpcSetMode(context.Background(), map[string]any{
+		"sessionId":      "sid-mode",
+		"permissionMode": "read-only",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, "sid-mode", rt.modeSessionID)
+	require.Equal(t, "read-only", rt.modeID)
+
+	result, errStr = client.rpcSetConfigOption(context.Background(), map[string]any{
+		"sessionId": "sid-config",
+		"configId":  "model",
+		"value":     "gpt-5.4",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, "sid-config", rt.configSessionID)
+	require.Equal(t, "model", rt.configID)
+	require.Equal(t, "gpt-5.4", rt.configValue)
+
+	result, errStr = client.rpcReplyPermission(context.Background(), map[string]any{
+		"sessionId": "sid-approval",
+		"requestId": "req-1",
+		"optionId":  "allow",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, true, result.(map[string]bool)["ok"])
+	require.Equal(t, "sid-approval", rt.replySessionID)
+	require.Equal(t, "req-1", rt.replyRequestID)
+	require.Equal(t, "allow", rt.replyOptionID)
+}
+
+func TestRpcActionHandlersRejectMalformedTypedParams(t *testing.T) {
+	client := &Client{runtime: &actionRuntime{}}
+
+	tests := []struct {
+		name   string
+		call   func() (any, string)
+		errMsg string
+	}{
+		{
+			name: "cancel rejects invalid sessionId type",
+			call: func() (any, string) {
+				return client.rpcCancel(context.Background(), map[string]any{
+					"sessionId": map[string]any{"bad": true},
+				})
+			},
+			errMsg: "invalid cancel params:",
+		},
+		{
+			name: "set mode rejects invalid permissionMode type",
+			call: func() (any, string) {
+				return client.rpcSetMode(context.Background(), map[string]any{
+					"sessionId":      "sid",
+					"permissionMode": []any{"bad"},
+				})
+			},
+			errMsg: "invalid setMode params:",
+		},
+		{
+			name: "set config rejects invalid value type",
+			call: func() (any, string) {
+				return client.rpcSetConfigOption(context.Background(), map[string]any{
+					"sessionId": "sid",
+					"configId":  "model",
+					"value":     map[string]any{"bad": true},
+				})
+			},
+			errMsg: "invalid setConfigOption params:",
+		},
+		{
+			name: "reply permission rejects invalid optionId type",
+			call: func() (any, string) {
+				return client.rpcReplyPermission(context.Background(), map[string]any{
+					"sessionId": "sid",
+					"requestId": "req-1",
+					"optionId":  123,
+				})
+			},
+			errMsg: "invalid replyPermission params:",
+		},
+		{
+			name: "resync rejects invalid lastSeq type",
+			call: func() (any, string) {
+				client.eventBuf = NewEventBuffer(8)
+				return client.rpcResyncEvents(context.Background(), map[string]any{
+					"lastSeq": "bad",
+				})
+			},
+			errMsg: "invalid resync params:",
+		},
+		{
+			name: "fs list rejects invalid path type",
+			call: func() (any, string) {
+				client.sessionCWD = map[string]string{"sid": t.TempDir()}
+				return client.rpcFsList(context.Background(), map[string]any{
+					"sessionId": "sid",
+					"path":      []any{"bad"},
+				})
+			},
+			errMsg: "invalid fs.list params:",
+		},
+		{
+			name: "fs search rejects invalid query type",
+			call: func() (any, string) {
+				client.sessionCWD = map[string]string{"sid": t.TempDir()}
+				return client.rpcFsSearch(context.Background(), map[string]any{
+					"sessionId": "sid",
+					"query":     []any{"bad"},
+				})
+			},
+			errMsg: "invalid fs.search params:",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errStr := tt.call()
+			require.Contains(t, errStr, tt.errMsg)
+		})
+	}
 }
 
 func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
