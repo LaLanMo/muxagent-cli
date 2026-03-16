@@ -14,6 +14,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/appwire"
+	"github.com/LaLanMo/muxagent-cli/internal/appwireconv"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/google/uuid"
 )
@@ -465,7 +466,7 @@ func (c *Client) handlePermissionRequest(req *IncomingMessage) {
 		Type:      appwire.EventApprovalRequested,
 		SessionID: permReq.SessionID,
 		At:        time.Now(),
-		Approval:  appwire.ApprovalRequestPtrFromDomain(&approval),
+		Approval:  appwireconv.ApprovalRequestPtrFromDomain(&approval),
 	})
 }
 

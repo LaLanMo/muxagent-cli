@@ -20,6 +20,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/appwire"
+	"github.com/LaLanMo/muxagent-cli/internal/appwireconv"
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
@@ -884,7 +885,7 @@ func (c *Client) rpcPendingApprovals(ctx context.Context, params map[string]any)
 	}
 	approvals := c.runtime.PendingApprovals()
 	return appwire.PendingApprovalsResult{
-		Approvals: appwire.ApprovalRequestsFromDomain(approvals),
+		Approvals: appwireconv.ApprovalRequestsFromDomain(approvals),
 	}, ""
 }
 
