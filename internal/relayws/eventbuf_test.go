@@ -4,21 +4,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LaLanMo/muxagent-cli/internal/domain"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func makeEvent(typ domain.EventType) domain.Event {
-	return domain.Event{Type: typ, At: time.Now()}
+func makeEvent(typ appwire.EventType) appwire.Event {
+	return appwire.Event{Type: typ, At: time.Now()}
 }
 
 func TestEventBuffer_PushAssignsSequence(t *testing.T) {
 	buf := NewEventBuffer(10)
 
-	e1 := buf.Push(makeEvent(domain.EventMessageDelta))
-	e2 := buf.Push(makeEvent(domain.EventReasoning))
-	e3 := buf.Push(makeEvent(domain.EventToolStarted))
+	e1 := buf.Push(makeEvent(appwire.EventMessageDelta))
+	e2 := buf.Push(makeEvent(appwire.EventReasoning))
+	e3 := buf.Push(makeEvent(appwire.EventToolStarted))
 
 	assert.Equal(t, uint64(1), e1.Seq)
 	assert.Equal(t, uint64(2), e2.Seq)
@@ -29,9 +29,9 @@ func TestEventBuffer_PushAssignsSequence(t *testing.T) {
 func TestEventBuffer_SinceReturnsEventsAfterSeq(t *testing.T) {
 	buf := NewEventBuffer(10)
 
-	buf.Push(makeEvent(domain.EventMessageDelta))
-	buf.Push(makeEvent(domain.EventReasoning))
-	buf.Push(makeEvent(domain.EventToolStarted))
+	buf.Push(makeEvent(appwire.EventMessageDelta))
+	buf.Push(makeEvent(appwire.EventReasoning))
+	buf.Push(makeEvent(appwire.EventToolStarted))
 
 	events, complete := buf.Since(1)
 	require.True(t, complete)
@@ -43,8 +43,8 @@ func TestEventBuffer_SinceReturnsEventsAfterSeq(t *testing.T) {
 func TestEventBuffer_SinceZeroReturnsAll(t *testing.T) {
 	buf := NewEventBuffer(10)
 
-	buf.Push(makeEvent(domain.EventMessageDelta))
-	buf.Push(makeEvent(domain.EventReasoning))
+	buf.Push(makeEvent(appwire.EventMessageDelta))
+	buf.Push(makeEvent(appwire.EventReasoning))
 
 	events, complete := buf.Since(0)
 	require.True(t, complete)
@@ -54,8 +54,8 @@ func TestEventBuffer_SinceZeroReturnsAll(t *testing.T) {
 func TestEventBuffer_SinceCaughtUp(t *testing.T) {
 	buf := NewEventBuffer(10)
 
-	buf.Push(makeEvent(domain.EventMessageDelta))
-	buf.Push(makeEvent(domain.EventReasoning))
+	buf.Push(makeEvent(appwire.EventMessageDelta))
+	buf.Push(makeEvent(appwire.EventReasoning))
 
 	events, complete := buf.Since(2)
 	require.True(t, complete)
@@ -73,10 +73,10 @@ func TestEventBuffer_SinceEmpty(t *testing.T) {
 func TestEventBuffer_RingOverwrite(t *testing.T) {
 	buf := NewEventBuffer(3)
 
-	buf.Push(makeEvent(domain.EventMessageDelta))  // seq=1
-	buf.Push(makeEvent(domain.EventReasoning))     // seq=2
-	buf.Push(makeEvent(domain.EventToolStarted))   // seq=3
-	buf.Push(makeEvent(domain.EventToolCompleted)) // seq=4, overwrites seq=1
+	buf.Push(makeEvent(appwire.EventMessageDelta))  // seq=1
+	buf.Push(makeEvent(appwire.EventReasoning))     // seq=2
+	buf.Push(makeEvent(appwire.EventToolStarted))   // seq=3
+	buf.Push(makeEvent(appwire.EventToolCompleted)) // seq=4, overwrites seq=1
 
 	// Asking for events after seq=0 should return incomplete (seq=1 is gone)
 	events, complete := buf.Since(0)
@@ -89,10 +89,10 @@ func TestEventBuffer_RingOverwrite(t *testing.T) {
 func TestEventBuffer_RingOverwriteWithValidSeq(t *testing.T) {
 	buf := NewEventBuffer(3)
 
-	buf.Push(makeEvent(domain.EventMessageDelta))  // seq=1
-	buf.Push(makeEvent(domain.EventReasoning))     // seq=2
-	buf.Push(makeEvent(domain.EventToolStarted))   // seq=3
-	buf.Push(makeEvent(domain.EventToolCompleted)) // seq=4, overwrites seq=1
+	buf.Push(makeEvent(appwire.EventMessageDelta))  // seq=1
+	buf.Push(makeEvent(appwire.EventReasoning))     // seq=2
+	buf.Push(makeEvent(appwire.EventToolStarted))   // seq=3
+	buf.Push(makeEvent(appwire.EventToolCompleted)) // seq=4, overwrites seq=1
 
 	// Asking for events after seq=2 should work (seq=2 is still boundary)
 	events, complete := buf.Since(2)

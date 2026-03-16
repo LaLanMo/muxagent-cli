@@ -10,6 +10,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/codexbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
@@ -31,7 +32,7 @@ type Manager struct {
 	runtimes       map[config.RuntimeID]*managedRuntime
 	sessionRuntime map[string]config.RuntimeID
 
-	events    chan domain.Event
+	events    chan appwire.Event
 	closeOnce sync.Once
 	done      chan struct{}
 }
@@ -59,7 +60,7 @@ func New(cfg config.Config) *Manager {
 		cfg:            cfg,
 		runtimes:       runtimes,
 		sessionRuntime: make(map[string]config.RuntimeID),
-		events:         make(chan domain.Event, 512),
+		events:         make(chan appwire.Event, 512),
 		done:           make(chan struct{}),
 	}
 }
@@ -93,7 +94,7 @@ func (m *Manager) Stop() error {
 	return firstErr
 }
 
-func (m *Manager) Events() <-chan domain.Event {
+func (m *Manager) Events() <-chan appwire.Event {
 	return m.events
 }
 
@@ -352,7 +353,7 @@ func (m *Manager) resolveSettings(id config.RuntimeID, settings config.RuntimeSe
 	return settings, nil
 }
 
-func (m *Manager) forwardEvents(events <-chan domain.Event) {
+func (m *Manager) forwardEvents(events <-chan appwire.Event) {
 	for {
 		select {
 		case <-m.done:

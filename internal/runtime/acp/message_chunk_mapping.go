@@ -5,20 +5,20 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
-	"github.com/LaLanMo/muxagent-cli/internal/domain"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 )
 
 func messagePartEvent(
-	eventType domain.EventType,
+	eventType appwire.EventType,
 	sessionID string,
 	update *acpprotocol.ContentChunk,
-	app domain.MessagePartEventApp,
-) domain.Event {
-	return domain.Event{
+	app appwire.MessagePartEventApp,
+) appwire.Event {
+	return appwire.Event{
 		Type:      eventType,
 		SessionID: sessionID,
 		At:        time.Now(),
-		MessagePart: &domain.MessagePartEvent{
+		MessagePart: &appwire.MessagePartEvent{
 			ACP: update,
 			App: app,
 		},

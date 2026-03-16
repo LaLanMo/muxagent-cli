@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/google/uuid"
 )
@@ -39,7 +40,7 @@ type sessionMsgState struct {
 type Client struct {
 	cfg       Config
 	transport *Transport
-	events    chan domain.Event
+	events    chan appwire.Event
 
 	permMu      sync.Mutex
 	pendingPerm map[string]*pendingPermission // requestID (string) → pending
@@ -57,7 +58,7 @@ type pendingPermission struct {
 func NewClient(cfg Config) *Client {
 	return &Client{
 		cfg:         cfg,
-		events:      make(chan domain.Event, 256),
+		events:      make(chan appwire.Event, 256),
 		pendingPerm: make(map[string]*pendingPermission),
 		sessionMsg:  make(map[string]*sessionMsgState),
 	}
@@ -160,7 +161,7 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 	}
 
 	// Emit initial model info from configOptions.
-	if ev := configOptionEvent(resp.SessionID, resp.ConfigOptions, "model", domain.EventModelChanged, nil); ev != nil {
+	if ev := configOptionEvent(resp.SessionID, resp.ConfigOptions, "model", appwire.EventModelChanged, nil); ev != nil {
 		c.emit(*ev)
 	}
 
@@ -245,7 +246,7 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		setConfigOptionCurrentValue(loadResp.ConfigOptions, "model", model)
 	}
 
-	if ev := configOptionEvent(sessionID, loadResp.ConfigOptions, "model", domain.EventModelChanged, nil); ev != nil {
+	if ev := configOptionEvent(sessionID, loadResp.ConfigOptions, "model", appwire.EventModelChanged, nil); ev != nil {
 		c.emit(*ev)
 	}
 
@@ -366,7 +367,7 @@ func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value
 			return fmt.Errorf("parse session/set_config_option result: %w", err)
 		}
 	}
-	if ev := configOptionEvent(sessionID, resp.ConfigOptions, "model", domain.EventModelChanged, nil); ev != nil {
+	if ev := configOptionEvent(sessionID, resp.ConfigOptions, "model", appwire.EventModelChanged, nil); ev != nil {
 		c.emit(*ev)
 	}
 	return nil
@@ -400,8 +401,8 @@ func (c *Client) PendingApprovals() []domain.ApprovalRequest {
 	return result
 }
 
-// Events returns the channel for receiving domain events.
-func (c *Client) Events() <-chan domain.Event {
+// Events returns the channel for receiving app transport events.
+func (c *Client) Events() <-chan appwire.Event {
 	return c.events
 }
 
@@ -460,8 +461,8 @@ func (c *Client) handlePermissionRequest(req *IncomingMessage) {
 	c.permMu.Unlock()
 
 	// Emit approval event for the mobile client
-	c.emit(domain.Event{
-		Type:      domain.EventApprovalRequested,
+	c.emit(appwire.Event{
+		Type:      appwire.EventApprovalRequested,
 		SessionID: permReq.SessionID,
 		At:        time.Now(),
 		Approval:  &approval,
@@ -555,7 +556,7 @@ func (c *Client) handleAgentMessageChunk(sessionID string, raw json.RawMessage) 
 	partID := state.agentPartID
 	c.msgMu.Unlock()
 
-	c.emit(messagePartEvent(domain.EventMessageDelta, sessionID, &update, domain.MessagePartEventApp{
+	c.emit(messagePartEvent(appwire.EventMessageDelta, sessionID, &update, appwire.MessagePartEventApp{
 		MessageID: msgID,
 		PartID:    partID,
 		Role:      domain.MessageRoleAgent,
@@ -591,7 +592,7 @@ func (c *Client) handleAgentThoughtChunk(sessionID string, raw json.RawMessage) 
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	c.emit(messagePartEvent(domain.EventReasoning, sessionID, &update, domain.MessagePartEventApp{
+	c.emit(messagePartEvent(appwire.EventReasoning, sessionID, &update, appwire.MessagePartEventApp{
 		MessageID: msgID,
 		PartID:    uuid.NewString(),
 		Role:      domain.MessageRoleAgent,
@@ -634,7 +635,7 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	c.emit(messagePartEvent(domain.EventMessageDelta, sessionID, &update, domain.MessagePartEventApp{
+	c.emit(messagePartEvent(appwire.EventMessageDelta, sessionID, &update, appwire.MessagePartEventApp{
 		MessageID: msgID,
 		PartID:    partID,
 		Role:      domain.MessageRoleUser,
@@ -664,19 +665,19 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	var locations []domain.ToolLocation
+	var locations []appwire.ToolLocation
 	for _, loc := range update.Locations {
 		line := intPtrFromUint32(loc.Line)
-		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: line})
+		locations = append(locations, appwire.ToolLocation{Path: loc.Path, Line: line})
 	}
 
-	c.emit(domain.Event{
-		Type:      domain.EventToolStarted,
+	c.emit(appwire.Event{
+		Type:      appwire.EventToolStarted,
 		SessionID: sessionID,
 		At:        time.Now(),
-		Tool: &domain.ToolEvent{
+		Tool: &appwire.ToolEvent{
 			ACP: &update,
-			App: domain.ToolEventApp{
+			App: appwire.ToolEventApp{
 				PartID:     partID,
 				MessageID:  msgID,
 				CallID:     update.ToolCallID,
@@ -719,15 +720,15 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	var locations []domain.ToolLocation
+	var locations []appwire.ToolLocation
 	for _, loc := range update.Locations {
 		line := intPtrFromUint32(loc.Line)
-		locations = append(locations, domain.ToolLocation{Path: loc.Path, Line: line})
+		locations = append(locations, appwire.ToolLocation{Path: loc.Path, Line: line})
 	}
 
-	toolEvent := domain.ToolEvent{
+	toolEvent := appwire.ToolEvent{
 		ACP: &update,
-		App: domain.ToolEventApp{
+		App: appwire.ToolEventApp{
 			PartID:     partID,
 			MessageID:  msgID,
 			CallID:     update.ToolCallID,
@@ -740,14 +741,14 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		},
 	}
 
-	var eventType domain.EventType
+	var eventType appwire.EventType
 
 	switch toolCallStatusValue(update.Status) {
 	case "in_progress":
-		eventType = domain.EventToolUpdated
+		eventType = appwire.EventToolUpdated
 		toolEvent.App.Status = domain.ToolStatusInProgress
 	case "completed":
-		eventType = domain.EventToolCompleted
+		eventType = appwire.EventToolCompleted
 		toolEvent.App.Status = domain.ToolStatusCompleted
 		// rawOutput can be a string or an object — handle both.
 		toolEvent.App.Output = extractRawOutput(update.RawOutput)
@@ -756,18 +757,18 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		}
 		toolEvent.App.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
 	case "failed":
-		eventType = domain.EventToolFailed
+		eventType = appwire.EventToolFailed
 		toolEvent.App.Status = domain.ToolStatusFailed
 		toolEvent.App.Error = extractRawOutput(update.RawOutput)
 		if toolEvent.App.Error == "" {
 			toolEvent.App.Error = extractTextFromContent(rawJSONFromMessages(update.Content))
 		}
 	default:
-		eventType = domain.EventToolUpdated
+		eventType = appwire.EventToolUpdated
 		toolEvent.App.Status = domain.ToolStatusInProgress
 	}
 
-	c.emit(domain.Event{
+	c.emit(appwire.Event{
 		Type:      eventType,
 		SessionID: sessionID,
 		At:        time.Now(),
@@ -988,10 +989,10 @@ func (c *Client) handleConfigOptionUpdate(sessionID string, raw json.RawMessage)
 		log.Printf("[acp] failed to parse config_option_update: %v", err)
 		return
 	}
-	if ev := configOptionEvent(sessionID, update.ConfigOptions, "model", domain.EventModelChanged, &update); ev != nil {
+	if ev := configOptionEvent(sessionID, update.ConfigOptions, "model", appwire.EventModelChanged, &update); ev != nil {
 		c.emit(*ev)
 	}
-	if ev := configOptionEvent(sessionID, update.ConfigOptions, "mode", domain.EventModeChanged, &update); ev != nil {
+	if ev := configOptionEvent(sessionID, update.ConfigOptions, "mode", appwire.EventModeChanged, &update); ev != nil {
 		c.emit(*ev)
 	}
 }
@@ -1007,7 +1008,7 @@ func (c *Client) handleUsageUpdate(sessionID string, raw json.RawMessage) {
 	}
 }
 
-func (c *Client) emit(ev domain.Event) {
+func (c *Client) emit(ev appwire.Event) {
 	select {
 	case c.events <- ev:
 	default:
@@ -1041,7 +1042,7 @@ func extractTextFromContent(raw json.RawMessage) string {
 
 // extractDiffsFromContent parses diff entries from an ACP content array.
 // Each diff entry is: {"type":"diff","path":"...","oldText":"...","newText":"..."}
-func extractDiffsFromContent(raw json.RawMessage) []domain.ToolDiff {
+func extractDiffsFromContent(raw json.RawMessage) []appwire.ToolDiff {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -1049,7 +1050,7 @@ func extractDiffsFromContent(raw json.RawMessage) []domain.ToolDiff {
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil
 	}
-	var diffs []domain.ToolDiff
+	var diffs []appwire.ToolDiff
 	for _, item := range items {
 		var entry struct {
 			Type    string  `json:"type"`
@@ -1068,13 +1069,13 @@ func extractDiffsFromContent(raw json.RawMessage) []domain.ToolDiff {
 			continue
 		}
 		if entry.Type == "diff" && entry.Path != "" {
-			diffs = append(diffs, domain.ToolDiff{
+			diffs = append(diffs, appwire.ToolDiff{
 				Path:    entry.Path,
 				OldText: entry.OldText,
 				NewText: entry.NewText,
 			})
 		} else if entry.Content != nil && entry.Content.Type == "diff" && entry.Content.Path != "" {
-			diffs = append(diffs, domain.ToolDiff{
+			diffs = append(diffs, appwire.ToolDiff{
 				Path:    entry.Content.Path,
 				OldText: entry.Content.OldText,
 				NewText: entry.Content.NewText,
@@ -1125,42 +1126,42 @@ func configOptionEvent(
 	sessionID string,
 	opts []acpprotocol.SessionConfigOption,
 	category string,
-	eventType domain.EventType,
+	eventType appwire.EventType,
 	acpUpdate *acpprotocol.ConfigOptionUpdate,
-) *domain.Event {
+) *appwire.Event {
 	for _, opt := range opts {
 		if configOptionCategory(opt) != category {
 			continue
 		}
 		flattened := opt.Options.Flatten()
-		values := make([]domain.SessionConfigValue, 0, len(flattened))
+		values := make([]appwire.SessionConfigValue, 0, len(flattened))
 		for _, v := range flattened {
-			values = append(values, domain.SessionConfigValue{
+			values = append(values, appwire.SessionConfigValue{
 				Value:       v.Value,
 				Name:        v.Name,
 				Description: v.Description,
 			})
 		}
-		if eventType == domain.EventModeChanged {
-			return &domain.Event{
+		if eventType == appwire.EventModeChanged {
+			return &appwire.Event{
 				Type:      eventType,
 				SessionID: sessionID,
 				At:        time.Now(),
-				ModeChanged: &domain.ModeChangedEvent{
+				ModeChanged: &appwire.ModeChangedEvent{
 					ACPConfigOption: acpUpdate,
-					App: domain.ModeChangedEventApp{
+					App: appwire.ModeChangedEventApp{
 						CurrentModeID: opt.CurrentValue,
 					},
 				},
 			}
 		}
-		return &domain.Event{
+		return &appwire.Event{
 			Type:      eventType,
 			SessionID: sessionID,
 			At:        time.Now(),
-			ConfigChanged: &domain.ConfigChangedEvent{
+			ConfigChanged: &appwire.ConfigChangedEvent{
 				ACP: acpUpdate,
-				App: domain.ConfigChangedEventApp{
+				App: appwire.ConfigChangedEventApp{
 					ConfigID:     opt.ID,
 					Category:     category,
 					CurrentValue: opt.CurrentValue,
@@ -1209,17 +1210,17 @@ func configOptionCategory(opt acpprotocol.SessionConfigOption) string {
 func modeEvent(
 	sessionID, modeID string,
 	acpUpdate *acpprotocol.CurrentModeUpdate,
-) *domain.Event {
+) *appwire.Event {
 	if modeID == "" {
 		return nil
 	}
-	return &domain.Event{
-		Type:      domain.EventModeChanged,
+	return &appwire.Event{
+		Type:      appwire.EventModeChanged,
 		SessionID: sessionID,
 		At:        time.Now(),
-		ModeChanged: &domain.ModeChangedEvent{
+		ModeChanged: &appwire.ModeChangedEvent{
 			ACPCurrentMode: acpUpdate,
-			App: domain.ModeChangedEventApp{
+			App: appwire.ModeChangedEventApp{
 				CurrentModeID: modeID,
 			},
 		},

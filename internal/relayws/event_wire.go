@@ -4,37 +4,38 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 )
 
 type eventEnvelope struct {
-	Type          domain.EventType           `json:"type"`
-	SessionID     string                     `json:"sessionId,omitempty"`
-	Seq           uint64                     `json:"seq"`
-	At            time.Time                  `json:"at"`
-	MessagePart   *domain.MessagePartEvent   `json:"messagePart,omitempty"`
-	Tool          *domain.ToolEvent          `json:"tool,omitempty"`
-	Approval      *domain.ApprovalRequest    `json:"approval,omitempty"`
-	Plan          *domain.PlanEvent          `json:"plan,omitempty"`
-	Usage         *domain.UsageEvent         `json:"usage,omitempty"`
-	RunFinished   *domain.RunFinishedEvent   `json:"runFinished,omitempty"`
-	RunFailed     *domain.RunFailedEvent     `json:"runFailed,omitempty"`
-	SessionInfo   *domain.SessionStatusEvent `json:"sessionStatus,omitempty"`
-	ModeChanged   *modeChangedWire           `json:"modeChanged,omitempty"`
-	ConfigChanged *configChangedWire         `json:"configChanged,omitempty"`
+	Type          appwire.EventType           `json:"type"`
+	SessionID     string                      `json:"sessionId,omitempty"`
+	Seq           uint64                      `json:"seq"`
+	At            time.Time                   `json:"at"`
+	MessagePart   *appwire.MessagePartEvent   `json:"messagePart,omitempty"`
+	Tool          *appwire.ToolEvent          `json:"tool,omitempty"`
+	Approval      *domain.ApprovalRequest     `json:"approval,omitempty"`
+	Plan          *appwire.PlanEvent          `json:"plan,omitempty"`
+	Usage         *appwire.UsageEvent         `json:"usage,omitempty"`
+	RunFinished   *appwire.RunFinishedEvent   `json:"runFinished,omitempty"`
+	RunFailed     *appwire.RunFailedEvent     `json:"runFailed,omitempty"`
+	SessionInfo   *appwire.SessionStatusEvent `json:"sessionStatus,omitempty"`
+	ModeChanged   *modeChangedWire            `json:"modeChanged,omitempty"`
+	ConfigChanged *configChangedWire          `json:"configChanged,omitempty"`
 }
 
 type modeChangedWire struct {
-	App domain.ModeChangedEventApp `json:"app"`
-	ACP any                        `json:"acp,omitempty"`
+	App appwire.ModeChangedEventApp `json:"app"`
+	ACP any                         `json:"acp,omitempty"`
 }
 
 type configChangedWire struct {
-	App domain.ConfigChangedEventApp `json:"app"`
-	ACP any                          `json:"acp,omitempty"`
+	App appwire.ConfigChangedEventApp `json:"app"`
+	ACP any                           `json:"acp,omitempty"`
 }
 
-func marshalEvent(event domain.Event) ([]byte, error) {
+func marshalEvent(event appwire.Event) ([]byte, error) {
 	envelope := eventEnvelope{
 		Type:          event.Type,
 		SessionID:     event.SessionID,
@@ -54,7 +55,7 @@ func marshalEvent(event domain.Event) ([]byte, error) {
 	return json.Marshal(envelope)
 }
 
-func modeChangedWireFromDomain(event *domain.ModeChangedEvent) *modeChangedWire {
+func modeChangedWireFromDomain(event *appwire.ModeChangedEvent) *modeChangedWire {
 	if event == nil {
 		return nil
 	}
@@ -73,7 +74,7 @@ func modeChangedWireFromDomain(event *domain.ModeChangedEvent) *modeChangedWire 
 	}
 }
 
-func configChangedWireFromDomain(event *domain.ConfigChangedEvent) *configChangedWire {
+func configChangedWireFromDomain(event *appwire.ConfigChangedEvent) *configChangedWire {
 	if event == nil {
 		return nil
 	}

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
 	"github.com/gorilla/websocket"
@@ -366,8 +367,8 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 		sessionStatus: map[string]domain.SessionStatus{},
 	}
 
-	err := client.SendEvent(domain.Event{
-		Type:      domain.EventApprovalRequested,
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventApprovalRequested,
 		SessionID: "sid",
 		At:        time.Now(),
 		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: "req-1"}},
@@ -381,12 +382,12 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 	status := resolvedStatusFromRPCResult(t, result)
 	require.Equal(t, string(domain.SessionStatusWaitingApproval), status)
 
-	err = client.SendEvent(domain.Event{
-		Type:      domain.EventRunFinished,
+	err = client.SendEvent(appwire.Event{
+		Type:      appwire.EventRunFinished,
 		SessionID: "sid",
 		At:        time.Now(),
-		RunFinished: &domain.RunFinishedEvent{
-			App: domain.RunFinishedEventApp{StopReason: "end_turn"},
+		RunFinished: &appwire.RunFinishedEvent{
+			App: appwire.RunFinishedEventApp{StopReason: "end_turn"},
 		},
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
@@ -402,9 +403,9 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 	require.True(t, complete)
 	require.Len(t, events, 2)
 	require.EqualValues(t, 1, events[0].Seq)
-	require.Equal(t, domain.EventApprovalRequested, events[0].Type)
+	require.Equal(t, appwire.EventApprovalRequested, events[0].Type)
 	require.EqualValues(t, 2, events[1].Seq)
-	require.Equal(t, domain.EventRunFinished, events[1].Type)
+	require.Equal(t, appwire.EventRunFinished, events[1].Type)
 }
 
 func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
@@ -464,7 +465,7 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 	events, complete := client.eventBuf.Since(0)
 	require.True(t, complete)
 	require.Len(t, events, 1)
-	require.Equal(t, domain.EventRunFinished, events[0].Type)
+	require.Equal(t, appwire.EventRunFinished, events[0].Type)
 	require.NotNil(t, events[0].RunFinished)
 	require.Equal(t, "end_turn", events[0].RunFinished.App.StopReason)
 }
@@ -483,13 +484,13 @@ func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
 		session:   session,
 	}
 
-	err := client.SendEvent(domain.Event{
-		Type:      domain.EventRunFailed,
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventRunFailed,
 		SessionID: "sid",
 		At:        time.Now(),
-		RunFailed: &domain.RunFailedEvent{
-			App: domain.RunFailedEventApp{
-				Error: domain.SessionError{
+		RunFailed: &appwire.RunFailedEvent{
+			App: appwire.RunFailedEventApp{
+				Error: appwire.SessionError{
 					Code:    "prompt_error",
 					Message: "runtime failed",
 				},
@@ -502,7 +503,7 @@ func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
 	require.Equal(t, MessageTypeEvent, msg.Type)
 
 	payload := decryptResponse(t, session, msg)
-	require.Equal(t, string(domain.EventRunFailed), payload["type"])
+	require.Equal(t, string(appwire.EventRunFailed), payload["type"])
 	require.Equal(t, "sid", payload["sessionId"])
 	_, hasTopLevelError := payload["error"]
 	require.False(t, hasTopLevelError)
@@ -531,12 +532,12 @@ func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
 		session:   session,
 	}
 
-	err := client.SendEvent(domain.Event{
-		Type:      domain.EventModeChanged,
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventModeChanged,
 		SessionID: "sid",
 		At:        time.Now(),
-		ModeChanged: &domain.ModeChangedEvent{
-			App: domain.ModeChangedEventApp{CurrentModeID: "read-only"},
+		ModeChanged: &appwire.ModeChangedEvent{
+			App: appwire.ModeChangedEventApp{CurrentModeID: "read-only"},
 		},
 	})
 	require.NoError(t, err)
@@ -545,7 +546,7 @@ func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
 	require.Equal(t, MessageTypeEvent, msg.Type)
 
 	payload := decryptResponse(t, session, msg)
-	require.Equal(t, string(domain.EventModeChanged), payload["type"])
+	require.Equal(t, string(appwire.EventModeChanged), payload["type"])
 	require.Equal(t, "sid", payload["sessionId"])
 	_, hasData := payload["data"]
 	require.False(t, hasData)
@@ -571,16 +572,16 @@ func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
 		session:   session,
 	}
 
-	err := client.SendEvent(domain.Event{
-		Type:      domain.EventModelChanged,
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventModelChanged,
 		SessionID: "sid",
 		At:        time.Now(),
-		ConfigChanged: &domain.ConfigChangedEvent{
-			App: domain.ConfigChangedEventApp{
+		ConfigChanged: &appwire.ConfigChangedEvent{
+			App: appwire.ConfigChangedEventApp{
 				ConfigID:     "model",
 				Category:     "model",
 				CurrentValue: "gpt-5.4",
-				Values: []domain.SessionConfigValue{{
+				Values: []appwire.SessionConfigValue{{
 					Value: "gpt-5.4",
 					Name:  "gpt-5.4",
 				}},
@@ -593,7 +594,7 @@ func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
 	require.Equal(t, MessageTypeEvent, msg.Type)
 
 	payload := decryptResponse(t, session, msg)
-	require.Equal(t, string(domain.EventModelChanged), payload["type"])
+	require.Equal(t, string(appwire.EventModelChanged), payload["type"])
 	require.Equal(t, "sid", payload["sessionId"])
 	_, hasData := payload["data"]
 	require.False(t, hasData)
@@ -620,12 +621,12 @@ func TestSendEventUsesSessionStatusEnvelope(t *testing.T) {
 		session:   session,
 	}
 
-	err := client.SendEvent(domain.Event{
-		Type:      domain.EventSessionStatus,
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventSessionStatus,
 		SessionID: "sid",
 		At:        time.Now(),
-		SessionInfo: &domain.SessionStatusEvent{
-			App: domain.SessionStatusEventApp{
+		SessionInfo: &appwire.SessionStatusEvent{
+			App: appwire.SessionStatusEventApp{
 				ID:        "sid",
 				Title:     "Example",
 				Status:    domain.SessionStatusRunning,
@@ -645,7 +646,7 @@ func TestSendEventUsesSessionStatusEnvelope(t *testing.T) {
 	require.Equal(t, MessageTypeEvent, msg.Type)
 
 	payload := decryptResponse(t, session, msg)
-	require.Equal(t, string(domain.EventSessionStatus), payload["type"])
+	require.Equal(t, string(appwire.EventSessionStatus), payload["type"])
 	require.Equal(t, "sid", payload["sessionId"])
 	_, hasData := payload["data"]
 	require.False(t, hasData)
@@ -1019,8 +1020,8 @@ func TestConnectHandshakeIsolation(t *testing.T) {
 		t.Fatal("challenge response was not received")
 	}
 
-	err = client.SendEvent(domain.Event{
-		Type:      domain.EventRunFinished,
+	err = client.SendEvent(appwire.Event{
+		Type:      appwire.EventRunFinished,
 		SessionID: "sid",
 		At:        time.Now(),
 	})
@@ -1188,8 +1189,8 @@ func TestCloseAndSendEventConcurrent(t *testing.T) {
 
 	go func() {
 		<-start
-		errCh <- client.SendEvent(domain.Event{
-			Type:      domain.EventRunFinished,
+		errCh <- client.SendEvent(appwire.Event{
+			Type:      appwire.EventRunFinished,
 			SessionID: "sid",
 			At:        time.Now(),
 		})

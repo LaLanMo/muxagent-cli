@@ -4,40 +4,40 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
-	"github.com/LaLanMo/muxagent-cli/internal/domain"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 )
 
-func planEvent(sessionID string, update *acpprotocol.PlanUpdate) *domain.Event {
+func planEvent(sessionID string, update *acpprotocol.PlanUpdate) *appwire.Event {
 	if update == nil {
 		return nil
 	}
 
-	entries := make([]domain.PlanEntryApp, 0, len(update.Entries))
+	entries := make([]appwire.PlanEntryApp, 0, len(update.Entries))
 	for _, entry := range update.Entries {
-		entries = append(entries, domain.PlanEntryApp{
+		entries = append(entries, appwire.PlanEntryApp{
 			Content:  entry.Content,
 			Status:   string(entry.Status),
 			Priority: string(entry.Priority),
 		})
 	}
 
-	return &domain.Event{
-		Type:      domain.EventPlanUpdated,
+	return &appwire.Event{
+		Type:      appwire.EventPlanUpdated,
 		SessionID: sessionID,
 		At:        time.Now(),
-		Plan: &domain.PlanEvent{
+		Plan: &appwire.PlanEvent{
 			ACP: update,
-			App: domain.PlanEventApp{Entries: entries},
+			App: appwire.PlanEventApp{Entries: entries},
 		},
 	}
 }
 
-func usageEvent(sessionID string, update *acpprotocol.UsageUpdate) *domain.Event {
+func usageEvent(sessionID string, update *acpprotocol.UsageUpdate) *appwire.Event {
 	if update == nil {
 		return nil
 	}
 
-	app := domain.UsageEventApp{
+	app := appwire.UsageEventApp{
 		ContextUsed: update.Used,
 		ContextSize: update.Size,
 	}
@@ -46,11 +46,11 @@ func usageEvent(sessionID string, update *acpprotocol.UsageUpdate) *domain.Event
 		app.CostCurrency = &update.Cost.Currency
 	}
 
-	return &domain.Event{
-		Type:      domain.EventUsageUpdate,
+	return &appwire.Event{
+		Type:      appwire.EventUsageUpdate,
 		SessionID: sessionID,
 		At:        time.Now(),
-		Usage: &domain.UsageEvent{
+		Usage: &appwire.UsageEvent{
 			ACP: update,
 			App: app,
 		},

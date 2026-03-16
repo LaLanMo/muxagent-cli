@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/LaLanMo/muxagent-cli/internal/domain"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +22,7 @@ func TestHandlePlanEmitsACPAndAppPayloads(t *testing.T) {
 
 	select {
 	case event := <-client.Events():
-		require.Equal(t, domain.EventPlanUpdated, event.Type)
+		require.Equal(t, appwire.EventPlanUpdated, event.Type)
 		require.NotNil(t, event.Plan)
 		require.NotNil(t, event.Plan.ACP)
 		require.Equal(t, "plan", event.Plan.ACP.SessionUpdate)
@@ -47,7 +47,7 @@ func TestHandleUsageUpdateEmitsACPAndAppPayloads(t *testing.T) {
 
 	select {
 	case event := <-client.Events():
-		require.Equal(t, domain.EventUsageUpdate, event.Type)
+		require.Equal(t, appwire.EventUsageUpdate, event.Type)
 		require.NotNil(t, event.Usage)
 		require.NotNil(t, event.Usage.ACP)
 		require.Equal(t, "usage_update", event.Usage.ACP.SessionUpdate)

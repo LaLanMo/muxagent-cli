@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
@@ -686,13 +687,13 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		stopReason, usage, err := c.runtime.Prompt(context.Background(), sessionID, content)
 		now := time.Now()
 		if err != nil {
-			if evErr := c.SendEvent(domain.Event{
-				Type:      domain.EventRunFailed,
+			if evErr := c.SendEvent(appwire.Event{
+				Type:      appwire.EventRunFailed,
 				SessionID: sessionID,
 				At:        now,
-				RunFailed: &domain.RunFailedEvent{
-					App: domain.RunFailedEventApp{
-						Error: domain.SessionError{
+				RunFailed: &appwire.RunFailedEvent{
+					App: appwire.RunFailedEventApp{
+						Error: appwire.SessionError{
 							Code:    "prompt_error",
 							Message: err.Error(),
 						},
@@ -703,7 +704,7 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 			}
 			return
 		}
-		runFinished := domain.RunFinishedEventApp{StopReason: stopReason}
+		runFinished := appwire.RunFinishedEventApp{StopReason: stopReason}
 		if usage != nil {
 			runFinished.TotalTokens = usage.TotalTokens
 			runFinished.InputTokens = usage.InputTokens
@@ -711,11 +712,11 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 			runFinished.CachedReadTokens = usage.CachedReadTokens
 			runFinished.CachedWriteTokens = usage.CachedWriteTokens
 		}
-		if evErr := c.SendEvent(domain.Event{
-			Type:      domain.EventRunFinished,
+		if evErr := c.SendEvent(appwire.Event{
+			Type:      appwire.EventRunFinished,
 			SessionID: sessionID,
 			At:        now,
-			RunFinished: &domain.RunFinishedEvent{
+			RunFinished: &appwire.RunFinishedEvent{
 				App: runFinished,
 			},
 		}); evErr != nil && !isExpectedRelayDrop(evErr) {
@@ -799,8 +800,8 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 	if err := c.runtime.ReplyPermission(ctx, sessionID, requestID, optionID); err != nil {
 		return nil, err.Error()
 	}
-	if err := c.SendEvent(domain.Event{
-		Type:      domain.EventApprovalReplied,
+	if err := c.SendEvent(appwire.Event{
+		Type:      appwire.EventApprovalReplied,
 		SessionID: sessionID,
 		At:        time.Now(),
 		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: requestID}},
@@ -990,8 +991,8 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 
 // --- Event forwarding ---
 
-// SendEvent encrypts a domain event and sends it to the connected client via WS.
-func (c *Client) SendEvent(event domain.Event) error {
+// SendEvent encrypts an app transport event and sends it to the connected client via WS.
+func (c *Client) SendEvent(event appwire.Event) error {
 	c.applyEventStatus(event)
 	if c.eventBuf != nil {
 		event = c.eventBuf.Push(event)
@@ -1025,26 +1026,26 @@ func (c *Client) SendEvent(event domain.Event) error {
 		Ciphertext: ciphertext,
 	}
 	switch event.Type {
-	case domain.EventApprovalRequested, domain.EventRunFailed, domain.EventRunFinished:
+	case appwire.EventApprovalRequested, appwire.EventRunFailed, appwire.EventRunFinished:
 		msg.Hint = &EventHint{Event: string(event.Type)}
 	}
 	return c.writeForSession(session, msg)
 }
 
-func (c *Client) applyEventStatus(event domain.Event) {
+func (c *Client) applyEventStatus(event appwire.Event) {
 	if event.SessionID == "" {
 		return
 	}
 	switch event.Type {
-	case domain.EventApprovalRequested:
+	case appwire.EventApprovalRequested:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusWaitingApproval)
-	case domain.EventApprovalReplied:
+	case appwire.EventApprovalReplied:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusRunning)
-	case domain.EventRunFinished:
+	case appwire.EventRunFinished:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusIdle)
-	case domain.EventRunFailed:
+	case appwire.EventRunFailed:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusError)
-	case domain.EventSessionStatus:
+	case appwire.EventSessionStatus:
 		if event.SessionInfo != nil {
 			c.setSessionStatus(event.SessionID, event.SessionInfo.App.Status)
 		}

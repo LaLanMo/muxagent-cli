@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 )
 
@@ -21,5 +22,5 @@ type Client interface {
 	SetConfigOption(ctx context.Context, sessionID, configID, value string) error
 	ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error
 
-	Events() <-chan domain.Event
+	Events() <-chan appwire.Event
 }
