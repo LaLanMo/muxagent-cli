@@ -854,6 +854,95 @@ func TestSendEventUsesApprovalEnvelope(t *testing.T) {
 	require.Equal(t, []any{"touch", "hello.txt"}, command["argv"])
 }
 
+func TestSendEventUsesToolEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	line := 3
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventToolCompleted,
+		SessionID: "sid",
+		At:        time.Now(),
+		Tool: &appwire.ToolEvent{
+			App: appwire.ToolEventApp{
+				PartID:    "part-1",
+				MessageID: "msg-1",
+				CallID:    "call-1",
+				Name:      "Bash",
+				Kind:      "execute",
+				Title:     "Run touch hello.txt",
+				Status:    appwire.ToolStatusCompleted,
+				Input: &appwire.ToolInput{
+					Command: &appwire.ToolCommand{
+						Argv:    []string{"touch", "hello.txt"},
+						Display: "touch hello.txt",
+					},
+					FilePath:     "hello.txt",
+					RawInputJSON: "{\"command\":[\"touch\",\"hello.txt\"]}",
+				},
+				Output: "done",
+				ClaudeCode: &appwire.ClaudeCodeTool{
+					ParentToolUseID: "parent-1",
+					ToolName:        "bash",
+				},
+				Locations: []appwire.ToolLocation{{
+					Path: "/workspace/hello.txt",
+					Line: &line,
+				}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventToolCompleted), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+
+	tool, ok := payload["tool"].(map[string]any)
+	require.True(t, ok)
+	app, ok := tool["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "call-1", app["callId"])
+	require.Equal(t, "execute", app["kind"])
+	require.Equal(t, "completed", app["status"])
+	require.Equal(t, "done", app["output"])
+
+	input, ok := app["input"].(map[string]any)
+	require.True(t, ok)
+	command, ok := input["command"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "touch hello.txt", command["display"])
+	require.Equal(t, []any{"touch", "hello.txt"}, command["argv"])
+	require.Equal(t, "hello.txt", input["filePath"])
+	require.Equal(t, "{\"command\":[\"touch\",\"hello.txt\"]}", input["rawInputJson"])
+
+	claudeCode, ok := app["claudeCode"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "parent-1", claudeCode["parentToolUseId"])
+	require.Equal(t, "bash", claudeCode["toolName"])
+
+	locations, ok := app["locations"].([]any)
+	require.True(t, ok)
+	require.Len(t, locations, 1)
+	location, ok := locations[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "/workspace/hello.txt", location["path"])
+	require.Equal(t, float64(3), location["line"])
+}
+
 func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
 	clientConn, relayConn, cleanup := newWSPair(t)
 	defer cleanup()

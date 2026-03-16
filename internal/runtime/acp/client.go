@@ -684,7 +684,7 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 				Name:       *update.Title,
 				Kind:       stringPtrValue(update.Kind),
 				Title:      *update.Title,
-				Status:     domain.ToolStatusPending,
+				Status:     appwire.ToolStatusPending,
 				Input:      toolInputFromRaw(update.RawInput),
 				ClaudeCode: claudeCodeToolFromMeta(update.Meta),
 				Locations:  locations,
@@ -746,10 +746,10 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	switch toolCallStatusValue(update.Status) {
 	case "in_progress":
 		eventType = appwire.EventToolUpdated
-		toolEvent.App.Status = domain.ToolStatusInProgress
+		toolEvent.App.Status = appwire.ToolStatusInProgress
 	case "completed":
 		eventType = appwire.EventToolCompleted
-		toolEvent.App.Status = domain.ToolStatusCompleted
+		toolEvent.App.Status = appwire.ToolStatusCompleted
 		// rawOutput can be a string or an object — handle both.
 		toolEvent.App.Output = extractRawOutput(update.RawOutput)
 		if toolEvent.App.Output == "" {
@@ -758,14 +758,14 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		toolEvent.App.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
 	case "failed":
 		eventType = appwire.EventToolFailed
-		toolEvent.App.Status = domain.ToolStatusFailed
+		toolEvent.App.Status = appwire.ToolStatusFailed
 		toolEvent.App.Error = extractRawOutput(update.RawOutput)
 		if toolEvent.App.Error == "" {
 			toolEvent.App.Error = extractTextFromContent(rawJSONFromMessages(update.Content))
 		}
 	default:
 		eventType = appwire.EventToolUpdated
-		toolEvent.App.Status = domain.ToolStatusInProgress
+		toolEvent.App.Status = appwire.ToolStatusInProgress
 	}
 
 	c.emit(appwire.Event{
@@ -776,7 +776,7 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	})
 }
 
-func toolInputFromRaw(raw json.RawMessage) *domain.ToolInput {
+func toolInputFromRaw(raw json.RawMessage) *appwire.ToolInput {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -784,7 +784,7 @@ func toolInputFromRaw(raw json.RawMessage) *domain.ToolInput {
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil
 	}
-	result := &domain.ToolInput{
+	result := &appwire.ToolInput{
 		Description:  stringFromMap(input, "description"),
 		FilePath:     firstStringFromMap(input, "file_path", "path"),
 		SourcePath:   firstStringFromMap(input, "source", "path"),
@@ -803,7 +803,7 @@ func toolInputFromRaw(raw json.RawMessage) *domain.ToolInput {
 	newString := stringFromMap(input, "new_string")
 	editFilePath := firstStringFromMap(input, "file_path", "path")
 	if oldString != "" || newString != "" || editFilePath != "" {
-		result.Edit = &domain.ToolEditInput{
+		result.Edit = &appwire.ToolEditInput{
 			FilePath:  editFilePath,
 			OldString: oldString,
 			NewString: newString,
@@ -829,7 +829,7 @@ func toolInputFromRaw(raw json.RawMessage) *domain.ToolInput {
 	return result
 }
 
-func claudeCodeToolFromMeta(meta acpprotocol.Meta) *domain.ClaudeCodeTool {
+func claudeCodeToolFromMeta(meta acpprotocol.Meta) *appwire.ClaudeCodeTool {
 	if len(meta) == 0 {
 		return nil
 	}
@@ -845,7 +845,7 @@ func claudeCodeToolFromMeta(meta acpprotocol.Meta) *domain.ClaudeCodeTool {
 		return nil
 	}
 
-	return &domain.ClaudeCodeTool{
+	return &appwire.ClaudeCodeTool{
 		ParentToolUseID: parentToolUseID,
 		ToolName:        toolName,
 	}
@@ -865,14 +865,14 @@ func firstStringFromMap(input map[string]any, keys ...string) string {
 	return ""
 }
 
-func commandFromMap(input map[string]any) *domain.ToolCommand {
+func commandFromMap(input map[string]any) *appwire.ToolCommand {
 	command := input["command"]
 	switch value := command.(type) {
 	case string:
 		if value == "" {
 			return nil
 		}
-		return &domain.ToolCommand{Display: value}
+		return &appwire.ToolCommand{Display: value}
 	case []any:
 		argv := make([]string, 0, len(value))
 		for _, item := range value {
@@ -885,7 +885,7 @@ func commandFromMap(input map[string]any) *domain.ToolCommand {
 		if len(argv) == 0 {
 			return nil
 		}
-		return &domain.ToolCommand{
+		return &appwire.ToolCommand{
 			Argv:    argv,
 			Display: strings.Join(argv, " "),
 		}
