@@ -232,3 +232,39 @@ type Event struct {
 	ModeChanged   *ModeChangedEvent
 	ConfigChanged *ConfigChangedEvent
 }
+
+type eventEnvelopeWire struct {
+	Type          EventType           `json:"type"`
+	SessionID     string              `json:"sessionId,omitempty"`
+	Seq           uint64              `json:"seq"`
+	At            time.Time           `json:"at"`
+	MessagePart   *MessagePartEvent   `json:"messagePart,omitempty"`
+	Tool          *ToolEvent          `json:"tool,omitempty"`
+	Approval      *ApprovalRequest    `json:"approval,omitempty"`
+	Plan          *PlanEvent          `json:"plan,omitempty"`
+	Usage         *UsageEvent         `json:"usage,omitempty"`
+	RunFinished   *RunFinishedEvent   `json:"runFinished,omitempty"`
+	RunFailed     *RunFailedEvent     `json:"runFailed,omitempty"`
+	SessionInfo   *SessionStatusEvent `json:"sessionStatus,omitempty"`
+	ModeChanged   *ModeChangedEvent   `json:"modeChanged,omitempty"`
+	ConfigChanged *ConfigChangedEvent `json:"configChanged,omitempty"`
+}
+
+func (e Event) MarshalJSON() ([]byte, error) {
+	return json.Marshal(eventEnvelopeWire{
+		Type:          e.Type,
+		SessionID:     e.SessionID,
+		Seq:           e.Seq,
+		At:            e.At,
+		MessagePart:   e.MessagePart,
+		Tool:          e.Tool,
+		Approval:      e.Approval,
+		Plan:          e.Plan,
+		Usage:         e.Usage,
+		RunFinished:   e.RunFinished,
+		RunFailed:     e.RunFailed,
+		SessionInfo:   e.SessionInfo,
+		ModeChanged:   e.ModeChanged,
+		ConfigChanged: e.ConfigChanged,
+	})
+}
