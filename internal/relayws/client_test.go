@@ -962,6 +962,9 @@ func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
 		SessionID: "sid",
 		At:        time.Now(),
 		ModeChanged: &appwire.ModeChangedEvent{
+			ACPCurrentMode: &acpprotocol.CurrentModeUpdate{
+				CurrentModeID: "read-only",
+			},
 			App: appwire.ModeChangedEventApp{CurrentModeID: "read-only"},
 		},
 	})
@@ -981,6 +984,9 @@ func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
 	app, ok := modeChanged["app"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "read-only", app["currentModeId"])
+	acp, ok := modeChanged["acp"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "read-only", acp["currentModeId"])
 }
 
 func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
@@ -1002,6 +1008,21 @@ func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
 		SessionID: "sid",
 		At:        time.Now(),
 		ConfigChanged: &appwire.ConfigChangedEvent{
+			ACP: &acpprotocol.ConfigOptionUpdate{
+				ConfigOptions: []acpprotocol.SessionConfigOption{{
+					ID:           "model",
+					Name:         "Model",
+					Category:     stringPtr("model"),
+					Type:         "select",
+					CurrentValue: "gpt-5.4",
+					Options: acpprotocol.SessionConfigSelectOptions{
+						Ungrouped: []acpprotocol.SessionConfigSelectOption{{
+							Value: "gpt-5.4",
+							Name:  "gpt-5.4",
+						}},
+					},
+				}},
+			},
 			App: appwire.ConfigChangedEventApp{
 				ConfigID:     "model",
 				Category:     "model",
@@ -1030,6 +1051,11 @@ func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "model", app["configId"])
 	require.Equal(t, "gpt-5.4", app["currentValue"])
+	acp, ok := configChanged["acp"].(map[string]any)
+	require.True(t, ok)
+	options, ok := acp["configOptions"].([]any)
+	require.True(t, ok)
+	require.Len(t, options, 1)
 }
 
 func TestSendEventUsesSessionStatusEnvelope(t *testing.T) {

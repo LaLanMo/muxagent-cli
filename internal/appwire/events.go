@@ -1,6 +1,7 @@
 package appwire
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
@@ -153,6 +154,32 @@ type ModeChangedEvent struct {
 	App             ModeChangedEventApp             `json:"app"`
 }
 
+type modeChangedEventWire struct {
+	App ModeChangedEventApp `json:"app"`
+	ACP json.RawMessage     `json:"acp,omitempty"`
+}
+
+func (e ModeChangedEvent) MarshalJSON() ([]byte, error) {
+	wire := modeChangedEventWire{App: e.App}
+
+	switch {
+	case e.ACPCurrentMode != nil:
+		payload, err := json.Marshal(e.ACPCurrentMode)
+		if err != nil {
+			return nil, err
+		}
+		wire.ACP = payload
+	case e.ACPConfigOption != nil:
+		payload, err := json.Marshal(e.ACPConfigOption)
+		if err != nil {
+			return nil, err
+		}
+		wire.ACP = payload
+	}
+
+	return json.Marshal(wire)
+}
+
 type SessionConfigValue struct {
 	Value       string  `json:"value"`
 	Name        string  `json:"name"`
@@ -169,6 +196,23 @@ type ConfigChangedEventApp struct {
 type ConfigChangedEvent struct {
 	ACP *acpprotocol.ConfigOptionUpdate `json:"-"`
 	App ConfigChangedEventApp           `json:"app"`
+}
+
+type configChangedEventWire struct {
+	App ConfigChangedEventApp `json:"app"`
+	ACP json.RawMessage       `json:"acp,omitempty"`
+}
+
+func (e ConfigChangedEvent) MarshalJSON() ([]byte, error) {
+	wire := configChangedEventWire{App: e.App}
+	if e.ACP != nil {
+		payload, err := json.Marshal(e.ACP)
+		if err != nil {
+			return nil, err
+		}
+		wire.ACP = payload
+	}
+	return json.Marshal(wire)
 }
 
 type Event struct {

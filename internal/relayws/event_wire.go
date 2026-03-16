@@ -20,18 +20,8 @@ type eventEnvelope struct {
 	RunFinished   *appwire.RunFinishedEvent   `json:"runFinished,omitempty"`
 	RunFailed     *appwire.RunFailedEvent     `json:"runFailed,omitempty"`
 	SessionInfo   *appwire.SessionStatusEvent `json:"sessionStatus,omitempty"`
-	ModeChanged   *modeChangedWire            `json:"modeChanged,omitempty"`
-	ConfigChanged *configChangedWire          `json:"configChanged,omitempty"`
-}
-
-type modeChangedWire struct {
-	App appwire.ModeChangedEventApp `json:"app"`
-	ACP any                         `json:"acp,omitempty"`
-}
-
-type configChangedWire struct {
-	App appwire.ConfigChangedEventApp `json:"app"`
-	ACP any                           `json:"acp,omitempty"`
+	ModeChanged   *appwire.ModeChangedEvent   `json:"modeChanged,omitempty"`
+	ConfigChanged *appwire.ConfigChangedEvent `json:"configChanged,omitempty"`
 }
 
 func marshalEvent(event appwire.Event) ([]byte, error) {
@@ -48,43 +38,8 @@ func marshalEvent(event appwire.Event) ([]byte, error) {
 		RunFinished:   event.RunFinished,
 		RunFailed:     event.RunFailed,
 		SessionInfo:   event.SessionInfo,
-		ModeChanged:   modeChangedWireFromDomain(event.ModeChanged),
-		ConfigChanged: configChangedWireFromDomain(event.ConfigChanged),
+		ModeChanged:   event.ModeChanged,
+		ConfigChanged: event.ConfigChanged,
 	}
 	return json.Marshal(envelope)
-}
-
-func modeChangedWireFromDomain(event *appwire.ModeChangedEvent) *modeChangedWire {
-	if event == nil {
-		return nil
-	}
-
-	var acp any
-	switch {
-	case event.ACPCurrentMode != nil:
-		acp = event.ACPCurrentMode
-	case event.ACPConfigOption != nil:
-		acp = event.ACPConfigOption
-	}
-
-	return &modeChangedWire{
-		App: event.App,
-		ACP: acp,
-	}
-}
-
-func configChangedWireFromDomain(event *appwire.ConfigChangedEvent) *configChangedWire {
-	if event == nil {
-		return nil
-	}
-
-	var acp any
-	if event.ACP != nil {
-		acp = event.ACP
-	}
-
-	return &configChangedWire{
-		App: event.App,
-		ACP: acp,
-	}
 }
