@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
-	"github.com/LaLanMo/muxagent-cli/internal/domain"
 )
 
 type EventType string
@@ -28,12 +27,12 @@ const (
 )
 
 type MessagePartEventApp struct {
-	PartID    string             `json:"partId"`
-	MessageID string             `json:"messageId"`
-	Role      domain.MessageRole `json:"role,omitempty"`
-	Delta     string             `json:"delta"`
-	PartType  string             `json:"partType"`
-	FullText  string             `json:"fullText"`
+	PartID    string      `json:"partId"`
+	MessageID string      `json:"messageId"`
+	Role      MessageRole `json:"role,omitempty"`
+	Delta     string      `json:"delta"`
+	PartType  string      `json:"partType"`
+	FullText  string      `json:"fullText"`
 }
 
 type MessagePartEvent struct {
@@ -127,17 +126,17 @@ type RunFailedEvent struct {
 }
 
 type SessionStatusEventApp struct {
-	ID        string               `json:"id"`
-	Title     string               `json:"title"`
-	Status    domain.SessionStatus `json:"status"`
-	Model     string               `json:"model,omitempty"`
-	Cost      *domain.CostInfo     `json:"cost,omitempty"`
-	MachineID string               `json:"machineId,omitempty"`
-	Runtime   string               `json:"runtime,omitempty"`
-	CWD       string               `json:"cwd,omitempty"`
-	Mode      string               `json:"mode,omitempty"`
-	CreatedAt time.Time            `json:"createdAt"`
-	UpdatedAt time.Time            `json:"updatedAt"`
+	ID        string        `json:"id"`
+	Title     string        `json:"title"`
+	Status    SessionStatus `json:"status"`
+	Model     string        `json:"model,omitempty"`
+	Cost      *CostInfo     `json:"cost,omitempty"`
+	MachineID string        `json:"machineId,omitempty"`
+	Runtime   string        `json:"runtime,omitempty"`
+	CWD       string        `json:"cwd,omitempty"`
+	Mode      string        `json:"mode,omitempty"`
+	CreatedAt time.Time     `json:"createdAt"`
+	UpdatedAt time.Time     `json:"updatedAt"`
 }
 
 type SessionStatusEvent struct {

@@ -1054,7 +1054,7 @@ func TestSendEventUsesSessionStatusEnvelope(t *testing.T) {
 			App: appwire.SessionStatusEventApp{
 				ID:        "sid",
 				Title:     "Example",
-				Status:    domain.SessionStatusRunning,
+				Status:    appwire.SessionStatusRunning,
 				Model:     "opus",
 				MachineID: "machine-1",
 				Runtime:   "claude-code",

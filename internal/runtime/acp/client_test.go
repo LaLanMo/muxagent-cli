@@ -234,7 +234,7 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 			require.NotNil(t, ev.MessagePart.ACP)
 			assert.NotEmpty(t, ev.MessagePart.App.MessageID)
 			assert.NotEmpty(t, ev.MessagePart.App.PartID)
-			assert.Equal(t, domain.MessageRoleAgent, ev.MessagePart.App.Role)
+			assert.Equal(t, appwire.MessageRoleAgent, ev.MessagePart.App.Role)
 		}
 		if ev.Type == appwire.EventToolStarted {
 			require.NotNil(t, ev.Tool)
@@ -431,7 +431,7 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 
 	// Verify content
 	var messageParts []string
-	var roleMap = map[domain.MessageRole]int{}
+	var roleMap = map[appwire.MessageRole]int{}
 	for _, ev := range events {
 		if ev.Type == appwire.EventMessageDelta && ev.MessagePart != nil {
 			messageParts = append(messageParts, ev.MessagePart.App.Delta)
@@ -443,8 +443,8 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 			assert.NotEmpty(t, ev.Tool.App.MessageID)
 		}
 	}
-	assert.GreaterOrEqual(t, roleMap[domain.MessageRoleUser], 1, "expected replayed user message chunk")
-	assert.GreaterOrEqual(t, roleMap[domain.MessageRoleAgent], 1, "expected replayed agent message chunk")
+	assert.GreaterOrEqual(t, roleMap[appwire.MessageRoleUser], 1, "expected replayed user message chunk")
+	assert.GreaterOrEqual(t, roleMap[appwire.MessageRoleAgent], 1, "expected replayed agent message chunk")
 	assert.Contains(t, messageParts, "Hi ")
 	assert.Contains(t, messageParts, "there")
 	assert.Contains(t, messageParts, "History: ")

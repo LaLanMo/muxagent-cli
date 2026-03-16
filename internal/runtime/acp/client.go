@@ -559,7 +559,7 @@ func (c *Client) handleAgentMessageChunk(sessionID string, raw json.RawMessage) 
 	c.emit(messagePartEvent(appwire.EventMessageDelta, sessionID, &update, appwire.MessagePartEventApp{
 		MessageID: msgID,
 		PartID:    partID,
-		Role:      domain.MessageRoleAgent,
+		Role:      appwire.MessageRoleAgent,
 		Delta:     contentChunkDisplayText(update.Content),
 		PartType:  "text",
 	}))
@@ -595,7 +595,7 @@ func (c *Client) handleAgentThoughtChunk(sessionID string, raw json.RawMessage) 
 	c.emit(messagePartEvent(appwire.EventReasoning, sessionID, &update, appwire.MessagePartEventApp{
 		MessageID: msgID,
 		PartID:    uuid.NewString(),
-		Role:      domain.MessageRoleAgent,
+		Role:      appwire.MessageRoleAgent,
 		Delta:     contentChunkDisplayText(update.Content),
 		PartType:  "reasoning",
 	}))
@@ -638,7 +638,7 @@ func (c *Client) handleUserMessageChunk(sessionID string, raw json.RawMessage) {
 	c.emit(messagePartEvent(appwire.EventMessageDelta, sessionID, &update, appwire.MessagePartEventApp{
 		MessageID: msgID,
 		PartID:    partID,
-		Role:      domain.MessageRoleUser,
+		Role:      appwire.MessageRoleUser,
 		Delta:     contentChunkDisplayText(update.Content),
 		PartType:  "text",
 	}))

@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
-	"github.com/LaLanMo/muxagent-cli/internal/domain"
 )
 
 type RuntimeInfo struct {
@@ -39,11 +38,11 @@ type SessionLoadResult struct {
 }
 
 type ResolvedSession struct {
-	SessionID string               `json:"sessionId"`
-	CWD       string               `json:"cwd"`
-	Title     string               `json:"title"`
-	UpdatedAt time.Time            `json:"updatedAt"`
-	Status    domain.SessionStatus `json:"status"`
+	SessionID string        `json:"sessionId"`
+	CWD       string        `json:"cwd"`
+	Title     string        `json:"title"`
+	UpdatedAt time.Time     `json:"updatedAt"`
+	Status    SessionStatus `json:"status"`
 }
 
 type SessionResolveResult struct {

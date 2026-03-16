@@ -639,7 +639,7 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 					CWD:       s.CWD,
 					Title:     s.Title,
 					UpdatedAt: s.UpdatedAt,
-					Status:    c.resolvedSessionStatus(s.SessionID),
+					Status:    sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
 				})
 			}
 		}
@@ -652,7 +652,7 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 			CWD:       s.CWD,
 			Title:     s.Title,
 			UpdatedAt: s.UpdatedAt,
-			Status:    c.resolvedSessionStatus(s.SessionID),
+			Status:    sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
 		})
 	}
 	return appwire.SessionResolveResult{Sessions: resolved}, ""
@@ -1110,7 +1110,7 @@ func (c *Client) applyEventStatus(event appwire.Event) {
 		c.setSessionStatus(event.SessionID, domain.SessionStatusError)
 	case appwire.EventSessionStatus:
 		if event.SessionInfo != nil {
-			c.setSessionStatus(event.SessionID, event.SessionInfo.App.Status)
+			c.setSessionStatus(event.SessionID, sessionStatusFromWire(event.SessionInfo.App.Status))
 		}
 	}
 }
@@ -1168,6 +1168,14 @@ func (c *Client) clearMissingSessionStatuses(present map[string]struct{}) {
 			delete(c.sessionStatus, sessionID)
 		}
 	}
+}
+
+func sessionStatusToWire(status domain.SessionStatus) appwire.SessionStatus {
+	return appwire.SessionStatus(status)
+}
+
+func sessionStatusFromWire(status appwire.SessionStatus) domain.SessionStatus {
+	return domain.SessionStatus(status)
 }
 
 // --- Response handling ---
