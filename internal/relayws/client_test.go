@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
 	"github.com/gorilla/websocket"
@@ -39,11 +41,11 @@ func (r *blockingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
 	}}
 }
 
-func (r *blockingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, []domain.ConfigOption, error) {
-	return "sid", runtimeID, nil, nil
+func (r *blockingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, acpprotocol.NewSessionResponse, error) {
+	return "sid", runtimeID, acpprotocol.NewSessionResponse{SessionID: "sid"}, nil
 }
 
-func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, []domain.ConfigOption, error) {
+func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, acpprotocol.LoadSessionResponse, error) {
 	select {
 	case r.loadStarted <- struct{}{}:
 	default:
@@ -51,9 +53,9 @@ func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID,
 
 	select {
 	case <-ctx.Done():
-		return "", nil, ctx.Err()
+		return "", acpprotocol.LoadSessionResponse{}, ctx.Err()
 	case <-r.unblock:
-		return runtimeID, nil, nil
+		return runtimeID, acpprotocol.LoadSessionResponse{}, nil
 	}
 }
 
@@ -158,7 +160,9 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 	require.Equal(t, "", payload["error"])
 	result, ok = payload["result"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, true, result["ok"])
+	app, ok := result["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, app["ok"])
 
 	require.NoError(t, clientConn.Close())
 	select {
@@ -186,11 +190,13 @@ type promptResult struct {
 
 type promptRuntime struct {
 	listingRuntime
-	started chan struct{}
-	release chan promptResult
+	started     chan struct{}
+	release     chan promptResult
+	lastContent []domain.ContentBlock
 }
 
 func (r *promptRuntime) Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error) {
+	r.lastContent = append([]domain.ContentBlock(nil), content...)
 	select {
 	case r.started <- struct{}{}:
 	default:
@@ -201,6 +207,53 @@ func (r *promptRuntime) Prompt(ctx context.Context, sessionID string, content []
 	case result := <-r.release:
 		return result.stopReason, result.usage, result.err
 	}
+}
+
+type actionRuntime struct {
+	listingRuntime
+	cancelSessionID string
+	modeSessionID   string
+	modeID          string
+	configSessionID string
+	configID        string
+	configValue     string
+	replySessionID  string
+	replyRequestID  string
+	replyOptionID   string
+}
+
+func (r *actionRuntime) Cancel(ctx context.Context, sessionID string) error {
+	r.cancelSessionID = sessionID
+	return nil
+}
+
+func (r *actionRuntime) SetMode(ctx context.Context, sessionID, modeID string) error {
+	r.modeSessionID = sessionID
+	r.modeID = modeID
+	return nil
+}
+
+func (r *actionRuntime) SetConfigOption(ctx context.Context, sessionID, configID, value string) error {
+	r.configSessionID = sessionID
+	r.configID = configID
+	r.configValue = value
+	return nil
+}
+
+func (r *actionRuntime) ReplyPermission(ctx context.Context, sessionID, requestID, optionID string) error {
+	r.replySessionID = sessionID
+	r.replyRequestID = requestID
+	r.replyOptionID = optionID
+	return nil
+}
+
+type approvalsRuntime struct {
+	blockingRuntime
+	approvals []domain.ApprovalRequest
+}
+
+func (r *approvalsRuntime) PendingApprovals() []domain.ApprovalRequest {
+	return append([]domain.ApprovalRequest(nil), r.approvals...)
 }
 
 type routingRuntime struct {
@@ -216,9 +269,13 @@ func (r *routingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
 	return r.blockingRuntime.RuntimeList()
 }
 
-func (r *routingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, []domain.ConfigOption, error) {
+func (r *routingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, acpprotocol.NewSessionResponse, error) {
 	r.lastRuntime = runtimeID
-	return "sid", runtimeID, nil, nil
+	return "sid", runtimeID, acpprotocol.NewSessionResponse{SessionID: "sid"}, nil
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func TestRunHandlesSessionResolveRPC(t *testing.T) {
@@ -326,10 +383,10 @@ func TestRpcLoadSessionPreservesTrackedStatus(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, errStr := client.rpcLoadSession(context.Background(), map[string]any{
-			"sessionId": "sid",
-			"cwd":       "/tmp/project",
-			"runtime":   "claude-code",
+		_, errStr := client.rpcLoadSession(context.Background(), appwire.LoadSessionParams{
+			SessionID: "sid",
+			CWD:       "/tmp/project",
+			Runtime:   "claude-code",
 		})
 		require.Empty(t, errStr)
 	}()
@@ -348,9 +405,10 @@ func TestRpcLoadSessionPreservesTrackedStatus(t *testing.T) {
 		t.Fatal("session.load did not finish")
 	}
 
-	result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	result, errStr := client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	require.Equal(t, string(domain.SessionStatusRunning), resolvedStatusFromRPCResult(t, result))
 }
@@ -363,32 +421,36 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 		sessionStatus: map[string]domain.SessionStatus{},
 	}
 
-	err := client.SendEvent(domain.Event{
-		Type:      domain.EventApprovalRequested,
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventApprovalRequested,
 		SessionID: "sid",
 		At:        time.Now(),
-		Approval:  &domain.ApprovalRequest{ID: "req-1", SessionID: "sid"},
+		Approval:  &appwire.ApprovalRequest{App: appwire.ApprovalApp{RequestID: "req-1"}},
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
 
-	result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	result, errStr := client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	status := resolvedStatusFromRPCResult(t, result)
 	require.Equal(t, string(domain.SessionStatusWaitingApproval), status)
 
-	err = client.SendEvent(domain.Event{
-		Type:      domain.EventRunFinished,
+	err = client.SendEvent(appwire.Event{
+		Type:      appwire.EventRunFinished,
 		SessionID: "sid",
 		At:        time.Now(),
-		Data:      map[string]any{"stopReason": "end_turn"},
+		RunFinished: &appwire.RunFinishedEvent{
+			App: appwire.RunFinishedEventApp{StopReason: "end_turn"},
+		},
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
 
-	result, errStr = client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	result, errStr = client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	status = resolvedStatusFromRPCResult(t, result)
 	require.Equal(t, string(domain.SessionStatusIdle), status)
@@ -397,9 +459,9 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 	require.True(t, complete)
 	require.Len(t, events, 2)
 	require.EqualValues(t, 1, events[0].Seq)
-	require.Equal(t, domain.EventApprovalRequested, events[0].Type)
+	require.Equal(t, appwire.EventApprovalRequested, events[0].Type)
 	require.EqualValues(t, 2, events[1].Seq)
-	require.Equal(t, domain.EventRunFinished, events[1].Type)
+	require.Equal(t, appwire.EventRunFinished, events[1].Type)
 }
 
 func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
@@ -425,12 +487,12 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 		sessionStatus: map[string]domain.SessionStatus{},
 	}
 
-	result, errStr := client.rpcPrompt(context.Background(), map[string]any{
-		"sessionId": "sid",
-		"text":      "hello",
+	result, errStr := client.rpcPrompt(context.Background(), appwire.PromptParams{
+		SessionID: "sid",
+		Text:      "hello",
 	})
 	require.Empty(t, errStr)
-	require.Equal(t, true, result.(map[string]any)["accepted"])
+	require.Equal(t, appwire.AcceptedResult{Accepted: true}, result)
 
 	select {
 	case <-rt.started:
@@ -438,18 +500,20 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 		t.Fatal("prompt did not start")
 	}
 
-	resolveResult, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-		"sessionIds": []any{"sid"},
-	})
+	resolveResult, errStr := client.rpcResolveSessions(
+		context.Background(),
+		appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+	)
 	require.Empty(t, errStr)
 	require.Equal(t, string(domain.SessionStatusRunning), resolvedStatusFromRPCResult(t, resolveResult))
 
 	rt.release <- promptResult{stopReason: "end_turn"}
 
 	require.Eventually(t, func() bool {
-		result, errStr := client.rpcResolveSessions(context.Background(), map[string]any{
-			"sessionIds": []any{"sid"},
-		})
+		result, errStr := client.rpcResolveSessions(
+			context.Background(),
+			appwire.ResolveSessionsParams{SessionIDs: []string{"sid"}},
+		)
 		if errStr != "" {
 			return false
 		}
@@ -459,7 +523,520 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 	events, complete := client.eventBuf.Since(0)
 	require.True(t, complete)
 	require.Len(t, events, 1)
-	require.Equal(t, domain.EventRunFinished, events[0].Type)
+	require.Equal(t, appwire.EventRunFinished, events[0].Type)
+	require.NotNil(t, events[0].RunFinished)
+	require.Equal(t, "end_turn", events[0].RunFinished.App.StopReason)
+}
+
+func TestRpcPromptParsesTypedContentBlocks(t *testing.T) {
+	rt := &promptRuntime{
+		listingRuntime: listingRuntime{
+			sessions: []domain.SessionSummary{
+				{
+					SessionID: "sid",
+					CWD:       "/tmp/project",
+					Title:     "Title",
+					UpdatedAt: time.Now(),
+				},
+			},
+		},
+		started: make(chan struct{}, 1),
+		release: make(chan promptResult, 1),
+	}
+	client := &Client{
+		machineID:     "machine-1",
+		runtime:       rt,
+		eventBuf:      NewEventBuffer(8),
+		sessionCWD:    map[string]string{"sid": "/tmp/project"},
+		sessionStatus: map[string]domain.SessionStatus{},
+	}
+
+	result, errStr := client.rpcPrompt(context.Background(), appwire.PromptParams{
+		SessionID: "sid",
+		Content: []appwire.PromptContentBlock{
+			{
+				Type:     "image",
+				MimeType: "image/png",
+				Data:     "ZmFrZQ==",
+			},
+			{
+				Type: "text",
+				Text: "hello",
+			},
+		},
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, appwire.AcceptedResult{Accepted: true}, result)
+
+	select {
+	case <-rt.started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+
+	require.Len(t, rt.lastContent, 2)
+	require.Equal(t, "image", rt.lastContent[0].Type)
+	require.Equal(t, "image/png", rt.lastContent[0].MimeType)
+	require.Equal(t, "ZmFrZQ==", rt.lastContent[0].Data)
+	require.Equal(t, "text", rt.lastContent[1].Type)
+	require.Equal(t, "hello", rt.lastContent[1].Text)
+
+	rt.release <- promptResult{stopReason: "end_turn"}
+}
+
+func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
+	rt := &actionRuntime{}
+	client := &Client{
+		machineID: "machine-1",
+		runtime:   rt,
+	}
+
+	result, errStr := client.rpcCancel(
+		context.Background(),
+		appwire.CancelParams{SessionID: "sid-cancel"},
+	)
+	require.Empty(t, errStr)
+	require.Equal(t, appwire.OKResult{OK: true}, result)
+	require.Equal(t, "sid-cancel", rt.cancelSessionID)
+
+	result, errStr = client.rpcSetMode(context.Background(), appwire.SetModeParams{
+		SessionID:      "sid-mode",
+		PermissionMode: "read-only",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, appwire.OKResult{OK: true}, result)
+	require.Equal(t, "sid-mode", rt.modeSessionID)
+	require.Equal(t, "read-only", rt.modeID)
+
+	result, errStr = client.rpcSetConfigOption(
+		context.Background(),
+		appwire.SetConfigOptionParams{
+			SessionID: "sid-config",
+			ConfigID:  "model",
+			Value:     "gpt-5.4",
+		},
+	)
+	require.Empty(t, errStr)
+	require.Equal(t, appwire.OKResult{OK: true}, result)
+	require.Equal(t, "sid-config", rt.configSessionID)
+	require.Equal(t, "model", rt.configID)
+	require.Equal(t, "gpt-5.4", rt.configValue)
+
+	result, errStr = client.rpcReplyPermission(
+		context.Background(),
+		appwire.ReplyPermissionParams{
+			SessionID: "sid-approval",
+			RequestID: "req-1",
+			OptionID:  "allow",
+		},
+	)
+	require.Empty(t, errStr)
+	require.Equal(t, appwire.OKResult{OK: true}, result)
+	require.Equal(t, "sid-approval", rt.replySessionID)
+	require.Equal(t, "req-1", rt.replyRequestID)
+	require.Equal(t, "allow", rt.replyOptionID)
+}
+
+func TestRpcPendingApprovalsMapsDomainApprovalIntoAppwire(t *testing.T) {
+	rt := &approvalsRuntime{
+		approvals: []domain.ApprovalRequest{{
+			App: domain.ApprovalApp{
+				RequestID: "req-1",
+				Runtime:   "codex",
+				ToolKind:  "execute",
+				Title:     "Run touch /workspace/hello.txt",
+				Command: &domain.ApprovalCommand{
+					Argv:    []string{"touch", "/workspace/hello.txt"},
+					Display: "touch hello.txt",
+				},
+				CWD: "/workspace",
+			},
+		}},
+	}
+	client := &Client{runtime: rt}
+
+	result, errStr := client.rpcPendingApprovals(context.Background())
+	require.Empty(t, errStr)
+
+	wire, ok := result.(appwire.PendingApprovalsResult)
+	require.True(t, ok)
+	require.Len(t, wire.Approvals, 1)
+	require.Equal(t, "req-1", wire.Approvals[0].App.RequestID)
+	require.Equal(t, "codex", wire.Approvals[0].App.Runtime)
+	require.Equal(t, "execute", wire.Approvals[0].App.ToolKind)
+	require.NotNil(t, wire.Approvals[0].App.Command)
+	require.Equal(t, "touch hello.txt", wire.Approvals[0].App.Command.Display)
+	require.Equal(
+		t,
+		[]string{"touch", "/workspace/hello.txt"},
+		wire.Approvals[0].App.Command.Argv,
+	)
+	require.Equal(t, "/workspace", wire.Approvals[0].App.CWD)
+}
+
+func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventRunFailed,
+		SessionID: "sid",
+		At:        time.Now(),
+		RunFailed: &appwire.RunFailedEvent{
+			App: appwire.RunFailedEventApp{
+				Error: appwire.SessionError{
+					Code:    "prompt_error",
+					Message: "runtime failed",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventRunFailed), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasTopLevelError := payload["error"]
+	require.False(t, hasTopLevelError)
+
+	runFailed, ok := payload["runFailed"].(map[string]any)
+	require.True(t, ok)
+	app, ok := runFailed["app"].(map[string]any)
+	require.True(t, ok)
+	errorPayload, ok := app["error"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "prompt_error", errorPayload["code"])
+	require.Equal(t, "runtime failed", errorPayload["message"])
+}
+
+func TestSendEventUsesApprovalEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventApprovalRequested,
+		SessionID: "sid",
+		At:        time.Now(),
+		Approval: &appwire.ApprovalRequest{
+			App: appwire.ApprovalApp{
+				RequestID: "req-1",
+				Runtime:   "codex",
+				ToolKind:  "execute",
+				Title:     "Run touch /workspace/hello.txt",
+				Command: &appwire.ApprovalCommand{
+					Argv:    []string{"touch", "hello.txt"},
+					Display: "touch hello.txt",
+				},
+				CWD: "/workspace",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventApprovalRequested), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+
+	approval, ok := payload["approval"].(map[string]any)
+	require.True(t, ok)
+	app, ok := approval["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "req-1", app["requestId"])
+	require.Equal(t, "codex", app["runtime"])
+	require.Equal(t, "execute", app["toolKind"])
+	require.Equal(t, "Run touch /workspace/hello.txt", app["title"])
+	require.Equal(t, "/workspace", app["cwd"])
+
+	command, ok := app["command"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "touch hello.txt", command["display"])
+	require.Equal(t, []any{"touch", "hello.txt"}, command["argv"])
+}
+
+func TestSendEventUsesToolEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	line := 3
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventToolCompleted,
+		SessionID: "sid",
+		At:        time.Now(),
+		Tool: &appwire.ToolEvent{
+			App: appwire.ToolEventApp{
+				PartID:    "part-1",
+				MessageID: "msg-1",
+				CallID:    "call-1",
+				Name:      "Bash",
+				Kind:      "execute",
+				Title:     "Run touch hello.txt",
+				Status:    appwire.ToolStatusCompleted,
+				Input: &appwire.ToolInput{
+					Command: &appwire.ToolCommand{
+						Argv:    []string{"touch", "hello.txt"},
+						Display: "touch hello.txt",
+					},
+					FilePath:     "hello.txt",
+					RawInputJSON: "{\"command\":[\"touch\",\"hello.txt\"]}",
+				},
+				Output: "done",
+				ClaudeCode: &appwire.ClaudeCodeTool{
+					ParentToolUseID: "parent-1",
+					ToolName:        "bash",
+				},
+				Locations: []appwire.ToolLocation{{
+					Path: "/workspace/hello.txt",
+					Line: &line,
+				}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventToolCompleted), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+
+	tool, ok := payload["tool"].(map[string]any)
+	require.True(t, ok)
+	app, ok := tool["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "call-1", app["callId"])
+	require.Equal(t, "execute", app["kind"])
+	require.Equal(t, "completed", app["status"])
+	require.Equal(t, "done", app["output"])
+
+	input, ok := app["input"].(map[string]any)
+	require.True(t, ok)
+	command, ok := input["command"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "touch hello.txt", command["display"])
+	require.Equal(t, []any{"touch", "hello.txt"}, command["argv"])
+	require.Equal(t, "hello.txt", input["filePath"])
+	require.Equal(t, "{\"command\":[\"touch\",\"hello.txt\"]}", input["rawInputJson"])
+
+	claudeCode, ok := app["claudeCode"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "parent-1", claudeCode["parentToolUseId"])
+	require.Equal(t, "bash", claudeCode["toolName"])
+
+	locations, ok := app["locations"].([]any)
+	require.True(t, ok)
+	require.Len(t, locations, 1)
+	location, ok := locations[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "/workspace/hello.txt", location["path"])
+	require.Equal(t, float64(3), location["line"])
+}
+
+func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventModeChanged,
+		SessionID: "sid",
+		At:        time.Now(),
+		ModeChanged: &appwire.ModeChangedEvent{
+			ACPCurrentMode: &acpprotocol.CurrentModeUpdate{
+				CurrentModeID: "read-only",
+			},
+			App: appwire.ModeChangedEventApp{CurrentModeID: "read-only"},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventModeChanged), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasData := payload["data"]
+	require.False(t, hasData)
+
+	modeChanged, ok := payload["modeChanged"].(map[string]any)
+	require.True(t, ok)
+	app, ok := modeChanged["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "read-only", app["currentModeId"])
+	acp, ok := modeChanged["acp"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "read-only", acp["currentModeId"])
+}
+
+func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventModelChanged,
+		SessionID: "sid",
+		At:        time.Now(),
+		ConfigChanged: &appwire.ConfigChangedEvent{
+			ACP: &acpprotocol.ConfigOptionUpdate{
+				ConfigOptions: []acpprotocol.SessionConfigOption{{
+					ID:           "model",
+					Name:         "Model",
+					Category:     stringPtr("model"),
+					Type:         "select",
+					CurrentValue: "gpt-5.4",
+					Options: acpprotocol.SessionConfigSelectOptions{
+						Ungrouped: []acpprotocol.SessionConfigSelectOption{{
+							Value: "gpt-5.4",
+							Name:  "gpt-5.4",
+						}},
+					},
+				}},
+			},
+			App: appwire.ConfigChangedEventApp{
+				ConfigID:     "model",
+				Category:     "model",
+				CurrentValue: "gpt-5.4",
+				Values: []appwire.SessionConfigValue{{
+					Value: "gpt-5.4",
+					Name:  "gpt-5.4",
+				}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventModelChanged), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasData := payload["data"]
+	require.False(t, hasData)
+
+	configChanged, ok := payload["configChanged"].(map[string]any)
+	require.True(t, ok)
+	app, ok := configChanged["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "model", app["configId"])
+	require.Equal(t, "gpt-5.4", app["currentValue"])
+	acp, ok := configChanged["acp"].(map[string]any)
+	require.True(t, ok)
+	options, ok := acp["configOptions"].([]any)
+	require.True(t, ok)
+	require.Len(t, options, 1)
+}
+
+func TestSendEventUsesSessionStatusEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventSessionStatus,
+		SessionID: "sid",
+		At:        time.Now(),
+		SessionInfo: &appwire.SessionStatusEvent{
+			App: appwire.SessionStatusEventApp{
+				ID:        "sid",
+				Title:     "Example",
+				Status:    appwire.SessionStatusRunning,
+				Model:     "opus",
+				MachineID: "machine-1",
+				Runtime:   "claude-code",
+				CWD:       "/workspace",
+				Mode:      "default",
+				CreatedAt: time.Unix(100, 0).UTC(),
+				UpdatedAt: time.Unix(200, 0).UTC(),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventSessionStatus), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+	_, hasData := payload["data"]
+	require.False(t, hasData)
+
+	sessionStatus, ok := payload["sessionStatus"].(map[string]any)
+	require.True(t, ok)
+	app, ok := sessionStatus["app"].(map[string]any)
+	require.True(t, ok)
+	_, hasMetadata := app["metadata"]
+	require.False(t, hasMetadata)
+	require.Equal(t, "machine-1", app["machineId"])
+	require.Equal(t, "claude-code", app["runtime"])
+	require.Equal(t, "/workspace", app["cwd"])
+	require.Equal(t, "default", app["mode"])
 }
 
 func TestRunHandlesRuntimeListRPC(t *testing.T) {
@@ -489,14 +1066,17 @@ func TestRunHandlesRuntimeListRPC(t *testing.T) {
 				ID:    "claude-code",
 				Label: "Claude Code",
 				Ready: true,
-				ConfigOptions: []domain.ConfigOption{
+				ConfigOptions: []acpprotocol.SessionConfigOption{
 					{
 						ID:           "mode",
+						Name:         "Approval Preset",
 						Type:         "select",
-						Category:     "mode",
+						Category:     stringPtr("mode"),
 						CurrentValue: "default",
-						Options: []domain.ConfigOptionValue{
-							{Value: "default", Name: "Default"},
+						Options: acpprotocol.SessionConfigSelectOptions{
+							Ungrouped: []acpprotocol.SessionConfigSelectOption{
+								{Value: "default", Name: "Default"},
+							},
 						},
 					},
 				},
@@ -505,14 +1085,17 @@ func TestRunHandlesRuntimeListRPC(t *testing.T) {
 				ID:    "codex",
 				Label: "Codex",
 				Ready: true,
-				ConfigOptions: []domain.ConfigOption{
+				ConfigOptions: []acpprotocol.SessionConfigOption{
 					{
 						ID:           "mode",
+						Name:         "Approval Preset",
 						Type:         "select",
-						Category:     "mode",
+						Category:     stringPtr("mode"),
 						CurrentValue: "read-only",
-						Options: []domain.ConfigOptionValue{
-							{Value: "read-only", Name: "Read Only"},
+						Options: acpprotocol.SessionConfigSelectOptions{
+							Ungrouped: []acpprotocol.SessionConfigSelectOption{
+								{Value: "read-only", Name: "Read Only"},
+							},
 						},
 					},
 				},
@@ -609,7 +1192,12 @@ func TestRunPassesRuntimeToSessionCreate(t *testing.T) {
 	require.Equal(t, "", payload["error"])
 	result, ok := payload["result"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "codex", result["runtime"])
+	app, ok := result["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "codex", app["runtime"])
+	acp, ok := result["acp"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "sid", acp["sessionId"])
 	require.Equal(t, "codex", rt.lastRuntime)
 
 	require.NoError(t, clientConn.Close())
@@ -626,11 +1214,9 @@ func TestRpcCreateSessionDefaultsClaudeCodeWhenMissing(t *testing.T) {
 		sessionCWD: map[string]string{},
 	}
 
-	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
-		"cwd": "/tmp",
-	})
+	result, errStr := client.rpcCreateSession(context.Background(), appwire.CreateSessionParams{CWD: "/tmp"})
 	require.Empty(t, errStr)
-	require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+	require.Equal(t, "claude-code", result.(appwire.SessionCreateResult).App.Runtime)
 	require.Equal(t, "claude-code", client.runtime.(*routingRuntime).lastRuntime)
 }
 
@@ -645,11 +1231,9 @@ func TestRpcCreateSessionDefaultsClaudeCodeWhenMultipleRuntimesExist(t *testing.
 		sessionCWD: map[string]string{},
 	}
 
-	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
-		"cwd": "/tmp",
-	})
+	result, errStr := client.rpcCreateSession(context.Background(), appwire.CreateSessionParams{CWD: "/tmp"})
 	require.Empty(t, errStr)
-	require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+	require.Equal(t, "claude-code", result.(appwire.SessionCreateResult).App.Runtime)
 	require.Equal(t, "claude-code", client.runtime.(*routingRuntime).lastRuntime)
 }
 
@@ -663,11 +1247,57 @@ func TestRpcCreateSessionRequiresRuntimeWhenClaudeCodeUnavailable(t *testing.T) 
 		sessionCWD: map[string]string{},
 	}
 
-	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
-		"cwd": "/tmp",
-	})
+	result, errStr := client.rpcCreateSession(
+		context.Background(),
+		appwire.CreateSessionParams{CWD: "/tmp"},
+	)
 	require.Nil(t, result)
 	require.Equal(t, "missing runtime", errStr)
+}
+
+func TestRPCParamDecodersRejectMalformedPayloads(t *testing.T) {
+	tests := []struct {
+		name   string
+		decode func() error
+		errMsg string
+	}{
+		{
+			name: "create rejects invalid useWorktree type",
+			decode: func() error {
+				_, err := appwire.DecodeCreateSessionParams(
+					json.RawMessage(`{"cwd":"/tmp","runtime":"codex","useWorktree":"yes"}`),
+				)
+				return err
+			},
+			errMsg: "cannot unmarshal string into Go struct field CreateSessionParams.useWorktree of type bool",
+		},
+		{
+			name: "load rejects invalid model type",
+			decode: func() error {
+				_, err := appwire.DecodeLoadSessionParams(
+					json.RawMessage(`{"sessionId":"sid","cwd":"/tmp","runtime":"codex","model":["bad"]}`),
+				)
+				return err
+			},
+			errMsg: "cannot unmarshal array into Go struct field LoadSessionParams.model of type string",
+		},
+		{
+			name: "resolve rejects invalid sessionIds type",
+			decode: func() error {
+				_, err := appwire.DecodeResolveSessionsParams(
+					json.RawMessage(`{"sessionIds":["sid",1]}`),
+				)
+				return err
+			},
+			errMsg: "cannot unmarshal number into Go struct field ResolveSessionsParams.sessionIds of type string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.ErrorContains(t, tt.decode(), tt.errMsg)
+		})
+	}
 }
 
 func TestRpcLoadSessionDefaultsClaudeCodeWhenMissing(t *testing.T) {
@@ -679,12 +1309,12 @@ func TestRpcLoadSessionDefaultsClaudeCodeWhenMissing(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		result, errStr := client.rpcLoadSession(context.Background(), map[string]any{
-			"sessionId": "sid",
-			"cwd":       "/tmp",
+		result, errStr := client.rpcLoadSession(context.Background(), appwire.LoadSessionParams{
+			SessionID: "sid",
+			CWD:       "/tmp",
 		})
 		require.Empty(t, errStr)
-		require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+		require.Equal(t, "claude-code", result.(appwire.SessionLoadResult).App.Runtime)
 	}()
 
 	select {
@@ -718,12 +1348,12 @@ func TestRpcLoadSessionDefaultsClaudeCodeWhenMultipleRuntimesExist(t *testing.T)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		result, errStr := client.rpcLoadSession(context.Background(), map[string]any{
-			"sessionId": "sid",
-			"cwd":       "/tmp",
+		result, errStr := client.rpcLoadSession(context.Background(), appwire.LoadSessionParams{
+			SessionID: "sid",
+			CWD:       "/tmp",
 		})
 		require.Empty(t, errStr)
-		require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+		require.Equal(t, "claude-code", result.(appwire.SessionLoadResult).App.Runtime)
 	}()
 
 	select {
@@ -753,10 +1383,13 @@ func TestRpcLoadSessionRequiresRuntimeWhenClaudeCodeUnavailable(t *testing.T) {
 		sessionCWD: map[string]string{},
 	}
 
-	result, errStr := client.rpcLoadSession(context.Background(), map[string]any{
-		"sessionId": "sid",
-		"cwd":       "/tmp",
-	})
+	result, errStr := client.rpcLoadSession(
+		context.Background(),
+		appwire.LoadSessionParams{
+			SessionID: "sid",
+			CWD:       "/tmp",
+		},
+	)
 	require.Nil(t, result)
 	require.Equal(t, "missing runtime", errStr)
 }
@@ -925,8 +1558,8 @@ func TestConnectHandshakeIsolation(t *testing.T) {
 		t.Fatal("challenge response was not received")
 	}
 
-	err = client.SendEvent(domain.Event{
-		Type:      domain.EventRunFinished,
+	err = client.SendEvent(appwire.Event{
+		Type:      appwire.EventRunFinished,
 		SessionID: "sid",
 		At:        time.Now(),
 	})
@@ -1094,8 +1727,8 @@ func TestCloseAndSendEventConcurrent(t *testing.T) {
 
 	go func() {
 		<-start
-		errCh <- client.SendEvent(domain.Event{
-			Type:      domain.EventRunFinished,
+		errCh <- client.SendEvent(appwire.Event{
+			Type:      appwire.EventRunFinished,
 			SessionID: "sid",
 			At:        time.Now(),
 		})
@@ -1134,10 +1767,7 @@ func encryptRPC(
 ) EncryptedMessage {
 	t.Helper()
 
-	body, err := json.Marshal(RPCPayload{
-		Method: method,
-		Params: params,
-	})
+	body, err := appwire.MarshalRPCRequest(method, params)
 	require.NoError(t, err)
 
 	nonce, ciphertext, err := session.encrypt(string(MessageTypeRPC), msgID, body)
@@ -1170,6 +1800,11 @@ func decryptResponse(t *testing.T, session *Session, msg EncryptedMessage) map[s
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
+	if msg.Type == MessageTypeResponse {
+		if _, ok := payload["error"]; !ok {
+			payload["error"] = ""
+		}
+	}
 	return payload
 }
 
@@ -1235,12 +1870,9 @@ func TestRpcFsList(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("list root directory", func(t *testing.T) {
-		result, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-		})
+		result, errStr := client.rpcFsList(ctx, appwire.FsListParams{SessionID: "sid"})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 
 		// Should contain src (dir), empty (dir), README.md (file)
 		names := make([]string, len(entries))
@@ -1267,13 +1899,12 @@ func TestRpcFsList(t *testing.T) {
 	})
 
 	t.Run("list subdirectory", func(t *testing.T) {
-		result, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "src",
-		})
+		result, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "src"},
+		)
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 
 		require.Len(t, entries, 1)
 		require.Equal(t, "main.go", entries[0].Name)
@@ -1282,10 +1913,10 @@ func TestRpcFsList(t *testing.T) {
 	})
 
 	t.Run("path traversal rejected", func(t *testing.T) {
-		_, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "../../etc",
-		})
+		_, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "../../etc"},
+		)
 		require.Equal(t, "path outside project", errStr)
 	})
 
@@ -1294,28 +1925,28 @@ func TestRpcFsList(t *testing.T) {
 		require.NoError(t, os.Symlink(os.TempDir(), symPath))
 		t.Cleanup(func() { os.Remove(symPath) })
 
-		_, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "escape",
-		})
+		_, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "escape"},
+		)
 		require.Equal(t, "symlink escape detected", errStr)
 	})
 
 	t.Run("empty directory", func(t *testing.T) {
-		result, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-			"path":      "empty",
-		})
+		result, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "sid", Path: "empty"},
+		)
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 		require.Empty(t, entries)
 	})
 
 	t.Run("unknown session", func(t *testing.T) {
-		_, errStr := client.rpcFsList(ctx, map[string]any{
-			"sessionId": "nonexistent",
-		})
+		_, errStr := client.rpcFsList(
+			ctx,
+			appwire.FsListParams{SessionID: "nonexistent"},
+		)
 		require.Equal(t, "unknown session", errStr)
 	})
 
@@ -1328,12 +1959,9 @@ func TestRpcFsList(t *testing.T) {
 			))
 		}
 		c := &Client{sessionCWD: map[string]string{"sid": bigRoot}}
-		result, errStr := c.rpcFsList(ctx, map[string]any{
-			"sessionId": "sid",
-		})
+		result, errStr := c.rpcFsList(ctx, appwire.FsListParams{SessionID: "sid"})
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		entries := m["entries"].([]fsEntry)
+		entries := result.(appwire.FsListResult).Entries
 		require.LessOrEqual(t, len(entries), 200)
 	})
 }
@@ -1360,13 +1988,12 @@ func TestRpcFsSearch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("match file name", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "helper",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "helper"},
+		)
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		require.Len(t, results, 1)
 		require.Equal(t, filepath.Join("src", "util", "helper.go"), results[0].Path)
@@ -1374,13 +2001,12 @@ func TestRpcFsSearch(t *testing.T) {
 	})
 
 	t.Run("match directory name", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "model",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "model"},
+		)
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		paths := make([]string, len(results))
 		for i, r := range results {
@@ -1390,13 +2016,12 @@ func TestRpcFsSearch(t *testing.T) {
 	})
 
 	t.Run("case insensitive", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "makefile",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "makefile"},
+		)
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		paths := make([]string, len(results))
 		for i, r := range results {
@@ -1406,19 +2031,18 @@ func TestRpcFsSearch(t *testing.T) {
 	})
 
 	t.Run("sort dirs first then short paths", func(t *testing.T) {
-		result, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "main",
-		})
+		result, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "main"},
+		)
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 
 		require.GreaterOrEqual(t, len(results), 3)
 		// First result should be a directory (cmd/main)
 		require.True(t, results[0].IsDir, "first result should be a directory")
 		// Among files, shorter path comes first
-		fileResults := make([]fsSearchResult, 0)
+		fileResults := make([]appwire.FsSearchEntry, 0)
 		for _, r := range results {
 			if !r.IsDir {
 				fileResults = append(fileResults, r)
@@ -1438,36 +2062,36 @@ func TestRpcFsSearch(t *testing.T) {
 			))
 		}
 		c := &Client{sessionCWD: map[string]string{"sid": bigRoot}}
-		result, errStr := c.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "test",
-		})
+		result, errStr := c.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: "test"},
+		)
 		require.Empty(t, errStr)
-		m := result.(map[string]any)
-		results := m["results"].([]fsSearchResult)
+		results := result.(appwire.FsSearchResult).Results
 		require.LessOrEqual(t, len(results), 50)
 	})
 
 	t.Run("empty query error", func(t *testing.T) {
-		_, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-			"query":     "",
-		})
+		_, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid", Query: ""},
+		)
 		require.Equal(t, "missing query", errStr)
 	})
 
 	t.Run("missing query error", func(t *testing.T) {
-		_, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "sid",
-		})
+		_, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "sid"},
+		)
 		require.Equal(t, "missing query", errStr)
 	})
 
 	t.Run("unknown session", func(t *testing.T) {
-		_, errStr := client.rpcFsSearch(ctx, map[string]any{
-			"sessionId": "nonexistent",
-			"query":     "main",
-		})
+		_, errStr := client.rpcFsSearch(
+			ctx,
+			appwire.FsSearchParams{SessionID: "nonexistent", Query: "main"},
+		)
 		require.Equal(t, "unknown session", errStr)
 	})
 }

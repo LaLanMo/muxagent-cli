@@ -18,6 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
+	"github.com/LaLanMo/muxagent-cli/internal/appwireconv"
 	"github.com/LaLanMo/muxagent-cli/internal/auth"
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
@@ -45,8 +48,8 @@ var (
 // Defined here to avoid a circular import with the runtime package.
 type RuntimeClient interface {
 	RuntimeList() []runtimemanager.RuntimeInfo
-	NewSession(ctx context.Context, runtimeID, cwd, permissionMode string) (string, string, []domain.ConfigOption, error)
-	LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, []domain.ConfigOption, error)
+	NewSession(ctx context.Context, runtimeID, cwd, permissionMode string) (string, string, acpprotocol.NewSessionResponse, error)
+	LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, acpprotocol.LoadSessionResponse, error)
 	ResolveSessions(ctx context.Context, runtimeID string, sessionIDs []string) ([]domain.SessionSummary, error)
 	Prompt(ctx context.Context, sessionID string, content []domain.ContentBlock) (string, *domain.PromptUsage, error)
 	Cancel(ctx context.Context, sessionID string) error
@@ -348,7 +351,7 @@ func (c *Client) handleRPC(connEpoch uint64, enc EncryptedMessage) {
 	if err != nil {
 		return
 	}
-	var payload RPCPayload
+	var payload appwire.RPCRequest
 	if err := json.Unmarshal(plaintext, &payload); err != nil {
 		return
 	}
@@ -361,41 +364,97 @@ func (c *Client) handleRPC(connEpoch uint64, enc EncryptedMessage) {
 	case "runtime.list":
 		result, respErr = c.rpcRuntimeList(ctx)
 	case "session.create":
-		result, respErr = c.rpcCreateSession(ctx, payload.Params)
+		params, err := appwire.DecodeCreateSessionParams(payload.Params)
+		if err != nil {
+			respErr = "invalid create params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcCreateSession(ctx, params)
 	case "session.load":
-		result, respErr = c.rpcLoadSession(ctx, payload.Params)
+		params, err := appwire.DecodeLoadSessionParams(payload.Params)
+		if err != nil {
+			respErr = "invalid load params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcLoadSession(ctx, params)
 	case "session.resolve":
-		result, respErr = c.rpcResolveSessions(ctx, payload.Params)
+		params, err := appwire.DecodeResolveSessionsParams(payload.Params)
+		if err != nil {
+			respErr = "invalid resolve params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcResolveSessions(ctx, params)
 	case "session.prompt":
-		result, respErr = c.rpcPrompt(ctx, payload.Params)
+		params, err := appwire.DecodePromptParams(payload.Params)
+		if err != nil {
+			respErr = "invalid prompt params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcPrompt(ctx, params)
 	case "session.cancel":
-		result, respErr = c.rpcCancel(ctx, payload.Params)
+		params, err := appwire.DecodeCancelParams(payload.Params)
+		if err != nil {
+			respErr = "invalid cancel params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcCancel(ctx, params)
 	case "session.setMode":
-		result, respErr = c.rpcSetMode(ctx, payload.Params)
+		params, err := appwire.DecodeSetModeParams(payload.Params)
+		if err != nil {
+			respErr = "invalid setMode params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcSetMode(ctx, params)
 	case "session.setConfigOption":
-		result, respErr = c.rpcSetConfigOption(ctx, payload.Params)
+		params, err := appwire.DecodeSetConfigOptionParams(payload.Params)
+		if err != nil {
+			respErr = "invalid setConfigOption params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcSetConfigOption(ctx, params)
 	case "approval.reply":
-		result, respErr = c.rpcReplyPermission(ctx, payload.Params)
+		params, err := appwire.DecodeReplyPermissionParams(payload.Params)
+		if err != nil {
+			respErr = "invalid replyPermission params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcReplyPermission(ctx, params)
 	case "events.resync":
-		result, respErr = c.rpcResyncEvents(ctx, payload.Params)
+		params, err := appwire.DecodeResyncEventsParams(payload.Params)
+		if err != nil {
+			respErr = "invalid resync params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcResyncEvents(ctx, params)
 	case "approvals.pending":
-		result, respErr = c.rpcPendingApprovals(ctx, payload.Params)
+		result, respErr = c.rpcPendingApprovals(ctx)
 	case "fs.list":
-		result, respErr = c.rpcFsList(ctx, payload.Params)
+		params, err := appwire.DecodeFsListParams(payload.Params)
+		if err != nil {
+			respErr = "invalid fs.list params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcFsList(ctx, params)
 	case "fs.search":
-		result, respErr = c.rpcFsSearch(ctx, payload.Params)
+		params, err := appwire.DecodeFsSearchParams(payload.Params)
+		if err != nil {
+			respErr = "invalid fs.search params: " + err.Error()
+			break
+		}
+		result, respErr = c.rpcFsSearch(ctx, params)
 	case "echo":
-		log.Printf("echo request from client: %v", payload.Params)
-		result = payload.Params
+		params, err := appwire.DecodeEchoParams(payload.Params)
+		if err != nil {
+			respErr = "invalid echo params: " + err.Error()
+			break
+		}
+		log.Printf("echo request from client: %v", params)
+		result = params
 	default:
 		respErr = fmt.Sprintf("unknown method: %s", payload.Method)
 	}
 
-	respPayload := map[string]any{
-		"result": result,
-		"error":  respErr,
-	}
-	respBytes, err := json.Marshal(respPayload)
+	respBytes, err := appwire.MarshalRPCResponse(result, respErr)
 	if err != nil {
 		log.Printf("rpc marshal response: %v", err)
 		return
@@ -416,32 +475,28 @@ func (c *Client) handleRPC(connEpoch uint64, enc EncryptedMessage) {
 	}
 }
 
-// stringParam extracts a string from params with explicit type checking.
-// Logs a warning if the key is present but has a non-string type.
-func stringParam(params map[string]any, key string) string {
-	if v, ok := params[key].(string); ok {
-		return v
-	}
-	if params[key] != nil {
-		log.Printf("[relay] param %q: expected string, got %T", key, params[key])
-	}
-	return ""
-}
-
 func (c *Client) rpcRuntimeList(_ context.Context) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	return map[string]any{
-		"runtimes": c.runtime.RuntimeList(),
-	}, ""
+	runtimes := c.runtime.RuntimeList()
+	items := make([]appwire.RuntimeInfo, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		items = append(items, appwire.RuntimeInfo{
+			ID:            runtime.ID,
+			Label:         runtime.Label,
+			Ready:         runtime.Ready,
+			ConfigOptions: runtime.ConfigOptions,
+		})
+	}
+	return appwire.RuntimeListResult{Runtimes: items}, ""
 }
 
-func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcCreateSession(ctx context.Context, params appwire.CreateSessionParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	cwd := stringParam(params, "cwd")
+	cwd := params.CWD
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
@@ -451,18 +506,12 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 			cwd = filepath.Join(home, cwd[1:])
 		}
 	}
-	permissionMode := stringParam(params, "permissionMode")
-	requestedRuntime := c.resolveRequestedRuntime(stringParam(params, "runtime"))
+	permissionMode := params.PermissionMode
+	requestedRuntime := c.resolveRequestedRuntime(params.Runtime)
 	if requestedRuntime == "" {
 		return nil, "missing runtime"
 	}
-	var useWorktree bool
-	if v, exists := params["useWorktree"]; exists {
-		var ok bool
-		if useWorktree, ok = v.(bool); !ok {
-			return nil, "useWorktree must be a boolean"
-		}
-	}
+	useWorktree := params.UseWorktree
 
 	actualCWD := cwd
 	var wtMapping *worktree.Mapping
@@ -494,7 +543,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	sessionID, actualRuntime, configOpts, err := c.runtime.NewSession(ctx, requestedRuntime, actualCWD, permissionMode)
+	sessionID, actualRuntime, acpResp, err := c.runtime.NewSession(ctx, requestedRuntime, actualCWD, permissionMode)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -510,25 +559,30 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 
-	resp := map[string]any{"sessionId": sessionID, "runtime": actualRuntime, "cwd": actualCWD}
-	if len(configOpts) > 0 {
-		resp["configOptions"] = configOpts
-		log.Printf("[relay] session.create response includes %d configOptions", len(configOpts))
+	resp := appwire.SessionCreateResult{
+		App: appwire.SessionCreateResultApp{
+			Runtime: actualRuntime,
+			CWD:     actualCWD,
+		},
+		ACP: acpResp,
+	}
+	if len(acpResp.ConfigOptions) > 0 {
+		log.Printf("[relay] session.create response includes %d configOptions", len(acpResp.ConfigOptions))
 	} else {
 		log.Printf("[relay] session.create response has NO configOptions")
 	}
 	return resp, ""
 }
 
-func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcLoadSession(ctx context.Context, params appwire.LoadSessionParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
+	sessionID := params.SessionID
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-	cwd := stringParam(params, "cwd")
+	cwd := params.CWD
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
@@ -544,13 +598,13 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 		}
 	}
 
-	permissionMode := stringParam(params, "permissionMode")
-	model := stringParam(params, "model")
-	requestedRuntime := c.resolveRequestedRuntime(stringParam(params, "runtime"))
+	permissionMode := params.PermissionMode
+	model := params.Model
+	requestedRuntime := c.resolveRequestedRuntime(params.Runtime)
 	if requestedRuntime == "" {
 		return nil, "missing runtime"
 	}
-	actualRuntime, configOpts, err := c.runtime.LoadSession(ctx, requestedRuntime, sessionID, cwd, permissionMode, model)
+	actualRuntime, acpResp, err := c.runtime.LoadSession(ctx, requestedRuntime, sessionID, cwd, permissionMode, model)
 	if err != nil {
 		return nil, err.Error()
 	}
@@ -558,31 +612,27 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	c.sessionCWDMu.Lock()
 	c.sessionCWD[sessionID] = cwd
 	c.sessionCWDMu.Unlock()
-	resp := map[string]any{"ok": true, "runtime": actualRuntime}
-	if len(configOpts) > 0 {
-		resp["configOptions"] = configOpts
+	resp := appwire.SessionLoadResult{
+		App: appwire.SessionLoadResultApp{
+			OK:      true,
+			Runtime: actualRuntime,
+		},
+		ACP: acpResp,
 	}
 	return resp, ""
 }
 
-func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcResolveSessions(ctx context.Context, params appwire.ResolveSessionsParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	var rawIDs []any
-	if v, ok := params["sessionIds"].([]any); ok {
-		rawIDs = v
-	} else if params["sessionIds"] != nil {
-		log.Printf("[relay] param %q: expected []any, got %T", "sessionIds", params["sessionIds"])
-	}
-	wanted := make(map[string]struct{}, len(rawIDs))
-	for _, item := range rawIDs {
-		id, _ := item.(string)
+	wanted := make(map[string]struct{}, len(params.SessionIDs))
+	for _, id := range params.SessionIDs {
 		if id != "" {
 			wanted[id] = struct{}{}
 		}
 	}
-	runtimeID := stringParam(params, "runtime")
+	runtimeID := params.Runtime
 	targetIDs := make([]string, 0, len(wanted))
 	for id := range wanted {
 		targetIDs = append(targetIDs, id)
@@ -605,39 +655,32 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 		c.clearMissingSessionStatuses(present)
 	}
 	// If caller provided specific IDs, filter to those only.
-	type resolvedSessionSummary struct {
-		SessionID string               `json:"sessionId"`
-		CWD       string               `json:"cwd"`
-		Title     string               `json:"title"`
-		UpdatedAt time.Time            `json:"updatedAt"`
-		Status    domain.SessionStatus `json:"status"`
-	}
 	if len(wanted) > 0 {
-		filtered := make([]resolvedSessionSummary, 0, len(wanted))
+		filtered := make([]appwire.ResolvedSession, 0, len(wanted))
 		for _, s := range all {
 			if _, ok := wanted[s.SessionID]; ok {
-				filtered = append(filtered, resolvedSessionSummary{
+				filtered = append(filtered, appwire.ResolvedSession{
 					SessionID: s.SessionID,
 					CWD:       s.CWD,
 					Title:     s.Title,
 					UpdatedAt: s.UpdatedAt,
-					Status:    c.resolvedSessionStatus(s.SessionID),
+					Status:    sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
 				})
 			}
 		}
-		return map[string]any{"sessions": filtered}, ""
+		return appwire.SessionResolveResult{Sessions: filtered}, ""
 	}
-	resolved := make([]resolvedSessionSummary, 0, len(all))
+	resolved := make([]appwire.ResolvedSession, 0, len(all))
 	for _, s := range all {
-		resolved = append(resolved, resolvedSessionSummary{
+		resolved = append(resolved, appwire.ResolvedSession{
 			SessionID: s.SessionID,
 			CWD:       s.CWD,
 			Title:     s.Title,
 			UpdatedAt: s.UpdatedAt,
-			Status:    c.resolvedSessionStatus(s.SessionID),
+			Status:    sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
 		})
 	}
-	return map[string]any{"sessions": resolved}, ""
+	return appwire.SessionResolveResult{Sessions: resolved}, ""
 }
 
 func (c *Client) resolveRequestedRuntime(runtimeID string) string {
@@ -657,31 +700,20 @@ func (c *Client) resolveRequestedRuntime(runtimeID string) string {
 	return ""
 }
 
-func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcPrompt(ctx context.Context, params appwire.PromptParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
+	sessionID := params.SessionID
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-
-	// Parse content blocks from params
-	var content []domain.ContentBlock
-	if contentRaw, ok := params["content"]; ok {
-		contentBytes, err := json.Marshal(contentRaw)
-		if err != nil {
-			return nil, "invalid content: " + err.Error()
-		}
-		if err := json.Unmarshal(contentBytes, &content); err != nil {
-			return nil, "invalid content: " + err.Error()
-		}
-	}
+	content := appwireconv.ContentBlocksFromWire(params.Content)
 
 	// If no content blocks but there's a text field, create a text block
 	if len(content) == 0 {
-		if text, ok := params["text"].(string); ok && text != "" {
-			content = []domain.ContentBlock{{Type: "text", Text: text}}
+		if params.Text != "" {
+			content = []domain.ContentBlock{{Type: "text", Text: params.Text}}
 		}
 	}
 
@@ -694,158 +726,146 @@ func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, str
 		stopReason, usage, err := c.runtime.Prompt(context.Background(), sessionID, content)
 		now := time.Now()
 		if err != nil {
-			if evErr := c.SendEvent(domain.Event{
-				Type:      domain.EventRunFailed,
+			if evErr := c.SendEvent(appwire.Event{
+				Type:      appwire.EventRunFailed,
 				SessionID: sessionID,
 				At:        now,
-				Error:     &domain.SessionError{Code: "prompt_error", Message: err.Error()},
+				RunFailed: &appwire.RunFailedEvent{
+					App: appwire.RunFailedEventApp{
+						Error: appwire.SessionError{
+							Code:    "prompt_error",
+							Message: err.Error(),
+						},
+					},
+				},
 			}); evErr != nil && !isExpectedRelayDrop(evErr) {
 				log.Printf("send run.failed event: %v", evErr)
 			}
 			return
 		}
-		data := map[string]any{"stopReason": stopReason}
+		runFinished := appwire.RunFinishedEventApp{StopReason: stopReason}
 		if usage != nil {
-			data["totalTokens"] = usage.TotalTokens
-			data["inputTokens"] = usage.InputTokens
-			data["outputTokens"] = usage.OutputTokens
-			data["cachedReadTokens"] = usage.CachedReadTokens
-			data["cachedWriteTokens"] = usage.CachedWriteTokens
+			runFinished.TotalTokens = usage.TotalTokens
+			runFinished.InputTokens = usage.InputTokens
+			runFinished.OutputTokens = usage.OutputTokens
+			runFinished.CachedReadTokens = usage.CachedReadTokens
+			runFinished.CachedWriteTokens = usage.CachedWriteTokens
 		}
-		if evErr := c.SendEvent(domain.Event{
-			Type:      domain.EventRunFinished,
+		if evErr := c.SendEvent(appwire.Event{
+			Type:      appwire.EventRunFinished,
 			SessionID: sessionID,
 			At:        now,
-			Data:      data,
+			RunFinished: &appwire.RunFinishedEvent{
+				App: runFinished,
+			},
 		}); evErr != nil && !isExpectedRelayDrop(evErr) {
 			log.Printf("send run.finished event: %v", evErr)
 		}
 	}()
 
-	return map[string]any{"accepted": true}, ""
+	return appwire.AcceptedResult{Accepted: true}, ""
 }
 
-func (c *Client) rpcCancel(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcCancel(ctx context.Context, params appwire.CancelParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	if params.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	if err := c.runtime.Cancel(ctx, sessionID); err != nil {
+	if err := c.runtime.Cancel(ctx, params.SessionID); err != nil {
 		return nil, err.Error()
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
-func (c *Client) rpcSetMode(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcSetMode(ctx context.Context, params appwire.SetModeParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	if params.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	modeID := stringParam(params, "permissionMode")
-	if modeID == "" {
+	if params.PermissionMode == "" {
 		return nil, "missing permissionMode"
 	}
-	if err := c.runtime.SetMode(ctx, sessionID, modeID); err != nil {
+	if err := c.runtime.SetMode(ctx, params.SessionID, params.PermissionMode); err != nil {
 		return nil, err.Error()
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
-func (c *Client) rpcSetConfigOption(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcSetConfigOption(ctx context.Context, params appwire.SetConfigOptionParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	if params.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	configID := stringParam(params, "configId")
-	if configID == "" {
+	if params.ConfigID == "" {
 		return nil, "missing configId"
 	}
-	value := stringParam(params, "value")
-	if value == "" {
+	if params.Value == "" {
 		return nil, "missing value"
 	}
-	if err := c.runtime.SetConfigOption(ctx, sessionID, configID, value); err != nil {
+	if err := c.runtime.SetConfigOption(ctx, params.SessionID, params.ConfigID, params.Value); err != nil {
 		return nil, err.Error()
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
-func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcReplyPermission(ctx context.Context, params appwire.ReplyPermissionParams) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+	if params.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	requestID := stringParam(params, "requestId")
-	if requestID == "" {
+	if params.RequestID == "" {
 		return nil, "missing requestId"
 	}
-	optionID := stringParam(params, "optionId")
-	if optionID == "" {
+	if params.OptionID == "" {
 		return nil, "missing optionId"
 	}
-	if err := c.runtime.ReplyPermission(ctx, sessionID, requestID, optionID); err != nil {
+	if err := c.runtime.ReplyPermission(ctx, params.SessionID, params.RequestID, params.OptionID); err != nil {
 		return nil, err.Error()
 	}
-	if err := c.SendEvent(domain.Event{
-		Type:      domain.EventApprovalReplied,
-		SessionID: sessionID,
+	if err := c.SendEvent(appwire.Event{
+		Type:      appwire.EventApprovalReplied,
+		SessionID: params.SessionID,
 		At:        time.Now(),
-		Approval:  &domain.ApprovalRequest{ID: requestID, SessionID: sessionID},
+		Approval: &appwire.ApprovalRequest{
+			App: appwire.ApprovalApp{RequestID: params.RequestID},
+		},
 	}); err != nil && !isExpectedRelayDrop(err) {
 		log.Printf("send approval.replied event: %v", err)
 	}
-	return map[string]bool{"ok": true}, ""
+	return appwire.OKResult{OK: true}, ""
 }
 
-func (c *Client) rpcPendingApprovals(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcPendingApprovals(ctx context.Context) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
 	approvals := c.runtime.PendingApprovals()
-	return map[string]any{"approvals": approvals}, ""
+	return appwire.PendingApprovalsResult{
+		Approvals: appwireconv.ApprovalRequestsFromDomain(approvals),
+	}, ""
 }
 
-func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (any, string) {
+func (c *Client) rpcResyncEvents(ctx context.Context, params appwire.ResyncEventsParams) (any, string) {
 	if c.eventBuf == nil {
 		return nil, "event buffer not available"
 	}
-	var lastSeq uint64
-	if v, ok := params["lastSeq"].(float64); ok {
-		lastSeq = uint64(v)
-	}
-
-	events, complete := c.eventBuf.Since(lastSeq)
-	return map[string]any{
-		"events":   events,
-		"complete": complete,
-		"seq":      c.eventBuf.Seq(),
+	events, complete := c.eventBuf.Since(params.LastSeq)
+	return appwire.ResyncEventsResult{
+		Events:   events,
+		Complete: complete,
+		Seq:      c.eventBuf.Seq(),
 	}, ""
 }
 
 // --- Filesystem RPCs ---
-
-type fsEntry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	IsDir bool   `json:"isDir"`
-}
-
-type fsSearchResult struct {
-	Path  string `json:"path"`
-	IsDir bool   `json:"isDir"`
-}
 
 // safePath resolves relPath under cwd and rejects traversal / symlink escapes.
 func safePath(cwd, relPath string) (string, error) {
@@ -870,19 +890,18 @@ func safePath(cwd, relPath string) (string, error) {
 	return realTarget, nil
 }
 
-func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, string) {
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+func (c *Client) rpcFsList(_ context.Context, params appwire.FsListParams) (any, string) {
+	if params.SessionID == "" {
 		return nil, "missing sessionId"
 	}
 	c.sessionCWDMu.RLock()
-	cwd, ok := c.sessionCWD[sessionID]
+	cwd, ok := c.sessionCWD[params.SessionID]
 	c.sessionCWDMu.RUnlock()
 	if !ok || cwd == "" {
 		return nil, "unknown session"
 	}
 
-	relPath := stringParam(params, "path")
+	relPath := params.Path
 	target, err := safePath(cwd, relPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "path outside project") || strings.Contains(err.Error(), "symlink escape") {
@@ -905,7 +924,7 @@ func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, strin
 	})
 
 	const maxEntries = 200
-	entries := make([]fsEntry, 0, min(len(dirEntries), maxEntries))
+	entries := make([]appwire.FsEntry, 0, min(len(dirEntries), maxEntries))
 	// Normalize relPath so entry paths are clean.
 	if relPath == "." {
 		relPath = ""
@@ -918,26 +937,24 @@ func (c *Client) rpcFsList(_ context.Context, params map[string]any) (any, strin
 		if relPath != "" {
 			entryPath = filepath.Join(relPath, e.Name())
 		}
-		entries = append(entries, fsEntry{
+		entries = append(entries, appwire.FsEntry{
 			Name:  e.Name(),
 			Path:  entryPath,
 			IsDir: e.IsDir(),
 		})
 	}
-	return map[string]any{"entries": entries}, ""
+	return appwire.FsListResult{Entries: entries}, ""
 }
 
-func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, string) {
-	sessionID := stringParam(params, "sessionId")
-	if sessionID == "" {
+func (c *Client) rpcFsSearch(ctx context.Context, params appwire.FsSearchParams) (any, string) {
+	if params.SessionID == "" {
 		return nil, "missing sessionId"
 	}
-	query := stringParam(params, "query")
-	if query == "" {
+	if params.Query == "" {
 		return nil, "missing query"
 	}
 	c.sessionCWDMu.RLock()
-	cwd, ok := c.sessionCWD[sessionID]
+	cwd, ok := c.sessionCWD[params.SessionID]
 	c.sessionCWDMu.RUnlock()
 	if !ok || cwd == "" {
 		return nil, "unknown session"
@@ -947,8 +964,8 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 	defer cancel()
 
 	const maxResults = 50
-	lowerQuery := strings.ToLower(query)
-	var results []fsSearchResult
+	lowerQuery := strings.ToLower(params.Query)
+	var results []appwire.FsSearchEntry
 
 	_ = filepath.WalkDir(cwd, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -965,7 +982,7 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 		}
 		if strings.Contains(strings.ToLower(d.Name()), lowerQuery) {
 			rel, _ := filepath.Rel(cwd, path)
-			results = append(results, fsSearchResult{
+			results = append(results, appwire.FsSearchEntry{
 				Path:  rel,
 				IsDir: d.IsDir(),
 			})
@@ -984,44 +1001,13 @@ func (c *Client) rpcFsSearch(ctx context.Context, params map[string]any) (any, s
 	if len(results) > maxResults {
 		results = results[:maxResults]
 	}
-	return map[string]any{"results": results}, ""
-}
-
-func (c *Client) syncSessionStatus(ctx context.Context, sessionID, cwd string) {
-	if c.runtime == nil {
-		return
-	}
-	all, err := c.runtime.ResolveSessions(ctx, "", []string{sessionID})
-	if err != nil {
-		log.Printf("syncSessionStatus: list sessions: %v", err)
-		return
-	}
-	for _, s := range all {
-		if s.SessionID == sessionID {
-			if err := c.SendEvent(domain.Event{
-				Type:      domain.EventSessionStatus,
-				SessionID: sessionID,
-				At:        s.UpdatedAt,
-				Session: &domain.Session{
-					ID:        s.SessionID,
-					Title:     s.Title,
-					Status:    domain.SessionStatusDone,
-					CreatedAt: s.UpdatedAt,
-					UpdatedAt: s.UpdatedAt,
-					Metadata:  map[string]any{"cwd": s.CWD},
-				},
-			}); err != nil && !isExpectedRelayDrop(err) {
-				log.Printf("send session.status event: %v", err)
-			}
-			return
-		}
-	}
+	return appwire.FsSearchResult{Results: results}, ""
 }
 
 // --- Event forwarding ---
 
-// SendEvent encrypts a domain event and sends it to the connected client via WS.
-func (c *Client) SendEvent(event domain.Event) error {
+// SendEvent encrypts an app transport event and sends it to the connected client via WS.
+func (c *Client) SendEvent(event appwire.Event) error {
 	c.applyEventStatus(event)
 	if c.eventBuf != nil {
 		event = c.eventBuf.Push(event)
@@ -1039,7 +1025,7 @@ func (c *Client) SendEvent(event domain.Event) error {
 	}
 
 	msgID := uuid.New().String()
-	body, err := json.Marshal(event)
+	body, err := marshalEvent(event)
 	if err != nil {
 		return err
 	}
@@ -1055,28 +1041,28 @@ func (c *Client) SendEvent(event domain.Event) error {
 		Ciphertext: ciphertext,
 	}
 	switch event.Type {
-	case domain.EventApprovalRequested, domain.EventRunFailed, domain.EventRunFinished:
+	case appwire.EventApprovalRequested, appwire.EventRunFailed, appwire.EventRunFinished:
 		msg.Hint = &EventHint{Event: string(event.Type)}
 	}
 	return c.writeForSession(session, msg)
 }
 
-func (c *Client) applyEventStatus(event domain.Event) {
+func (c *Client) applyEventStatus(event appwire.Event) {
 	if event.SessionID == "" {
 		return
 	}
 	switch event.Type {
-	case domain.EventApprovalRequested:
+	case appwire.EventApprovalRequested:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusWaitingApproval)
-	case domain.EventApprovalReplied:
+	case appwire.EventApprovalReplied:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusRunning)
-	case domain.EventRunFinished:
+	case appwire.EventRunFinished:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusIdle)
-	case domain.EventRunFailed:
+	case appwire.EventRunFailed:
 		c.setSessionStatus(event.SessionID, domain.SessionStatusError)
-	case domain.EventSessionStatus:
-		if event.Session != nil {
-			c.setSessionStatus(event.SessionID, event.Session.Status)
+	case appwire.EventSessionStatus:
+		if event.SessionInfo != nil {
+			c.setSessionStatus(event.SessionID, sessionStatusFromWire(event.SessionInfo.App.Status))
 		}
 	}
 }
@@ -1136,6 +1122,14 @@ func (c *Client) clearMissingSessionStatuses(present map[string]struct{}) {
 	}
 }
 
+func sessionStatusToWire(status domain.SessionStatus) appwire.SessionStatus {
+	return appwire.SessionStatus(status)
+}
+
+func sessionStatusFromWire(status appwire.SessionStatus) domain.SessionStatus {
+	return domain.SessionStatus(status)
+}
+
 // --- Response handling ---
 
 func (c *Client) handleResponse(enc EncryptedMessage) {
@@ -1177,10 +1171,7 @@ func (c *Client) SendEcho(params map[string]any) error {
 		return ErrNoActiveSession
 	}
 	msgID := uuid.New().String()
-	body, err := json.Marshal(RPCPayload{
-		Method: "echo",
-		Params: params,
-	})
+	body, err := appwire.MarshalRPCRequest("echo", params)
 	if err != nil {
 		return err
 	}

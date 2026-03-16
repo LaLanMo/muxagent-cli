@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/codexbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
@@ -96,10 +97,11 @@ func run(cmd *cobra.Command, promptText, cwd, requestedRuntime string) error {
 	defer client.Stop()
 	fmt.Fprintln(cmd.OutOrStdout(), "[init] ACP initialized")
 
-	sessionID, _, err := client.NewSession(ctx, cwd, "")
+	sessionResp, err := client.NewSession(ctx, cwd, "")
 	if err != nil {
 		return fmt.Errorf("new session: %w", err)
 	}
+	sessionID := sessionResp.SessionID
 	fmt.Fprintf(cmd.OutOrStdout(), "[session] created: %s\n", sessionID)
 
 	// Consume events in background
@@ -143,59 +145,63 @@ func selectRuntime(cfg config.Config, requestedRuntime string) (config.RuntimeID
 	return "", fmt.Errorf("multiple runtimes configured; pass --runtime (%s)", strings.Join(names, ", "))
 }
 
-func printEvent(cmd *cobra.Command, ev domain.Event, client *acp.Client, ctx context.Context, sessionID string) {
+func printEvent(cmd *cobra.Command, ev appwire.Event, client *acp.Client, ctx context.Context, sessionID string) {
 	out := cmd.OutOrStdout()
 	switch ev.Type {
-	case domain.EventMessageDelta:
+	case appwire.EventMessageDelta:
 		if ev.MessagePart != nil {
-			text := ev.MessagePart.Delta
+			text := ev.MessagePart.App.Delta
 			if len(text) > 80 {
 				text = text[:80] + "..."
 			}
 			fmt.Fprintf(out, "[event] message.delta: %q\n", text)
 		}
-	case domain.EventReasoning:
+	case appwire.EventReasoning:
 		if ev.MessagePart != nil {
-			text := ev.MessagePart.Delta
+			text := ev.MessagePart.App.Delta
 			if len(text) > 80 {
 				text = text[:80] + "..."
 			}
 			fmt.Fprintf(out, "[event] reasoning: %q\n", text)
 		}
-	case domain.EventToolStarted:
+	case appwire.EventToolStarted:
 		if ev.Tool != nil {
-			fmt.Fprintf(out, "[event] tool.started: %s (call: %s)\n", ev.Tool.Name, ev.Tool.CallID)
+			fmt.Fprintf(out, "[event] tool.started: %s (call: %s)\n", ev.Tool.App.Name, ev.Tool.App.CallID)
 		}
-	case domain.EventToolUpdated:
+	case appwire.EventToolUpdated:
 		if ev.Tool != nil {
-			fmt.Fprintf(out, "[event] tool.updated: %s → %s\n", ev.Tool.Name, ev.Tool.Status)
+			fmt.Fprintf(out, "[event] tool.updated: %s → %s\n", ev.Tool.App.Name, ev.Tool.App.Status)
 		}
-	case domain.EventToolCompleted:
+	case appwire.EventToolCompleted:
 		if ev.Tool != nil {
-			output := ev.Tool.Output
+			output := ev.Tool.App.Output
 			if len(output) > 80 {
 				output = output[:80] + "..."
 			}
 			output = strings.ReplaceAll(output, "\n", "\\n")
-			fmt.Fprintf(out, "[event] tool.completed: %s → %q\n", ev.Tool.Name, output)
+			fmt.Fprintf(out, "[event] tool.completed: %s → %q\n", ev.Tool.App.Name, output)
 		}
-	case domain.EventToolFailed:
+	case appwire.EventToolFailed:
 		if ev.Tool != nil {
-			fmt.Fprintf(out, "[event] tool.failed: %s → %q\n", ev.Tool.Name, ev.Tool.Error)
+			fmt.Fprintf(out, "[event] tool.failed: %s → %q\n", ev.Tool.App.Name, ev.Tool.App.Error)
 		}
-	case domain.EventApprovalRequested:
+	case appwire.EventApprovalRequested:
 		if ev.Approval != nil {
-			fmt.Fprintf(out, "[event] approval.requested: %s → auto-approving (once)\n", ev.Approval.ToolName)
+			title := ev.Approval.App.Title
+			if title == "" && ev.Approval.ACP != nil && ev.Approval.ACP.ToolCall.Title != nil {
+				title = *ev.Approval.ACP.ToolCall.Title
+			}
+			fmt.Fprintf(out, "[event] approval.requested: %s → auto-approving (once)\n", title)
 			// Auto-approve with "once"
 			optionID := "once"
-			if len(ev.Approval.Options) > 0 {
-				optionID = ev.Approval.Options[0].OptionID
+			if ev.Approval.ACP != nil && len(ev.Approval.ACP.Options) > 0 {
+				optionID = ev.Approval.ACP.Options[0].OptionID
 			}
-			if err := client.ReplyPermission(ctx, sessionID, ev.Approval.ID, optionID); err != nil {
+			if err := client.ReplyPermission(ctx, sessionID, ev.Approval.RequestID(), optionID); err != nil {
 				fmt.Fprintf(out, "[error] reply permission: %v\n", err)
 			}
 		}
-	case domain.EventPlanUpdated:
+	case appwire.EventPlanUpdated:
 		fmt.Fprintln(out, "[event] plan.updated")
 	default:
 		fmt.Fprintf(out, "[event] %s\n", ev.Type)

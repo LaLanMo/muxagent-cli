@@ -27,6 +27,7 @@ var (
 	permResponses = make(chan message, 1)
 	stateMu       sync.Mutex
 	currentMode   = "default"
+	currentModel  = "default"
 )
 
 func send(msg any) {
@@ -95,6 +96,18 @@ func setCurrentModeValue(mode string) {
 	currentMode = mode
 }
 
+func currentModelValue() string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return currentModel
+}
+
+func setCurrentModelValue(model string) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	currentModel = model
+}
+
 func modeConfigOption(mode string) map[string]any {
 	return map[string]any{
 		"id":           "mode",
@@ -111,14 +124,15 @@ func modeConfigOption(mode string) map[string]any {
 	}
 }
 
-func modelConfigOption() map[string]any {
+func modelConfigOption(model string) map[string]any {
 	return map[string]any{
 		"id":           "model",
 		"type":         "select",
 		"category":     "model",
-		"currentValue": "default",
+		"currentValue": model,
 		"options": []map[string]any{
 			{"value": "default", "name": "Default"},
+			{"value": "opus", "name": "Opus"},
 		},
 	}
 }
@@ -167,6 +181,16 @@ func handlePrompt(id int64, params json.RawMessage) {
 		"status":        "in_progress",
 		"rawInput":      map[string]any{"command": "ls"},
 	})
+
+	if os.Getenv("MOCKAGENT_LOCATIONS_ONLY_TOOL_UPDATE") == "1" {
+		sessionUpdate(sid, map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call-001",
+			"locations": []map[string]any{
+				{"path": "/tmp/output.txt", "line": 7},
+			},
+		})
+	}
 
 	if needsPermission {
 		// Send permission request (agent→client)
@@ -271,12 +295,13 @@ func main() {
 
 		case "session/new":
 			mode := currentModeValue()
+			model := currentModelValue()
 			respond(id, map[string]any{
 				"sessionId": "test-session-001",
 				"modes":     map[string]any{"currentModeId": mode},
 				"configOptions": []map[string]any{
 					modeConfigOption(mode),
-					modelConfigOption(),
+					modelConfigOption(model),
 				},
 			})
 
@@ -323,12 +348,19 @@ func main() {
 			})
 
 			mode := currentModeValue()
+			model := currentModelValue()
+			if os.Getenv("MOCKAGENT_INVALID_LOAD_RESPONSE") == "1" {
+				respond(id, map[string]any{
+					"modes": "invalid",
+				})
+				continue
+			}
 			respond(id, map[string]any{
 				"ok":    true,
 				"modes": map[string]any{"currentModeId": mode},
 				"configOptions": []map[string]any{
 					modeConfigOption(mode),
-					modelConfigOption(),
+					modelConfigOption(model),
 				},
 			})
 
@@ -361,6 +393,27 @@ func main() {
 						"title":     "Mock Session Two",
 						"updatedAt": "2026-02-25T01:00:00Z",
 					},
+				},
+			})
+
+		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
+			}
+			json.Unmarshal(msg.Params, &params)
+			if params.ConfigID == "model" && params.Value != "" {
+				setCurrentModelValue(params.Value)
+			}
+			if os.Getenv("MOCKAGENT_INVALID_SET_CONFIG_RESPONSE") == "1" {
+				respond(id, map[string]any{
+					"configOptions": "invalid",
+				})
+				continue
+			}
+			respond(id, map[string]any{
+				"configOptions": []map[string]any{
+					modelConfigOption(currentModelValue()),
 				},
 			})
 

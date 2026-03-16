@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
+	"github.com/LaLanMo/muxagent-cli/internal/appwire"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/LaLanMo/muxagent-cli/internal/runtime/acp"
 	"github.com/stretchr/testify/assert"
@@ -42,8 +44,8 @@ func getModuleRoot(t *testing.T) string {
 	}
 }
 
-func collectEvents(ch <-chan domain.Event, timeout time.Duration) []domain.Event {
-	var events []domain.Event
+func collectEvents(ch <-chan appwire.Event, timeout time.Duration) []appwire.Event {
+	var events []appwire.Event
 	deadline := time.After(timeout)
 	idle := time.NewTimer(500 * time.Millisecond)
 	defer idle.Stop()
@@ -100,7 +102,7 @@ func startTestClient(t *testing.T, client *acp.Client) *acp.Client {
 	return client
 }
 
-func findEvent(events []domain.Event, eventType domain.EventType) *domain.Event {
+func findEvent(events []appwire.Event, eventType appwire.EventType) *appwire.Event {
 	for i := range events {
 		if events[i].Type == eventType {
 			return &events[i]
@@ -109,9 +111,28 @@ func findEvent(events []domain.Event, eventType domain.EventType) *domain.Event 
 	return nil
 }
 
-func findCurrentValue(opts []domain.ConfigOption, category string) string {
+func findToolEvent(events []appwire.Event, eventType appwire.EventType, match func(*appwire.ToolEvent) bool) *appwire.Event {
+	for i := range events {
+		if events[i].Type != eventType || events[i].Tool == nil {
+			continue
+		}
+		if match == nil || match(events[i].Tool) {
+			return &events[i]
+		}
+	}
+	return nil
+}
+
+func eventCurrentModeID(event *appwire.Event) string {
+	if event == nil || event.ModeChanged == nil {
+		return ""
+	}
+	return event.ModeChanged.App.CurrentModeID
+}
+
+func findCurrentValue(opts []acpprotocol.SessionConfigOption, category string) string {
 	for _, opt := range opts {
-		if opt.Category == category {
+		if opt.Category != nil && *opt.Category == category {
 			return opt.CurrentValue
 		}
 	}
@@ -125,9 +146,9 @@ func TestClient_InitializeAndNewSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
-	assert.Equal(t, "test-session-001", sessionID)
+	assert.Equal(t, "test-session-001", resp.SessionID)
 }
 
 func TestClient_NewSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
@@ -139,15 +160,15 @@ func TestClient_NewSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, configOptions, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
+	resp, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
 	require.NoError(t, err)
-	assert.Equal(t, "test-session-001", sessionID)
-	assert.Equal(t, "default", findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, "test-session-001", resp.SessionID)
+	assert.Equal(t, "default", findCurrentValue(resp.ConfigOptions, "mode"))
 
 	events := collectEvents(client.Events(), 2*time.Second)
-	modeEvent := findEvent(events, domain.EventModeChanged)
+	modeEvent := findEvent(events, appwire.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
+	assert.Equal(t, "default", eventCurrentModeID(modeEvent))
 }
 
 func TestClient_NewSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
@@ -157,15 +178,15 @@ func TestClient_NewSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, configOptions, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
+	resp, err := client.NewSession(ctx, "/tmp", domain.ModeAcceptEdits)
 	require.NoError(t, err)
-	assert.Equal(t, "test-session-001", sessionID)
-	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, "test-session-001", resp.SessionID)
+	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(resp.ConfigOptions, "mode"))
 
 	events := collectEvents(client.Events(), 2*time.Second)
-	modeEvent := findEvent(events, domain.EventModeChanged)
+	modeEvent := findEvent(events, appwire.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, domain.ModeAcceptEdits, modeEvent.Data["currentModeId"])
+	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))
 }
 
 func TestClient_PromptStreamsEvents(t *testing.T) {
@@ -175,16 +196,16 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Start collecting events before prompt
-	done := make(chan []domain.Event, 1)
+	done := make(chan []appwire.Event, 1)
 	go func() {
 		done <- collectEvents(client.Events(), 5*time.Second)
 	}()
 
-	stopReason, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+	stopReason, _, err := client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 		{Type: "text", Text: "hello"},
 	})
 	require.NoError(t, err)
@@ -195,44 +216,80 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 	events := <-done
 
 	// Verify we got the expected event types
-	typeMap := make(map[domain.EventType]int)
+	typeMap := make(map[appwire.EventType]int)
 	for _, ev := range events {
 		typeMap[ev.Type]++
 	}
 
-	assert.GreaterOrEqual(t, typeMap[domain.EventMessageDelta], 2, "expected at least 2 message.delta events")
-	assert.GreaterOrEqual(t, typeMap[domain.EventToolStarted], 1, "expected at least 1 tool.started event")
-	assert.GreaterOrEqual(t, typeMap[domain.EventToolUpdated], 1, "expected at least 1 tool.updated event")
-	assert.GreaterOrEqual(t, typeMap[domain.EventToolCompleted], 1, "expected at least 1 tool.completed event")
-	assert.GreaterOrEqual(t, typeMap[domain.EventReasoning], 1, "expected at least 1 reasoning event")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventMessageDelta], 2, "expected at least 2 message.delta events")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventToolStarted], 1, "expected at least 1 tool.started event")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventToolUpdated], 1, "expected at least 1 tool.updated event")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventToolCompleted], 1, "expected at least 1 tool.completed event")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventReasoning], 1, "expected at least 1 reasoning event")
 
 	// Verify tool event details
 	for _, ev := range events {
-		if ev.Type == domain.EventMessageDelta {
+		if ev.Type == appwire.EventMessageDelta {
 			require.NotNil(t, ev.MessagePart)
-			assert.NotEmpty(t, ev.MessagePart.MessageID)
-			assert.NotEmpty(t, ev.MessagePart.PartID)
-			assert.Equal(t, domain.MessageRoleAgent, ev.MessagePart.Role)
+			require.NotNil(t, ev.MessagePart.ACP)
+			assert.NotEmpty(t, ev.MessagePart.App.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.App.PartID)
+			assert.Equal(t, appwire.MessageRoleAgent, ev.MessagePart.App.Role)
 		}
-		if ev.Type == domain.EventToolStarted {
+		if ev.Type == appwire.EventToolStarted {
 			require.NotNil(t, ev.Tool)
-			assert.Equal(t, "call-001", ev.Tool.CallID)
-			assert.Equal(t, "Bash", ev.Tool.Name)
-			assert.NotEmpty(t, ev.Tool.MessageID)
+			require.NotNil(t, ev.Tool.ACP)
+			assert.Equal(t, "call-001", ev.Tool.App.CallID)
+			assert.Equal(t, "Bash", ev.Tool.App.Name)
+			assert.Equal(t, "call-001", ev.Tool.ACP.ToolCallID)
+			assert.NotEmpty(t, ev.Tool.App.MessageID)
 		}
-		if ev.Type == domain.EventToolCompleted {
+		if ev.Type == appwire.EventToolCompleted {
 			require.NotNil(t, ev.Tool)
-			assert.Equal(t, "file1.go\nfile2.go", ev.Tool.Output)
-			assert.NotEmpty(t, ev.Tool.MessageID)
+			require.NotNil(t, ev.Tool.ACP)
+			assert.Equal(t, "file1.go\nfile2.go", ev.Tool.App.Output)
+			assert.NotEmpty(t, ev.Tool.App.MessageID)
 		}
-		if ev.Type == domain.EventReasoning {
+		if ev.Type == appwire.EventReasoning {
 			require.NotNil(t, ev.MessagePart)
-			assert.NotEmpty(t, ev.MessagePart.MessageID)
-			assert.NotEmpty(t, ev.MessagePart.PartID)
-			assert.Equal(t, "reasoning", ev.MessagePart.PartType)
-			assert.Contains(t, ev.MessagePart.Delta, "thinking")
+			require.NotNil(t, ev.MessagePart.ACP)
+			assert.NotEmpty(t, ev.MessagePart.App.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.App.PartID)
+			assert.Equal(t, "reasoning", ev.MessagePart.App.PartType)
+			assert.Contains(t, ev.MessagePart.App.Delta, "thinking")
 		}
 	}
+}
+
+func TestClient_PromptStreamsLocationsOnlyToolUpdate(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_LOCATIONS_ONLY_TOOL_UPDATE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.NewSession(ctx, "/tmp", "")
+	require.NoError(t, err)
+
+	done := make(chan []appwire.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 5*time.Second)
+	}()
+
+	_, _, err = client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
+		{Type: "text", Text: "show location update"},
+	})
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	events := <-done
+	locationUpdate := findToolEvent(events, appwire.EventToolUpdated, func(tool *appwire.ToolEvent) bool {
+		return len(tool.App.Locations) == 1 && tool.App.Locations[0].Path == "/tmp/output.txt"
+	})
+	require.NotNil(t, locationUpdate)
+	assert.Equal(t, 7, *locationUpdate.Tool.App.Locations[0].Line)
 }
 
 func TestClient_PermissionFlow(t *testing.T) {
@@ -242,20 +299,23 @@ func TestClient_PermissionFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Monitor events for approval request
 	approvalHandled := make(chan struct{})
 	go func() {
 		for ev := range client.Events() {
-			if ev.Type == domain.EventApprovalRequested {
+			if ev.Type == appwire.EventApprovalRequested {
 				require.NotNil(t, ev.Approval)
-				assert.Equal(t, "Bash", ev.Approval.ToolName)
-				assert.Len(t, ev.Approval.Options, 2)
+				require.NotNil(t, ev.Approval.ACP)
+				assert.Equal(t, "Bash", ev.Approval.App.Title)
+				assert.Equal(t, "call-001", ev.Approval.App.ToolCallID)
+				assert.Equal(t, "execute", ev.Approval.App.ToolKind)
+				assert.Len(t, ev.Approval.ACP.Options, 2)
 
 				// Reply with "once"
-				err := client.ReplyPermission(ctx, sessionID, ev.Approval.ID, "once")
+				err := client.ReplyPermission(ctx, resp.SessionID, ev.Approval.RequestID(), "once")
 				assert.NoError(t, err)
 				close(approvalHandled)
 			}
@@ -263,7 +323,7 @@ func TestClient_PermissionFlow(t *testing.T) {
 	}()
 
 	// Send prompt that triggers permission flow
-	stopReason, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+	stopReason, _, err := client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 		{Type: "text", Text: "test permission flow"},
 	})
 	require.NoError(t, err)
@@ -285,11 +345,11 @@ func TestClient_Cancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	// Cancel should not hang or error (it's a notification)
-	err = client.Cancel(ctx, sessionID)
+	err = client.Cancel(ctx, resp.SessionID)
 	assert.NoError(t, err)
 }
 
@@ -300,14 +360,14 @@ func TestClient_CancelRespondsPendingPermission(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
 	approvalSeen := make(chan struct{}, 1)
 	promptDone := make(chan error, 1)
 
 	go func() {
-		_, _, err := client.Prompt(ctx, sessionID, []domain.ContentBlock{
+		_, _, err := client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 			{Type: "text", Text: "trigger permission"},
 		})
 		promptDone <- err
@@ -315,7 +375,7 @@ func TestClient_CancelRespondsPendingPermission(t *testing.T) {
 
 	go func() {
 		for ev := range client.Events() {
-			if ev.Type == domain.EventApprovalRequested {
+			if ev.Type == appwire.EventApprovalRequested {
 				approvalSeen <- struct{}{}
 				return
 			}
@@ -328,7 +388,7 @@ func TestClient_CancelRespondsPendingPermission(t *testing.T) {
 		t.Fatal("approval request was never received")
 	}
 
-	err = client.Cancel(ctx, sessionID)
+	err = client.Cancel(ctx, resp.SessionID)
 	require.NoError(t, err)
 
 	select {
@@ -347,7 +407,7 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	defer cancel()
 
 	// Start collecting events before load
-	done := make(chan []domain.Event, 1)
+	done := make(chan []appwire.Event, 1)
 	go func() {
 		done <- collectEvents(client.Events(), 3*time.Second)
 	}()
@@ -360,31 +420,31 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	events := <-done
 
 	// Verify replayed events
-	typeMap := make(map[domain.EventType]int)
+	typeMap := make(map[appwire.EventType]int)
 	for _, ev := range events {
 		typeMap[ev.Type]++
 	}
 
-	assert.GreaterOrEqual(t, typeMap[domain.EventMessageDelta], 2, "expected replayed message chunks")
-	assert.GreaterOrEqual(t, typeMap[domain.EventToolStarted], 1, "expected replayed tool.started")
-	assert.GreaterOrEqual(t, typeMap[domain.EventToolCompleted], 1, "expected replayed tool.completed")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventMessageDelta], 2, "expected replayed message chunks")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventToolStarted], 1, "expected replayed tool.started")
+	assert.GreaterOrEqual(t, typeMap[appwire.EventToolCompleted], 1, "expected replayed tool.completed")
 
 	// Verify content
 	var messageParts []string
-	var roleMap = map[domain.MessageRole]int{}
+	var roleMap = map[appwire.MessageRole]int{}
 	for _, ev := range events {
-		if ev.Type == domain.EventMessageDelta && ev.MessagePart != nil {
-			messageParts = append(messageParts, ev.MessagePart.Delta)
-			assert.NotEmpty(t, ev.MessagePart.MessageID)
-			assert.NotEmpty(t, ev.MessagePart.PartID)
-			roleMap[ev.MessagePart.Role]++
+		if ev.Type == appwire.EventMessageDelta && ev.MessagePart != nil {
+			messageParts = append(messageParts, ev.MessagePart.App.Delta)
+			assert.NotEmpty(t, ev.MessagePart.App.MessageID)
+			assert.NotEmpty(t, ev.MessagePart.App.PartID)
+			roleMap[ev.MessagePart.App.Role]++
 		}
-		if (ev.Type == domain.EventToolStarted || ev.Type == domain.EventToolCompleted) && ev.Tool != nil {
-			assert.NotEmpty(t, ev.Tool.MessageID)
+		if (ev.Type == appwire.EventToolStarted || ev.Type == appwire.EventToolCompleted) && ev.Tool != nil {
+			assert.NotEmpty(t, ev.Tool.App.MessageID)
 		}
 	}
-	assert.GreaterOrEqual(t, roleMap[domain.MessageRoleUser], 1, "expected replayed user message chunk")
-	assert.GreaterOrEqual(t, roleMap[domain.MessageRoleAgent], 1, "expected replayed agent message chunk")
+	assert.GreaterOrEqual(t, roleMap[appwire.MessageRoleUser], 1, "expected replayed user message chunk")
+	assert.GreaterOrEqual(t, roleMap[appwire.MessageRoleAgent], 1, "expected replayed agent message chunk")
 	assert.Contains(t, messageParts, "Hi ")
 	assert.Contains(t, messageParts, "there")
 	assert.Contains(t, messageParts, "History: ")
@@ -400,20 +460,20 @@ func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	done := make(chan []domain.Event, 1)
+	done := make(chan []appwire.Event, 1)
 	go func() {
 		done <- collectEvents(client.Events(), 3*time.Second)
 	}()
 
-	configOptions, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
+	resp, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
 	require.NoError(t, err)
-	assert.Equal(t, "default", findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, "default", findCurrentValue(resp.ConfigOptions, "mode"))
 
 	time.Sleep(200 * time.Millisecond)
 	events := <-done
-	modeEvent := findEvent(events, domain.EventModeChanged)
+	modeEvent := findEvent(events, appwire.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, "default", modeEvent.Data["currentModeId"])
+	assert.Equal(t, "default", eventCurrentModeID(modeEvent))
 }
 
 func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T) {
@@ -423,20 +483,62 @@ func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	done := make(chan []domain.Event, 1)
+	done := make(chan []appwire.Event, 1)
 	go func() {
 		done <- collectEvents(client.Events(), 3*time.Second)
 	}()
 
-	configOptions, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
+	resp, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
 	require.NoError(t, err)
-	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(configOptions, "mode"))
+	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(resp.ConfigOptions, "mode"))
 
 	time.Sleep(200 * time.Millisecond)
 	events := <-done
-	modeEvent := findEvent(events, domain.EventModeChanged)
+	modeEvent := findEvent(events, appwire.EventModeChanged)
 	require.NotNil(t, modeEvent)
-	assert.Equal(t, domain.ModeAcceptEdits, modeEvent.Data["currentModeId"])
+	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))
+}
+
+func TestClient_SetModeEmitsWrappedModeChangedEvent(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClient(t, bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.SetMode(ctx, "test-session-001", domain.ModeAcceptEdits)
+	require.NoError(t, err)
+
+	events := collectEvents(client.Events(), 2*time.Second)
+	modeEvent := findEvent(events, appwire.EventModeChanged)
+	require.NotNil(t, modeEvent)
+	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))
+}
+
+func TestClient_LoadSessionReturnsParseErrorForInvalidACPResponse(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_INVALID_LOAD_RESPONSE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
+	require.ErrorContains(t, err, "parse session/load result")
+}
+
+func TestClient_SetConfigOptionReturnsParseErrorForInvalidACPResponse(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_INVALID_SET_CONFIG_RESPONSE": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.SetConfigOption(ctx, "test-session-001", "model", "opus")
+	require.ErrorContains(t, err, "parse session/set_config_option result")
 }
 
 func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {
@@ -455,18 +557,18 @@ func TestClient_EnvRemoval_CLAUDECODE(t *testing.T) {
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() { client.Stop() })
 
-	sessionID, _, err := client.NewSession(ctx, "/tmp", "")
+	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
-	assert.NotEmpty(t, sessionID)
+	assert.NotEmpty(t, resp.SessionID)
 }
 
 func TestClient_RequiresAbsoluteCWD(t *testing.T) {
 	client := acp.NewClient(acp.Config{})
 
-	_, _, err := client.NewSession(context.Background(), "", "")
+	_, err := client.NewSession(context.Background(), "", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 
-	_, _, err = client.NewSession(context.Background(), "relative/path", "")
+	_, err = client.NewSession(context.Background(), "relative/path", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
 
 	_, err = client.LoadSession(context.Background(), "sid", "", "", "")
