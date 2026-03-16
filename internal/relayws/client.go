@@ -869,7 +869,9 @@ func (c *Client) rpcReplyPermission(ctx context.Context, params map[string]any) 
 		Type:      appwire.EventApprovalReplied,
 		SessionID: decoded.SessionID,
 		At:        time.Now(),
-		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: decoded.RequestID}},
+		Approval: &appwire.ApprovalRequest{
+			App: appwire.ApprovalApp{RequestID: decoded.RequestID},
+		},
 	}); err != nil && !isExpectedRelayDrop(err) {
 		log.Printf("send approval.replied event: %v", err)
 	}
@@ -881,7 +883,9 @@ func (c *Client) rpcPendingApprovals(ctx context.Context, params map[string]any)
 		return nil, "runtime not available"
 	}
 	approvals := c.runtime.PendingApprovals()
-	return appwire.PendingApprovalsResult{Approvals: approvals}, ""
+	return appwire.PendingApprovalsResult{
+		Approvals: appwire.ApprovalRequestsFromDomain(approvals),
+	}, ""
 }
 
 func (c *Client) rpcResyncEvents(ctx context.Context, params map[string]any) (any, string) {

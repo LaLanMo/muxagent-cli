@@ -65,7 +65,7 @@ type OKResult struct {
 }
 
 type PendingApprovalsResult struct {
-	Approvals []domain.ApprovalRequest `json:"approvals"`
+	Approvals []ApprovalRequest `json:"approvals"`
 }
 
 type FsEntry struct {

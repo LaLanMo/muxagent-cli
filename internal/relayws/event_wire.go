@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/appwire"
-	"github.com/LaLanMo/muxagent-cli/internal/domain"
 )
 
 type eventEnvelope struct {
@@ -15,7 +14,7 @@ type eventEnvelope struct {
 	At            time.Time                   `json:"at"`
 	MessagePart   *appwire.MessagePartEvent   `json:"messagePart,omitempty"`
 	Tool          *appwire.ToolEvent          `json:"tool,omitempty"`
-	Approval      *domain.ApprovalRequest     `json:"approval,omitempty"`
+	Approval      *appwire.ApprovalRequest    `json:"approval,omitempty"`
 	Plan          *appwire.PlanEvent          `json:"plan,omitempty"`
 	Usage         *appwire.UsageEvent         `json:"usage,omitempty"`
 	RunFinished   *appwire.RunFinishedEvent   `json:"runFinished,omitempty"`

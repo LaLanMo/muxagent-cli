@@ -180,7 +180,7 @@ type Event struct {
 
 	MessagePart   *MessagePartEvent
 	Tool          *ToolEvent
-	Approval      *domain.ApprovalRequest
+	Approval      *ApprovalRequest
 	Plan          *PlanEvent
 	Usage         *UsageEvent
 	RunFinished   *RunFinishedEvent

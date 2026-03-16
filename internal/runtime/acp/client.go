@@ -465,7 +465,7 @@ func (c *Client) handlePermissionRequest(req *IncomingMessage) {
 		Type:      appwire.EventApprovalRequested,
 		SessionID: permReq.SessionID,
 		At:        time.Now(),
-		Approval:  &approval,
+		Approval:  appwire.ApprovalRequestPtrFromDomain(&approval),
 	})
 }
 

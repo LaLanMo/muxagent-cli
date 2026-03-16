@@ -243,6 +243,15 @@ func (r *actionRuntime) ReplyPermission(ctx context.Context, sessionID, requestI
 	return nil
 }
 
+type approvalsRuntime struct {
+	blockingRuntime
+	approvals []domain.ApprovalRequest
+}
+
+func (r *approvalsRuntime) PendingApprovals() []domain.ApprovalRequest {
+	return append([]domain.ApprovalRequest(nil), r.approvals...)
+}
+
 type routingRuntime struct {
 	blockingRuntime
 	runtimes    []runtimemanager.RuntimeInfo
@@ -411,7 +420,7 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 		Type:      appwire.EventApprovalRequested,
 		SessionID: "sid",
 		At:        time.Now(),
-		Approval:  &domain.ApprovalRequest{App: domain.ApprovalApp{RequestID: "req-1"}},
+		Approval:  &appwire.ApprovalRequest{App: appwire.ApprovalApp{RequestID: "req-1"}},
 	})
 	require.ErrorIs(t, err, ErrRelayNotConnected)
 
@@ -612,6 +621,43 @@ func TestRpcActionHandlersDecodeTypedParams(t *testing.T) {
 	require.Equal(t, "allow", rt.replyOptionID)
 }
 
+func TestRpcPendingApprovalsMapsDomainApprovalIntoAppwire(t *testing.T) {
+	rt := &approvalsRuntime{
+		approvals: []domain.ApprovalRequest{{
+			App: domain.ApprovalApp{
+				RequestID: "req-1",
+				Runtime:   "codex",
+				ToolKind:  "execute",
+				Title:     "Run touch /workspace/hello.txt",
+				Command: &domain.ApprovalCommand{
+					Argv:    []string{"touch", "/workspace/hello.txt"},
+					Display: "touch hello.txt",
+				},
+				CWD: "/workspace",
+			},
+		}},
+	}
+	client := &Client{runtime: rt}
+
+	result, errStr := client.rpcPendingApprovals(context.Background(), map[string]any{})
+	require.Empty(t, errStr)
+
+	wire, ok := result.(appwire.PendingApprovalsResult)
+	require.True(t, ok)
+	require.Len(t, wire.Approvals, 1)
+	require.Equal(t, "req-1", wire.Approvals[0].App.RequestID)
+	require.Equal(t, "codex", wire.Approvals[0].App.Runtime)
+	require.Equal(t, "execute", wire.Approvals[0].App.ToolKind)
+	require.NotNil(t, wire.Approvals[0].App.Command)
+	require.Equal(t, "touch hello.txt", wire.Approvals[0].App.Command.Display)
+	require.Equal(
+		t,
+		[]string{"touch", "/workspace/hello.txt"},
+		wire.Approvals[0].App.Command.Argv,
+	)
+	require.Equal(t, "/workspace", wire.Approvals[0].App.CWD)
+}
+
 func TestRpcActionHandlersRejectMalformedTypedParams(t *testing.T) {
 	client := &Client{runtime: &actionRuntime{}}
 
@@ -749,6 +795,63 @@ func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "prompt_error", errorPayload["code"])
 	require.Equal(t, "runtime failed", errorPayload["message"])
+}
+
+func TestSendEventUsesApprovalEnvelope(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	err := client.SendEvent(appwire.Event{
+		Type:      appwire.EventApprovalRequested,
+		SessionID: "sid",
+		At:        time.Now(),
+		Approval: &appwire.ApprovalRequest{
+			App: appwire.ApprovalApp{
+				RequestID: "req-1",
+				Runtime:   "codex",
+				ToolKind:  "execute",
+				Title:     "Run touch /workspace/hello.txt",
+				Command: &appwire.ApprovalCommand{
+					Argv:    []string{"touch", "hello.txt"},
+					Display: "touch hello.txt",
+				},
+				CWD: "/workspace",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+
+	payload := decryptResponse(t, session, msg)
+	require.Equal(t, string(appwire.EventApprovalRequested), payload["type"])
+	require.Equal(t, "sid", payload["sessionId"])
+
+	approval, ok := payload["approval"].(map[string]any)
+	require.True(t, ok)
+	app, ok := approval["app"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "req-1", app["requestId"])
+	require.Equal(t, "codex", app["runtime"])
+	require.Equal(t, "execute", app["toolKind"])
+	require.Equal(t, "Run touch /workspace/hello.txt", app["title"])
+	require.Equal(t, "/workspace", app["cwd"])
+
+	command, ok := app["command"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "touch hello.txt", command["display"])
+	require.Equal(t, []any{"touch", "hello.txt"}, command["argv"])
 }
 
 func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
