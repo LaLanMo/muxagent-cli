@@ -418,18 +418,6 @@ func (c *Client) handleRPC(connEpoch uint64, enc EncryptedMessage) {
 	}
 }
 
-// stringParam extracts a string from params with explicit type checking.
-// Logs a warning if the key is present but has a non-string type.
-func stringParam(params map[string]any, key string) string {
-	if v, ok := params[key].(string); ok {
-		return v
-	}
-	if params[key] != nil {
-		log.Printf("[relay] param %q: expected string, got %T", key, params[key])
-	}
-	return ""
-}
-
 func (c *Client) rpcRuntimeList(_ context.Context) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
@@ -439,11 +427,35 @@ func (c *Client) rpcRuntimeList(_ context.Context) (any, string) {
 	}, ""
 }
 
+type createSessionParams struct {
+	CWD            string `json:"cwd"`
+	PermissionMode string `json:"permissionMode,omitempty"`
+	Runtime        string `json:"runtime"`
+	UseWorktree    bool   `json:"useWorktree,omitempty"`
+}
+
+type loadSessionParams struct {
+	SessionID      string `json:"sessionId"`
+	CWD            string `json:"cwd"`
+	PermissionMode string `json:"permissionMode,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Runtime        string `json:"runtime"`
+}
+
+type resolveSessionsParams struct {
+	Runtime    string   `json:"runtime,omitempty"`
+	SessionIDs []string `json:"sessionIds,omitempty"`
+}
+
 func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (any, string) {
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	cwd := stringParam(params, "cwd")
+	decoded, err := decodeRPCParams[createSessionParams](params)
+	if err != nil {
+		return nil, "invalid create params: " + err.Error()
+	}
+	cwd := decoded.CWD
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
@@ -453,18 +465,12 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 			cwd = filepath.Join(home, cwd[1:])
 		}
 	}
-	permissionMode := stringParam(params, "permissionMode")
-	requestedRuntime := stringParam(params, "runtime")
+	permissionMode := decoded.PermissionMode
+	requestedRuntime := decoded.Runtime
 	if requestedRuntime == "" {
 		return nil, "missing runtime"
 	}
-	var useWorktree bool
-	if v, exists := params["useWorktree"]; exists {
-		var ok bool
-		if useWorktree, ok = v.(bool); !ok {
-			return nil, "useWorktree must be a boolean"
-		}
-	}
+	useWorktree := decoded.UseWorktree
 
 	actualCWD := cwd
 	var wtMapping *worktree.Mapping
@@ -531,11 +537,15 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	sessionID := stringParam(params, "sessionId")
+	decoded, err := decodeRPCParams[loadSessionParams](params)
+	if err != nil {
+		return nil, "invalid load params: " + err.Error()
+	}
+	sessionID := decoded.SessionID
 	if sessionID == "" {
 		return nil, "missing sessionId"
 	}
-	cwd := stringParam(params, "cwd")
+	cwd := decoded.CWD
 	if cwd == "" {
 		return nil, "missing cwd"
 	}
@@ -551,9 +561,9 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 		}
 	}
 
-	permissionMode := stringParam(params, "permissionMode")
-	model := stringParam(params, "model")
-	requestedRuntime := stringParam(params, "runtime")
+	permissionMode := decoded.PermissionMode
+	model := decoded.Model
+	requestedRuntime := decoded.Runtime
 	if requestedRuntime == "" {
 		return nil, "missing runtime"
 	}
@@ -579,20 +589,17 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 	if c.runtime == nil {
 		return nil, "runtime not available"
 	}
-	var rawIDs []any
-	if v, ok := params["sessionIds"].([]any); ok {
-		rawIDs = v
-	} else if params["sessionIds"] != nil {
-		log.Printf("[relay] param %q: expected []any, got %T", "sessionIds", params["sessionIds"])
+	decoded, err := decodeRPCParams[resolveSessionsParams](params)
+	if err != nil {
+		return nil, "invalid resolve params: " + err.Error()
 	}
-	wanted := make(map[string]struct{}, len(rawIDs))
-	for _, item := range rawIDs {
-		id, _ := item.(string)
+	wanted := make(map[string]struct{}, len(decoded.SessionIDs))
+	for _, id := range decoded.SessionIDs {
 		if id != "" {
 			wanted[id] = struct{}{}
 		}
 	}
-	runtimeID := stringParam(params, "runtime")
+	runtimeID := decoded.Runtime
 	targetIDs := make([]string, 0, len(wanted))
 	for id := range wanted {
 		targetIDs = append(targetIDs, id)

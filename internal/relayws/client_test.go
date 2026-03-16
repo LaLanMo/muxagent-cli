@@ -1075,6 +1075,59 @@ func TestRpcCreateSessionRequiresRuntime(t *testing.T) {
 	require.Equal(t, "missing runtime", errStr)
 }
 
+func TestRpcSessionHandlersRejectMalformedTypedParams(t *testing.T) {
+	client := &Client{
+		runtime:    &routingRuntime{},
+		sessionCWD: map[string]string{},
+	}
+
+	tests := []struct {
+		name   string
+		call   func() (any, string)
+		errMsg string
+	}{
+		{
+			name: "create rejects invalid useWorktree type",
+			call: func() (any, string) {
+				return client.rpcCreateSession(context.Background(), map[string]any{
+					"cwd":         "/tmp",
+					"runtime":     "codex",
+					"useWorktree": "yes",
+				})
+			},
+			errMsg: "invalid create params:",
+		},
+		{
+			name: "load rejects invalid model type",
+			call: func() (any, string) {
+				return client.rpcLoadSession(context.Background(), map[string]any{
+					"sessionId": "sid",
+					"cwd":       "/tmp",
+					"runtime":   "codex",
+					"model":     []any{"bad"},
+				})
+			},
+			errMsg: "invalid load params:",
+		},
+		{
+			name: "resolve rejects invalid sessionIds type",
+			call: func() (any, string) {
+				return client.rpcResolveSessions(context.Background(), map[string]any{
+					"sessionIds": []any{"sid", 1},
+				})
+			},
+			errMsg: "invalid resolve params:",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errStr := tt.call()
+			require.Contains(t, errStr, tt.errMsg)
+		})
+	}
+}
+
 func TestRpcLoadSessionRequiresRuntime(t *testing.T) {
 	client := &Client{
 		runtime:    &blockingRuntime{loadStarted: make(chan struct{}, 1), unblock: make(chan struct{})},
