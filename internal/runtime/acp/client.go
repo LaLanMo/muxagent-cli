@@ -684,7 +684,7 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 				Kind:       stringPtrValue(update.Kind),
 				Title:      *update.Title,
 				Status:     domain.ToolStatusPending,
-				Input:      rawInputMap(update.RawInput),
+				Input:      toolInputFromRaw(update.RawInput),
 				ClaudeCode: claudeCodeToolFromMeta(update.Meta),
 				Locations:  locations,
 			},
@@ -734,7 +734,7 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 			Name:       stringValue(update.Title),
 			Kind:       stringPtrValue(update.Kind),
 			Title:      stringValue(update.Title),
-			Input:      rawInputMap(update.RawInput),
+			Input:      toolInputFromRaw(update.RawInput),
 			ClaudeCode: claudeCodeToolFromMeta(update.Meta),
 			Locations:  locations,
 		},
@@ -775,7 +775,7 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	})
 }
 
-func rawInputMap(raw json.RawMessage) map[string]any {
+func toolInputFromRaw(raw json.RawMessage) *domain.ToolInput {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -783,7 +783,49 @@ func rawInputMap(raw json.RawMessage) map[string]any {
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil
 	}
-	return input
+	result := &domain.ToolInput{
+		Description:  stringFromMap(input, "description"),
+		FilePath:     firstStringFromMap(input, "file_path", "path"),
+		SourcePath:   firstStringFromMap(input, "source", "path"),
+		TargetPath:   firstStringFromMap(input, "destination", "target"),
+		Pattern:      stringFromMap(input, "pattern"),
+		URL:          stringFromMap(input, "url"),
+		Mode:         stringFromMap(input, "mode"),
+		RawInputJSON: string(raw),
+	}
+
+	if command := commandFromMap(input); command != nil {
+		result.Command = command
+	}
+
+	oldString := stringFromMap(input, "old_string")
+	newString := stringFromMap(input, "new_string")
+	editFilePath := firstStringFromMap(input, "file_path", "path")
+	if oldString != "" || newString != "" || editFilePath != "" {
+		result.Edit = &domain.ToolEditInput{
+			FilePath:  editFilePath,
+			OldString: oldString,
+			NewString: newString,
+		}
+		if result.FilePath == "" {
+			result.FilePath = editFilePath
+		}
+	}
+
+	if result.Description == "" &&
+		result.Command == nil &&
+		result.FilePath == "" &&
+		result.SourcePath == "" &&
+		result.TargetPath == "" &&
+		result.Pattern == "" &&
+		result.URL == "" &&
+		result.Mode == "" &&
+		result.Edit == nil &&
+		result.RawInputJSON == "" {
+		return nil
+	}
+
+	return result
 }
 
 func claudeCodeToolFromMeta(meta acpprotocol.Meta) *domain.ClaudeCodeTool {
@@ -805,6 +847,49 @@ func claudeCodeToolFromMeta(meta acpprotocol.Meta) *domain.ClaudeCodeTool {
 	return &domain.ClaudeCodeTool{
 		ParentToolUseID: parentToolUseID,
 		ToolName:        toolName,
+	}
+}
+
+func stringFromMap(input map[string]any, key string) string {
+	value, _ := input[key].(string)
+	return value
+}
+
+func firstStringFromMap(input map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringFromMap(input, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func commandFromMap(input map[string]any) *domain.ToolCommand {
+	command := input["command"]
+	switch value := command.(type) {
+	case string:
+		if value == "" {
+			return nil
+		}
+		return &domain.ToolCommand{Display: value}
+	case []any:
+		argv := make([]string, 0, len(value))
+		for _, item := range value {
+			arg, ok := item.(string)
+			if !ok || arg == "" {
+				return nil
+			}
+			argv = append(argv, arg)
+		}
+		if len(argv) == 0 {
+			return nil
+		}
+		return &domain.ToolCommand{
+			Argv:    argv,
+			Display: strings.Join(argv, " "),
+		}
+	default:
+		return nil
 	}
 }
 
