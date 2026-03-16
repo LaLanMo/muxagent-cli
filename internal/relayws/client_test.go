@@ -25,9 +25,13 @@ import (
 type blockingRuntime struct {
 	loadStarted chan struct{}
 	unblock     chan struct{}
+	runtimes    []runtimemanager.RuntimeInfo
 }
 
 func (r *blockingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
+	if len(r.runtimes) > 0 {
+		return r.runtimes
+	}
 	return []runtimemanager.RuntimeInfo{{
 		ID:    "claude-code",
 		Label: "Claude Code",
@@ -616,8 +620,48 @@ func TestRunPassesRuntimeToSessionCreate(t *testing.T) {
 	}
 }
 
-func TestRpcCreateSessionRequiresRuntime(t *testing.T) {
-	client := &Client{runtime: &routingRuntime{}}
+func TestRpcCreateSessionDefaultsClaudeCodeWhenMissing(t *testing.T) {
+	client := &Client{
+		runtime:    &routingRuntime{},
+		sessionCWD: map[string]string{},
+	}
+
+	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
+		"cwd": "/tmp",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+	require.Equal(t, "claude-code", client.runtime.(*routingRuntime).lastRuntime)
+}
+
+func TestRpcCreateSessionDefaultsClaudeCodeWhenMultipleRuntimesExist(t *testing.T) {
+	client := &Client{
+		runtime: &routingRuntime{
+			runtimes: []runtimemanager.RuntimeInfo{
+				{ID: "claude-code", Label: "Claude Code", Ready: true},
+				{ID: "codex", Label: "Codex", Ready: true},
+			},
+		},
+		sessionCWD: map[string]string{},
+	}
+
+	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
+		"cwd": "/tmp",
+	})
+	require.Empty(t, errStr)
+	require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+	require.Equal(t, "claude-code", client.runtime.(*routingRuntime).lastRuntime)
+}
+
+func TestRpcCreateSessionRequiresRuntimeWhenClaudeCodeUnavailable(t *testing.T) {
+	client := &Client{
+		runtime: &routingRuntime{
+			runtimes: []runtimemanager.RuntimeInfo{
+				{ID: "codex", Label: "Codex", Ready: true},
+			},
+		},
+		sessionCWD: map[string]string{},
+	}
 
 	result, errStr := client.rpcCreateSession(context.Background(), map[string]any{
 		"cwd": "/tmp",
@@ -626,9 +670,86 @@ func TestRpcCreateSessionRequiresRuntime(t *testing.T) {
 	require.Equal(t, "missing runtime", errStr)
 }
 
-func TestRpcLoadSessionRequiresRuntime(t *testing.T) {
+func TestRpcLoadSessionDefaultsClaudeCodeWhenMissing(t *testing.T) {
 	client := &Client{
 		runtime:    &blockingRuntime{loadStarted: make(chan struct{}, 1), unblock: make(chan struct{})},
+		sessionCWD: map[string]string{},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, errStr := client.rpcLoadSession(context.Background(), map[string]any{
+			"sessionId": "sid",
+			"cwd":       "/tmp",
+		})
+		require.Empty(t, errStr)
+		require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+	}()
+
+	select {
+	case <-client.runtime.(*blockingRuntime).loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not start")
+	}
+
+	close(client.runtime.(*blockingRuntime).unblock)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not finish")
+	}
+}
+
+func TestRpcLoadSessionDefaultsClaudeCodeWhenMultipleRuntimesExist(t *testing.T) {
+	client := &Client{
+		runtime: &blockingRuntime{
+			loadStarted: make(chan struct{}, 1),
+			unblock:     make(chan struct{}),
+			runtimes: []runtimemanager.RuntimeInfo{
+				{ID: "claude-code", Label: "Claude Code", Ready: true},
+				{ID: "codex", Label: "Codex", Ready: true},
+			},
+		},
+		sessionCWD: map[string]string{},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, errStr := client.rpcLoadSession(context.Background(), map[string]any{
+			"sessionId": "sid",
+			"cwd":       "/tmp",
+		})
+		require.Empty(t, errStr)
+		require.Equal(t, "claude-code", result.(map[string]any)["runtime"])
+	}()
+
+	select {
+	case <-client.runtime.(*blockingRuntime).loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not start")
+	}
+
+	close(client.runtime.(*blockingRuntime).unblock)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not finish")
+	}
+}
+
+func TestRpcLoadSessionRequiresRuntimeWhenClaudeCodeUnavailable(t *testing.T) {
+	client := &Client{
+		runtime: &blockingRuntime{
+			loadStarted: make(chan struct{}, 1),
+			unblock:     make(chan struct{}),
+			runtimes: []runtimemanager.RuntimeInfo{
+				{ID: "codex", Label: "Codex", Ready: true},
+			},
+		},
 		sessionCWD: map[string]string{},
 	}
 

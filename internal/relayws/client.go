@@ -452,7 +452,7 @@ func (c *Client) rpcCreateSession(ctx context.Context, params map[string]any) (a
 		}
 	}
 	permissionMode := stringParam(params, "permissionMode")
-	requestedRuntime := stringParam(params, "runtime")
+	requestedRuntime := c.resolveRequestedRuntime(stringParam(params, "runtime"))
 	if requestedRuntime == "" {
 		return nil, "missing runtime"
 	}
@@ -546,7 +546,7 @@ func (c *Client) rpcLoadSession(ctx context.Context, params map[string]any) (any
 
 	permissionMode := stringParam(params, "permissionMode")
 	model := stringParam(params, "model")
-	requestedRuntime := stringParam(params, "runtime")
+	requestedRuntime := c.resolveRequestedRuntime(stringParam(params, "runtime"))
 	if requestedRuntime == "" {
 		return nil, "missing runtime"
 	}
@@ -638,6 +638,23 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params map[string]any) 
 		})
 	}
 	return map[string]any{"sessions": resolved}, ""
+}
+
+func (c *Client) resolveRequestedRuntime(runtimeID string) string {
+	runtimeID = strings.TrimSpace(runtimeID)
+	if runtimeID != "" || c.runtime == nil {
+		return runtimeID
+	}
+
+	runtimes := c.runtime.RuntimeList()
+	for _, runtimeInfo := range runtimes {
+		id := strings.TrimSpace(runtimeInfo.ID)
+		if id == "claude-code" {
+			return id
+		}
+	}
+
+	return ""
 }
 
 func (c *Client) rpcPrompt(ctx context.Context, params map[string]any) (any, string) {
