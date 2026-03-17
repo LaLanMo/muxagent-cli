@@ -115,12 +115,13 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 		unblock:     make(chan struct{}),
 	}
 	client := &Client{
-		conn:       clientConn,
-		connEpoch:  1,
-		machineID:  "machine-1",
-		runtime:    rt,
-		session:    session,
-		sessionCWD: map[string]string{},
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		runtime:       rt,
+		session:       session,
+		activeSession: session,
+		sessionCWD:    map[string]string{},
 	}
 
 	runErr := make(chan error, 1)
@@ -318,12 +319,13 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 		},
 	}
 	client := &Client{
-		conn:       clientConn,
-		connEpoch:  1,
-		machineID:  "machine-1",
-		runtime:    rt,
-		session:    session,
-		sessionCWD: map[string]string{},
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		runtime:       rt,
+		session:       session,
+		activeSession: session,
+		sessionCWD:    map[string]string{},
 	}
 
 	runErr := make(chan error, 1)
@@ -686,10 +688,11 @@ func TestSendEventUsesRunFailedEnvelope(t *testing.T) {
 	key[0] = 1
 	session := newSession("machine-1", key, 1)
 	client := &Client{
-		conn:      clientConn,
-		connEpoch: 1,
-		machineID: "machine-1",
-		session:   session,
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       session,
+		activeSession: session,
 	}
 
 	err := client.SendEvent(appwire.Event{
@@ -734,10 +737,11 @@ func TestSendEventUsesApprovalEnvelope(t *testing.T) {
 	key[0] = 1
 	session := newSession("machine-1", key, 1)
 	client := &Client{
-		conn:      clientConn,
-		connEpoch: 1,
-		machineID: "machine-1",
-		session:   session,
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       session,
+		activeSession: session,
 	}
 
 	err := client.SendEvent(appwire.Event{
@@ -792,10 +796,11 @@ func TestSendEventUsesToolEnvelope(t *testing.T) {
 	line := 3
 	session := newSession("machine-1", key, 1)
 	client := &Client{
-		conn:      clientConn,
-		connEpoch: 1,
-		machineID: "machine-1",
-		session:   session,
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       session,
+		activeSession: session,
 	}
 
 	err := client.SendEvent(appwire.Event{
@@ -880,10 +885,11 @@ func TestSendEventUsesModeChangedEnvelope(t *testing.T) {
 	key[0] = 1
 	session := newSession("machine-1", key, 1)
 	client := &Client{
-		conn:      clientConn,
-		connEpoch: 1,
-		machineID: "machine-1",
-		session:   session,
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       session,
+		activeSession: session,
 	}
 
 	err := client.SendEvent(appwire.Event{
@@ -926,10 +932,11 @@ func TestSendEventUsesConfigChangedEnvelope(t *testing.T) {
 	key[0] = 1
 	session := newSession("machine-1", key, 1)
 	client := &Client{
-		conn:      clientConn,
-		connEpoch: 1,
-		machineID: "machine-1",
-		session:   session,
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       session,
+		activeSession: session,
 	}
 
 	err := client.SendEvent(appwire.Event{
@@ -995,10 +1002,11 @@ func TestSendEventUsesSessionStatusEnvelope(t *testing.T) {
 	key[0] = 1
 	session := newSession("machine-1", key, 1)
 	client := &Client{
-		conn:      clientConn,
-		connEpoch: 1,
-		machineID: "machine-1",
-		session:   session,
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       session,
+		activeSession: session,
 	}
 
 	err := client.SendEvent(appwire.Event{
@@ -1107,12 +1115,13 @@ func TestRunHandlesRuntimeListRPC(t *testing.T) {
 		},
 	}
 	client := &Client{
-		conn:       clientConn,
-		connEpoch:  1,
-		machineID:  "machine-1",
-		runtime:    rt,
-		session:    session,
-		sessionCWD: map[string]string{},
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		runtime:       rt,
+		session:       session,
+		activeSession: session,
+		sessionCWD:    map[string]string{},
 	}
 
 	runErr := make(chan error, 1)
@@ -1170,12 +1179,13 @@ func TestRunPassesRuntimeToSessionCreate(t *testing.T) {
 	session := newSession("machine-1", key, 1)
 	rt := &routingRuntime{}
 	client := &Client{
-		conn:       clientConn,
-		connEpoch:  1,
-		machineID:  "machine-1",
-		runtime:    rt,
-		session:    session,
-		sessionCWD: map[string]string{},
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		runtime:       rt,
+		session:       session,
+		activeSession: session,
+		sessionCWD:    map[string]string{},
 	}
 
 	runErr := make(chan error, 1)
@@ -1406,8 +1416,9 @@ func TestWriteForSessionErrors(t *testing.T) {
 
 	t.Run("relay not connected", func(t *testing.T) {
 		client := &Client{
-			connEpoch: 1,
-			session:   session,
+			connEpoch:     1,
+			session:       session,
+			activeSession: session,
 		}
 		err := client.writeForSession(session, msg)
 		require.ErrorIs(t, err, ErrRelayNotConnected)
@@ -1425,9 +1436,10 @@ func TestWriteForSessionErrors(t *testing.T) {
 	t.Run("stale session pointer", func(t *testing.T) {
 		current := newSession("machine-1", key, 1)
 		client := &Client{
-			conn:      &websocket.Conn{},
-			connEpoch: 1,
-			session:   current,
+			conn:          &websocket.Conn{},
+			connEpoch:     1,
+			session:       current,
+			activeSession: current,
 		}
 		err := client.writeForSession(session, msg)
 		require.ErrorIs(t, err, ErrStaleRelaySession)
@@ -1436,9 +1448,10 @@ func TestWriteForSessionErrors(t *testing.T) {
 	t.Run("stale session epoch", func(t *testing.T) {
 		current := newSession("machine-1", key, 2)
 		client := &Client{
-			conn:      &websocket.Conn{},
-			connEpoch: 2,
-			session:   current,
+			conn:          &websocket.Conn{},
+			connEpoch:     2,
+			session:       current,
+			activeSession: current,
 		}
 		err := client.writeForSession(session, msg)
 		require.ErrorIs(t, err, ErrStaleRelaySession)
@@ -1510,6 +1523,7 @@ func TestHandleSessionInitInstallsSessionBeforeAckWrite(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return client.currentSession() != nil
 	}, time.Second, 10*time.Millisecond)
+	require.Nil(t, client.currentActiveSession())
 
 	client.writeMu.Unlock()
 
@@ -1526,6 +1540,8 @@ func TestHandleSessionInitInstallsSessionBeforeAckWrite(t *testing.T) {
 	require.Equal(t, "machine-1", ack.MachineID)
 	require.NotEmpty(t, ack.MachineEphemeralPub)
 	require.NotEmpty(t, ack.Signature)
+	require.NotNil(t, client.currentSession())
+	require.NotNil(t, client.currentActiveSession())
 }
 
 func TestHandleSessionInitClearsSessionOnAckWriteFailure(t *testing.T) {
@@ -1537,6 +1553,166 @@ func TestHandleSessionInitClearsSessionOnAckWriteFailure(t *testing.T) {
 	err := client.handleSessionInit(1, msg)
 	require.Error(t, err)
 	require.Nil(t, client.currentSession())
+	require.Nil(t, client.currentActiveSession())
+}
+
+func TestSendEventWaitsForActiveSessionPublicationBehindWriteLock(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+		machineID: "machine-1",
+		session:   session,
+	}
+
+	client.writeMu.Lock()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.SendEvent(appwire.Event{
+			Type:      appwire.EventRunFinished,
+			SessionID: "sid",
+			At:        time.Now(),
+			RunFinished: &appwire.RunFinishedEvent{
+				App: appwire.RunFinishedEventApp{StopReason: "end_turn"},
+			},
+		})
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("SendEvent returned before the handshake publication window closed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	client.stateMu.Lock()
+	client.activeSession = session
+	client.stateMu.Unlock()
+	client.writeMu.Unlock()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("SendEvent did not resume after activeSession was published")
+	}
+
+	msg := readEncryptedMessage(t, relayConn)
+	require.Equal(t, MessageTypeEvent, msg.Type)
+}
+
+func TestClearSessionWaitsForWriteLock(t *testing.T) {
+	var key [32]byte
+	key[0] = 1
+	session := newSession("machine-1", key, 1)
+	client := &Client{
+		session:       session,
+		activeSession: session,
+	}
+
+	client.writeMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		client.clearSession(session)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("clearSession should wait for the write lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.Same(t, session, client.currentSession())
+	require.Same(t, session, client.currentActiveSession())
+
+	client.writeMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("clearSession did not finish after releasing the write lock")
+	}
+
+	require.Nil(t, client.currentSession())
+	require.Nil(t, client.currentActiveSession())
+}
+
+func TestDetachActiveConnectionWaitsForWriteLock(t *testing.T) {
+	clientConn, _, cleanup := newWSPair(t)
+	defer cleanup()
+
+	client := &Client{
+		conn:      clientConn,
+		connEpoch: 1,
+	}
+
+	client.writeMu.Lock()
+	done := make(chan *websocket.Conn, 1)
+	go func() {
+		done <- client.detachActiveConnection()
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("detachActiveConnection should wait for the write lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	conn, epoch := client.currentConnection()
+	require.Same(t, clientConn, conn)
+	require.Equal(t, uint64(1), epoch)
+
+	client.writeMu.Unlock()
+
+	var oldConn *websocket.Conn
+	select {
+	case oldConn = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detachActiveConnection did not finish after releasing the write lock")
+	}
+
+	require.Same(t, clientConn, oldConn)
+
+	conn, epoch = client.currentConnection()
+	require.Nil(t, conn)
+	require.Equal(t, uint64(2), epoch)
+}
+
+func TestHandleSessionEndIgnoresStaleEpochAfterReconnect(t *testing.T) {
+	clientConn1, _, cleanup1 := newWSPair(t)
+	defer cleanup1()
+
+	var key [32]byte
+	key[0] = 1
+	oldSession := newSession("machine-1", key, 1)
+	client := &Client{
+		conn:          clientConn1,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       oldSession,
+		activeSession: oldSession,
+	}
+
+	clientConn2, _, cleanup2 := newWSPair(t)
+	defer cleanup2()
+
+	newEpoch := client.publishActiveConnection(clientConn2)
+	newSession := newSession("machine-1", key, newEpoch)
+	require.NoError(t, client.installSession(newSession))
+	require.NoError(t, client.activateSession(newSession))
+
+	client.handleSessionEnd(1, SessionEndMessage{MachineID: "machine-1"})
+	require.Same(t, newSession, client.currentSession())
+	require.Same(t, newSession, client.currentActiveSession())
+
+	client.handleSessionEnd(newEpoch, SessionEndMessage{MachineID: "machine-1"})
+	require.Nil(t, client.currentSession())
+	require.Nil(t, client.currentActiveSession())
 }
 
 func TestConnectHandshakeIsolation(t *testing.T) {
@@ -1637,12 +1813,13 @@ func TestOldHandleRPCDoesNotWriteToNewConnection(t *testing.T) {
 		unblock:     make(chan struct{}),
 	}
 	client := &Client{
-		conn:       clientConn1,
-		connEpoch:  1,
-		machineID:  "machine-1",
-		runtime:    rt,
-		session:    oldSession,
-		sessionCWD: map[string]string{},
+		conn:          clientConn1,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		runtime:       rt,
+		session:       oldSession,
+		activeSession: oldSession,
+		sessionCWD:    map[string]string{},
 	}
 
 	runErr := make(chan error, 1)
@@ -1698,12 +1875,13 @@ func TestManyHandleRPCDoNotWriteToNewConnection(t *testing.T) {
 		unblock:     make(chan struct{}),
 	}
 	client := &Client{
-		conn:       clientConn1,
-		connEpoch:  1,
-		machineID:  "machine-1",
-		runtime:    rt,
-		session:    oldSession,
-		sessionCWD: map[string]string{},
+		conn:          clientConn1,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		runtime:       rt,
+		session:       oldSession,
+		activeSession: oldSession,
+		sessionCWD:    map[string]string{},
 	}
 
 	runErr := make(chan error, 1)
@@ -1764,10 +1942,11 @@ func TestCloseAndSendEventConcurrent(t *testing.T) {
 	key[0] = 1
 	session := newSession("machine-1", key, 1)
 	client := &Client{
-		conn:      clientConn,
-		connEpoch: 1,
-		machineID: "machine-1",
-		session:   session,
+		conn:          clientConn,
+		connEpoch:     1,
+		machineID:     "machine-1",
+		session:       session,
+		activeSession: session,
 	}
 
 	start := make(chan struct{})
