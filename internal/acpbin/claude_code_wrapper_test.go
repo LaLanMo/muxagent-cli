@@ -58,7 +58,7 @@ func TestInjectClaudeCodeExecutable(t *testing.T) {
 		{
 			name: "injects wrapper for versioned managed runtime command",
 			input: config.RuntimeSettings{
-				Command: "/tmp/claude-agent-acp-0.21.0",
+				Command: "/tmp/claude-agent-acp-0.22.0",
 				Env:     map[string]string{"CLAUDECODE": ""},
 			},
 			verify: func(t *testing.T, got config.RuntimeSettings, err error) {
@@ -77,7 +77,7 @@ func TestInjectClaudeCodeExecutable(t *testing.T) {
 				if !strings.Contains(content, "--cli") {
 					t.Fatalf("wrapper missing --cli: %q", content)
 				}
-				if !strings.Contains(content, "claude-agent-acp-0.21.0") {
+				if !strings.Contains(content, "claude-agent-acp-0.22.0") {
 					t.Fatalf("wrapper missing target command: %q", content)
 				}
 				if got.Env["CLAUDECODE"] != "" {

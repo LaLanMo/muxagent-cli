@@ -1,16 +1,16 @@
 package codexbin
 
-const ACPVersion = "0.9.5"
+const ACPVersion = "0.10.0"
 
 // Checksums contains the SHA256 hash of each platform's release archive.
-// Computed from: GitHub release asset digests for zed-industries/codex-acp v0.9.5.
+// Computed from: GitHub release asset digests for zed-industries/codex-acp v0.10.0.
 var Checksums = map[string]string{
-	"aarch64-apple-darwin":       "cf330c8d5cf8d5f1a155a92978172ad00e0001f982c5bcd92b5483a16966364d",
-	"x86_64-apple-darwin":        "34d965fa51c0eecfa895cf18b71372d2e3bc44561f7eaac52e17904db46dee9b",
-	"x86_64-unknown-linux-gnu":   "49ef481a78836384a4c0aa994acf39822c549ef0fa20d4d610ce002e3b9808e0",
-	"aarch64-unknown-linux-gnu":  "3dbf57dcec027a61c8f24e40e952e6405b1a0ee30bf728ad409c77d25bd05a71",
-	"x86_64-unknown-linux-musl":  "8cb879c2bcc3d8a9178f3751253eb6ee88cb9330c6172db53620d8a7610b2524",
-	"aarch64-unknown-linux-musl": "1547d193121e393ab4b57097c2206b5d519dba7a147d07fb271cfbcbf4e5d290",
-	"x86_64-pc-windows-msvc":     "97659d6043ae83948e49c0abd98e29aa7ce6e1ebe1182fbda73d4864ec0db812",
-	"aarch64-pc-windows-msvc":    "a4515154d0d9b6a33b6b7196d59233cf153d5c24469c1f30992408c346386ed1",
+	"aarch64-apple-darwin":       "691f2a3fca24e6f2b9b3bde1a1181f3122be17fcce990a9f7f1c750fb3668422",
+	"x86_64-apple-darwin":        "0eb29de065f73334016d2b1046e4f2b52529b769d324d45a805e316d73d7e4ba",
+	"x86_64-unknown-linux-gnu":   "f5d0c1bcbbb361a92c4f52168625fe5fbc845cc9e48ae1c3fd150115cd11b415",
+	"aarch64-unknown-linux-gnu":  "bb20efa584ad7f89cd0eaac09ec8fd1181cd8e818ad08ef22c2b0db3d1c736dd",
+	"x86_64-unknown-linux-musl":  "6e87fa19d33890b54ac428ff328dc0d1d91a2b522d8298a38a394e12dacda0b0",
+	"aarch64-unknown-linux-musl": "1567e0e090157393faa54db6afe17b6df188d1c77924aa89655c8cf6295cc541",
+	"x86_64-pc-windows-msvc":     "197a4daf5c163f3b491b19073c18d7177d67bf5179212811caa5f88b3e92d93e",
+	"aarch64-pc-windows-msvc":    "9ed9af77c6fd6458149fd328f7e4b007691d8cf973aac3737c47b9fdbf1a9780",
 }
