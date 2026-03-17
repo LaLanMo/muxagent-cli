@@ -1,5 +1,7 @@
 # MuxAgent CLI
 
+![MuxAgent](og-image.png)
+
 MuxAgent lets you monitor and control Claude Code from your phone.
 
 ## Installation
