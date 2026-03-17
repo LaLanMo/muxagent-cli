@@ -68,15 +68,17 @@ type Client struct {
 	machineSignPriv ed25519.PrivateKey
 	keyring         *keyring.Manager
 
-	// Lock ordering: stateMu must never be acquired while holding writeMu.
-	// Callers may snapshot state under stateMu, release it, then serialize WS
-	// frame writes under writeMu.
+	// Any mutation of conn/session state that affects outbound write safety must
+	// acquire writeMu before stateMu. Write helpers use the same ordering, then
+	// release stateMu before the websocket write so readers are not blocked on
+	// network I/O.
 	stateMu   sync.RWMutex
 	conn      *websocket.Conn
 	connEpoch uint64
 	writeMu   sync.Mutex
 
-	session *Session
+	session       *Session // installed session used for inbound decrypt/rpc handling
+	activeSession *Session // outbound-eligible session after session-ack is written
 
 	runtime  RuntimeClient
 	eventBuf *EventBuffer
@@ -125,7 +127,7 @@ func NewMachineClient(
 func (c *Client) HasSession() bool {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
-	return c.session != nil
+	return c.session != nil || c.activeSession != nil
 }
 
 func (c *Client) Connect(ctx context.Context) error {
@@ -255,7 +257,7 @@ func (c *Client) Run(ctx context.Context) error {
 			if err := json.Unmarshal(raw, &msg); err != nil {
 				continue
 			}
-			c.handleSessionEnd(msg)
+			c.handleSessionEnd(connEpoch, msg)
 		case MessageTypeRPC:
 			var enc EncryptedMessage
 			if err := json.Unmarshal(raw, &enc); err != nil {
@@ -333,13 +335,12 @@ func (c *Client) handleSessionInit(connEpoch uint64, msg SessionInitMessage) err
 
 	ackMsg := crypto.BuildSessionAckMessage(c.machineID, machineEphemeralPubB64)
 	ackSig := crypto.SignBase64(ackMsg, c.machineSignPriv)
-	if err := c.writeProtocolForEpoch(connEpoch, SessionAckMessage{
+	if err := c.writeSessionAckAndActivate(session, SessionAckMessage{
 		Type:                MessageTypeSessionAck,
 		MachineID:           c.machineID,
 		MachineEphemeralPub: machineEphemeralPubB64,
 		Signature:           ackSig,
 	}); err != nil {
-		c.clearSession(session)
 		return err
 	}
 	return nil
@@ -1018,38 +1019,29 @@ func (c *Client) SendEvent(event appwire.Event) error {
 		event = c.eventBuf.Push(event)
 	}
 
-	c.stateMu.RLock()
-	session := c.session
-	connPresent := c.conn != nil
-	c.stateMu.RUnlock()
-	if !connPresent {
-		return ErrRelayNotConnected
-	}
-	if session == nil {
-		return ErrNoActiveSession
-	}
-
 	msgID := uuid.New().String()
 	body, err := marshalEvent(event)
 	if err != nil {
 		return err
 	}
-	nonce, ciphertext, err := session.encrypt(string(MessageTypeEvent), msgID, body)
-	if err != nil {
-		return err
-	}
-	msg := EncryptedMessage{
-		Type:       MessageTypeEvent,
-		MachineID:  c.machineID,
-		MsgID:      msgID,
-		Nonce:      nonce,
-		Ciphertext: ciphertext,
-	}
-	switch event.Type {
-	case appwire.EventApprovalRequested, appwire.EventRunFailed, appwire.EventRunFinished:
-		msg.Hint = &EventHint{Event: string(event.Type)}
-	}
-	return c.writeForSession(session, msg)
+	return c.writeEncryptedForActiveSession(func(session *Session) (EncryptedMessage, error) {
+		nonce, ciphertext, err := session.encrypt(string(MessageTypeEvent), msgID, body)
+		if err != nil {
+			return EncryptedMessage{}, err
+		}
+		msg := EncryptedMessage{
+			Type:       MessageTypeEvent,
+			MachineID:  c.machineID,
+			MsgID:      msgID,
+			Nonce:      nonce,
+			Ciphertext: ciphertext,
+		}
+		switch event.Type {
+		case appwire.EventApprovalRequested, appwire.EventRunFailed, appwire.EventRunFinished:
+			msg.Hint = &EventHint{Event: string(event.Type)}
+		}
+		return msg, nil
+	})
 }
 
 func (c *Client) applyEventStatus(event appwire.Event) {
@@ -1153,43 +1145,40 @@ func (c *Client) handleResponse(enc EncryptedMessage) {
 	log.Printf("response from client: %v", payload)
 }
 
-func (c *Client) handleSessionEnd(msg SessionEndMessage) {
+func (c *Client) handleSessionEnd(connEpoch uint64, msg SessionEndMessage) {
 	if msg.MachineID == "" || msg.MachineID != c.machineID {
 		return
 	}
-	c.stateMu.Lock()
+	c.lockWriteState()
+	defer c.unlockWriteState()
+
+	if c.connEpoch != connEpoch {
+		return
+	}
 	c.session = nil
-	c.stateMu.Unlock()
+	c.activeSession = nil
 	log.Printf("session ended by client")
 }
 
 // SendEcho sends an echo RPC (kept for backward compatibility).
 func (c *Client) SendEcho(params map[string]any) error {
-	c.stateMu.RLock()
-	session := c.session
-	connPresent := c.conn != nil
-	c.stateMu.RUnlock()
-	if !connPresent {
-		return ErrRelayNotConnected
-	}
-	if session == nil {
-		return ErrNoActiveSession
-	}
 	msgID := uuid.New().String()
 	body, err := appwire.MarshalRPCRequest("echo", params)
 	if err != nil {
 		return err
 	}
-	nonce, ciphertext, err := session.encrypt(string(MessageTypeRPC), msgID, body)
-	if err != nil {
-		return err
-	}
-	return c.writeForSession(session, EncryptedMessage{
-		Type:       MessageTypeRPC,
-		MachineID:  c.machineID,
-		MsgID:      msgID,
-		Nonce:      nonce,
-		Ciphertext: ciphertext,
+	return c.writeEncryptedForActiveSession(func(session *Session) (EncryptedMessage, error) {
+		nonce, ciphertext, err := session.encrypt(string(MessageTypeRPC), msgID, body)
+		if err != nil {
+			return EncryptedMessage{}, err
+		}
+		return EncryptedMessage{
+			Type:       MessageTypeRPC,
+			MachineID:  c.machineID,
+			MsgID:      msgID,
+			Nonce:      nonce,
+			Ciphertext: ciphertext,
+		}, nil
 	})
 }
 
@@ -1221,9 +1210,25 @@ func (c *Client) currentSession() *Session {
 	return c.session
 }
 
-func (c *Client) detachActiveConnection() *websocket.Conn {
+func (c *Client) currentActiveSession() *Session {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.activeSession
+}
+
+func (c *Client) lockWriteState() {
+	c.writeMu.Lock()
 	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+}
+
+func (c *Client) unlockWriteState() {
+	c.stateMu.Unlock()
+	c.writeMu.Unlock()
+}
+
+func (c *Client) detachActiveConnection() *websocket.Conn {
+	c.lockWriteState()
+	defer c.unlockWriteState()
 	return c.detachActiveConnectionLocked()
 }
 
@@ -1231,13 +1236,14 @@ func (c *Client) detachActiveConnectionLocked() *websocket.Conn {
 	oldConn := c.conn
 	c.conn = nil
 	c.session = nil
+	c.activeSession = nil
 	c.connEpoch++
 	return oldConn
 }
 
 func (c *Client) publishActiveConnection(conn *websocket.Conn) uint64 {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+	c.lockWriteState()
+	defer c.unlockWriteState()
 	return c.publishActiveConnectionLocked(conn)
 }
 
@@ -1245,6 +1251,7 @@ func (c *Client) publishActiveConnectionLocked(conn *websocket.Conn) uint64 {
 	c.connEpoch++
 	c.conn = conn
 	c.session = nil
+	c.activeSession = nil
 	return c.connEpoch
 }
 
@@ -1264,6 +1271,29 @@ func (c *Client) installSession(session *Session) error {
 	}
 
 	c.session = session
+	c.activeSession = nil
+	return nil
+}
+
+func (c *Client) activateSession(session *Session) error {
+	if session == nil {
+		return ErrNoActiveSession
+	}
+
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+
+	if c.connEpoch != session.connEpoch {
+		return ErrStaleRelaySession
+	}
+	if c.conn == nil {
+		return ErrRelayNotConnected
+	}
+	if c.session != session {
+		return ErrStaleRelaySession
+	}
+
+	c.activeSession = session
 	return nil
 }
 
@@ -1272,28 +1302,121 @@ func (c *Client) clearSession(session *Session) {
 		return
 	}
 
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+	c.lockWriteState()
+	defer c.unlockWriteState()
+	c.clearSessionLocked(session)
+}
+
+func (c *Client) clearSessionLocked(session *Session) {
 	if c.session == session {
 		c.session = nil
 	}
+	if c.activeSession == session {
+		c.activeSession = nil
+	}
 }
 
-func (c *Client) writeProtocolForEpoch(epoch uint64, v any) error {
+func (c *Client) writeSessionAckAndActivate(session *Session, ack SessionAckMessage) error {
+	if session == nil {
+		return ErrNoActiveSession
+	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
 	c.stateMu.RLock()
 	currentEpoch := c.connEpoch
 	conn := c.conn
 	c.stateMu.RUnlock()
+	if currentEpoch != session.connEpoch {
+		return ErrStaleRelaySession
+	}
+	if conn == nil {
+		return ErrRelayNotConnected
+	}
+	if err := writeJSONTo(conn, ack); err != nil {
+		c.stateMu.Lock()
+		c.clearSessionLocked(session)
+		c.stateMu.Unlock()
+		return err
+	}
 
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.connEpoch != session.connEpoch {
+		c.clearSessionLocked(session)
+		return ErrStaleRelaySession
+	}
+	if c.conn != conn {
+		c.clearSessionLocked(session)
+		return ErrStaleRelaySession
+	}
+	if c.session != session {
+		return ErrStaleRelaySession
+	}
+	c.activeSession = session
+	return nil
+}
+
+func (c *Client) writeEncryptedForActiveSession(build func(session *Session) (EncryptedMessage, error)) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	c.stateMu.RLock()
+	currentEpoch := c.connEpoch
+	conn := c.conn
+	session := c.activeSession
+	c.stateMu.RUnlock()
+	if conn == nil {
+		return ErrRelayNotConnected
+	}
+	if session == nil {
+		return ErrNoActiveSession
+	}
+
+	msg, err := build(session)
+	if err != nil {
+		return err
+	}
+
+	c.stateMu.RLock()
+	currentConn := c.conn
+	currentSession := c.activeSession
+	currentEpochNow := c.connEpoch
+	c.stateMu.RUnlock()
+	if currentEpochNow != currentEpoch {
+		return ErrStaleRelaySession
+	}
+	if currentConn == nil {
+		return ErrRelayNotConnected
+	}
+	if currentConn != conn {
+		return ErrStaleRelaySession
+	}
+	if currentSession == nil {
+		return ErrNoActiveSession
+	}
+	if currentSession != session {
+		return ErrStaleRelaySession
+	}
+
+	return writeJSONTo(conn, msg)
+}
+
+func (c *Client) writeProtocolForEpoch(epoch uint64, v any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	c.stateMu.RLock()
+	currentEpoch := c.connEpoch
+	conn := c.conn
+	c.stateMu.RUnlock()
 	if currentEpoch != epoch {
 		return ErrStaleRelaySession
 	}
 	if conn == nil {
 		return ErrRelayNotConnected
 	}
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	return writeJSONTo(conn, v)
 }
 
@@ -1302,12 +1425,14 @@ func (c *Client) writeForSession(session *Session, v any) error {
 		return ErrNoActiveSession
 	}
 
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
 	c.stateMu.RLock()
 	currentEpoch := c.connEpoch
 	conn := c.conn
-	currentSession := c.session
+	currentSession := c.activeSession
 	c.stateMu.RUnlock()
-
 	if currentEpoch != session.connEpoch {
 		return ErrStaleRelaySession
 	}
@@ -1321,8 +1446,6 @@ func (c *Client) writeForSession(session *Session, v any) error {
 		return ErrStaleRelaySession
 	}
 
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	return writeJSONTo(conn, v)
 }
 
