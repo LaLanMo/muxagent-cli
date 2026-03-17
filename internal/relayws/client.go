@@ -326,6 +326,11 @@ func (c *Client) handleSessionInit(connEpoch uint64, msg SessionInitMessage) err
 		return err
 	}
 
+	session := newSession(c.machineID, key, connEpoch)
+	if err := c.installSession(session); err != nil {
+		return err
+	}
+
 	ackMsg := crypto.BuildSessionAckMessage(c.machineID, machineEphemeralPubB64)
 	ackSig := crypto.SignBase64(ackMsg, c.machineSignPriv)
 	if err := c.writeProtocolForEpoch(connEpoch, SessionAckMessage{
@@ -334,10 +339,10 @@ func (c *Client) handleSessionInit(connEpoch uint64, msg SessionInitMessage) err
 		MachineEphemeralPub: machineEphemeralPubB64,
 		Signature:           ackSig,
 	}); err != nil {
+		c.clearSession(session)
 		return err
 	}
-
-	return c.installSession(newSession(c.machineID, key, connEpoch))
+	return nil
 }
 
 // --- RPC routing ---
@@ -1260,6 +1265,18 @@ func (c *Client) installSession(session *Session) error {
 
 	c.session = session
 	return nil
+}
+
+func (c *Client) clearSession(session *Session) {
+	if session == nil {
+		return
+	}
+
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.session == session {
+		c.session = nil
+	}
 }
 
 func (c *Client) writeProtocolForEpoch(epoch uint64, v any) error {

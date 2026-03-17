@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,10 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
 	"github.com/LaLanMo/muxagent-cli/internal/appwire"
+	"github.com/LaLanMo/muxagent-cli/internal/auth"
+	cryptoutil "github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
+	"github.com/LaLanMo/muxagent-cli/internal/keyring"
 	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -1491,6 +1495,50 @@ func TestInstallSessionRejectsStaleEpoch(t *testing.T) {
 	require.ErrorIs(t, err, ErrStaleRelaySession)
 }
 
+func TestHandleSessionInitInstallsSessionBeforeAckWrite(t *testing.T) {
+	clientConn, relayConn, cleanup := newWSPair(t)
+	defer cleanup()
+
+	client, msg := newHandshakeTestClient(t, clientConn, 1)
+
+	client.writeMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- client.handleSessionInit(1, msg)
+	}()
+
+	require.Eventually(t, func() bool {
+		return client.currentSession() != nil
+	}, time.Second, 10*time.Millisecond)
+
+	client.writeMu.Unlock()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleSessionInit did not finish")
+	}
+
+	var ack SessionAckMessage
+	require.NoError(t, relayConn.ReadJSON(&ack))
+	require.Equal(t, MessageTypeSessionAck, ack.Type)
+	require.Equal(t, "machine-1", ack.MachineID)
+	require.NotEmpty(t, ack.MachineEphemeralPub)
+	require.NotEmpty(t, ack.Signature)
+}
+
+func TestHandleSessionInitClearsSessionOnAckWriteFailure(t *testing.T) {
+	clientConn, _, cleanup := newWSPair(t)
+	client, msg := newHandshakeTestClient(t, clientConn, 1)
+	require.NoError(t, clientConn.Close())
+	cleanup()
+
+	err := client.handleSessionInit(1, msg)
+	require.Error(t, err)
+	require.Nil(t, client.currentSession())
+}
+
 func TestConnectHandshakeIsolation(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	registerSeen := make(chan struct{}, 1)
@@ -1847,6 +1895,60 @@ func newWSPair(t *testing.T) (*websocket.Conn, *websocket.Conn, func()) {
 	}
 
 	return clientConn, relayConn, cleanup
+}
+
+func newHandshakeTestClient(t *testing.T, conn *websocket.Conn, connEpoch uint64) (*Client, SessionInitMessage) {
+	t.Helper()
+
+	masterPub, masterPriv, err := ed25519.GenerateKey(crand.Reader)
+	require.NoError(t, err)
+	_, machinePriv, err := ed25519.GenerateKey(crand.Reader)
+	require.NoError(t, err)
+	clientEphemeralPub, _, err := cryptoutil.GenerateX25519KeyPair()
+	require.NoError(t, err)
+
+	fingerprint := cryptoutil.HashKeyFingerprint(masterPub)
+	claimsPayload := fmt.Sprintf(
+		"muxagent-machine-token-v1|%s|%s|%s|%d",
+		"master-1",
+		"machine-1",
+		fingerprint,
+		time.Now().Add(time.Minute).Unix(),
+	)
+	machineToken := base64.RawURLEncoding.EncodeToString([]byte(claimsPayload)) + "." +
+		base64.RawURLEncoding.EncodeToString(cryptoutil.Sign([]byte(claimsPayload), masterPriv))
+
+	clientEphemeralPubB64 := base64.StdEncoding.EncodeToString(clientEphemeralPub[:])
+	sessionInitSig := cryptoutil.SignBase64(
+		cryptoutil.BuildSessionInitMessage("machine-1", clientEphemeralPubB64),
+		masterPriv,
+	)
+
+	keyringMgr := keyring.NewManager(auth.KeyringState{
+		MasterID: "master-1",
+		Keys: []auth.MasterKeyInfo{{
+			MasterSignKeyFingerprint: fingerprint,
+			MasterSignPub:            base64.StdEncoding.EncodeToString(masterPub),
+		}},
+	})
+
+	client := &Client{
+		conn:            conn,
+		connEpoch:       connEpoch,
+		machineID:       "machine-1",
+		creds:           &auth.Credentials{MachineID: "machine-1", MasterID: "master-1"},
+		machineSignPriv: machinePriv,
+		keyring:         keyringMgr,
+		sessionCWD:      map[string]string{},
+	}
+
+	return client, SessionInitMessage{
+		Type:               MessageTypeSessionInit,
+		MachineID:          "machine-1",
+		MachineToken:       machineToken,
+		ClientEphemeralPub: clientEphemeralPubB64,
+		Signature:          sessionInitSig,
+	}
 }
 
 func isTimeoutErr(err error) bool {
