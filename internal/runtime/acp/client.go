@@ -650,7 +650,7 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return
 	}
-	if update.ToolCallID == "" || update.Title == nil || *update.Title == "" {
+	if update.ToolCallID == "" {
 		return
 	}
 	c.msgMu.Lock()
@@ -666,31 +666,12 @@ func (c *Client) handleToolCall(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	var locations []appwire.ToolLocation
-	for _, loc := range update.Locations {
-		line := intPtrFromUint32(loc.Line)
-		locations = append(locations, appwire.ToolLocation{Path: loc.Path, Line: line})
-	}
-
+	eventType, toolEvent := buildToolEvent(msgID, partID, &update)
 	c.emit(appwire.Event{
-		Type:      appwire.EventToolStarted,
+		Type:      eventType,
 		SessionID: sessionID,
 		At:        time.Now(),
-		Tool: &appwire.ToolEvent{
-			ACP: &update,
-			App: appwire.ToolEventApp{
-				PartID:     partID,
-				MessageID:  msgID,
-				CallID:     update.ToolCallID,
-				Name:       *update.Title,
-				Kind:       stringPtrValue(update.Kind),
-				Title:      *update.Title,
-				Status:     appwire.ToolStatusPending,
-				Input:      toolInputFromRaw(update.RawInput),
-				ClaudeCode: claudeCodeToolFromMeta(update.Meta),
-				Locations:  locations,
-			},
-		},
+		Tool:      &toolEvent,
 	})
 }
 
@@ -721,53 +702,7 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 	state.agentPartID = ""
 	c.msgMu.Unlock()
 
-	var locations []appwire.ToolLocation
-	for _, loc := range update.Locations {
-		line := intPtrFromUint32(loc.Line)
-		locations = append(locations, appwire.ToolLocation{Path: loc.Path, Line: line})
-	}
-
-	toolEvent := appwire.ToolEvent{
-		ACP: &update,
-		App: appwire.ToolEventApp{
-			PartID:     partID,
-			MessageID:  msgID,
-			CallID:     update.ToolCallID,
-			Name:       stringValue(update.Title),
-			Kind:       stringPtrValue(update.Kind),
-			Title:      stringValue(update.Title),
-			Input:      toolInputFromRaw(update.RawInput),
-			ClaudeCode: claudeCodeToolFromMeta(update.Meta),
-			Locations:  locations,
-		},
-	}
-
-	var eventType appwire.EventType
-
-	switch toolCallStatusValue(update.Status) {
-	case "in_progress":
-		eventType = appwire.EventToolUpdated
-		toolEvent.App.Status = appwire.ToolStatusInProgress
-	case "completed":
-		eventType = appwire.EventToolCompleted
-		toolEvent.App.Status = appwire.ToolStatusCompleted
-		// rawOutput can be a string or an object — handle both.
-		toolEvent.App.Output = extractRawOutput(update.RawOutput)
-		if toolEvent.App.Output == "" {
-			toolEvent.App.Output = extractTextFromContent(rawJSONFromMessages(update.Content))
-		}
-		toolEvent.App.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
-	case "failed":
-		eventType = appwire.EventToolFailed
-		toolEvent.App.Status = appwire.ToolStatusFailed
-		toolEvent.App.Error = extractRawOutput(update.RawOutput)
-		if toolEvent.App.Error == "" {
-			toolEvent.App.Error = extractTextFromContent(rawJSONFromMessages(update.Content))
-		}
-	default:
-		eventType = appwire.EventToolUpdated
-		toolEvent.App.Status = appwire.ToolStatusInProgress
-	}
+	eventType, toolEvent := buildToolEvent(msgID, partID, &update)
 
 	c.emit(appwire.Event{
 		Type:      eventType,
@@ -775,6 +710,62 @@ func (c *Client) handleToolCallUpdate(sessionID string, raw json.RawMessage) {
 		At:        time.Now(),
 		Tool:      &toolEvent,
 	})
+}
+
+func buildToolEvent(msgID, partID string, update *acpprotocol.ToolCallUpdate) (appwire.EventType, appwire.ToolEvent) {
+	var locations []appwire.ToolLocation
+	for _, loc := range update.Locations {
+		line := intPtrFromUint32(loc.Line)
+		locations = append(locations, appwire.ToolLocation{Path: loc.Path, Line: line})
+	}
+
+	title := stringValue(update.Title)
+	name := title
+	if name == "" {
+		name = update.ToolCallID
+	}
+
+	toolEvent := appwire.ToolEvent{
+		ACP: update,
+		App: appwire.ToolEventApp{
+			PartID:     partID,
+			MessageID:  msgID,
+			CallID:     update.ToolCallID,
+			Name:       name,
+			Kind:       stringPtrValue(update.Kind),
+			Title:      title,
+			Input:      toolInputFromRaw(update.RawInput),
+			ClaudeCode: claudeCodeToolFromMeta(update.Meta),
+			Locations:  locations,
+		},
+	}
+
+	switch toolCallStatusValue(update.Status) {
+	case "pending":
+		toolEvent.App.Status = appwire.ToolStatusPending
+		return appwire.EventToolStarted, toolEvent
+	case "in_progress":
+		toolEvent.App.Status = appwire.ToolStatusInProgress
+		return appwire.EventToolUpdated, toolEvent
+	case "completed":
+		toolEvent.App.Status = appwire.ToolStatusCompleted
+		toolEvent.App.Output = extractRawOutput(update.RawOutput)
+		if toolEvent.App.Output == "" {
+			toolEvent.App.Output = extractTextFromContent(rawJSONFromMessages(update.Content))
+		}
+		toolEvent.App.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
+		return appwire.EventToolCompleted, toolEvent
+	case "failed":
+		toolEvent.App.Status = appwire.ToolStatusFailed
+		toolEvent.App.Error = extractRawOutput(update.RawOutput)
+		if toolEvent.App.Error == "" {
+			toolEvent.App.Error = extractTextFromContent(rawJSONFromMessages(update.Content))
+		}
+		return appwire.EventToolFailed, toolEvent
+	default:
+		toolEvent.App.Status = appwire.ToolStatusInProgress
+		return appwire.EventToolUpdated, toolEvent
+	}
 }
 
 func (c *Client) handlePlan(sessionID string, raw json.RawMessage) {

@@ -451,6 +451,37 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	assert.Contains(t, messageParts, "replayed message")
 }
 
+func TestClient_LoadSessionReplaysCompletedToolCallWithDiff(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_LOAD_TOOL_CALL_DIFF": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan []appwire.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 3*time.Second)
+	}()
+
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	events := <-done
+
+	completed := findToolEvent(events, appwire.EventToolCompleted, func(tool *appwire.ToolEvent) bool {
+		return tool.App.CallID == "hist-tool-edit-1"
+	})
+	require.NotNil(t, completed)
+	require.Len(t, completed.Tool.App.Diffs, 1)
+	assert.Equal(t, "/workspace/file.txt", completed.Tool.App.Diffs[0].Path)
+	assert.Equal(t, "after\n", completed.Tool.App.Diffs[0].NewText)
+	assert.Equal(t, appwire.ToolStatusCompleted, completed.Tool.App.Status)
+	assert.NotEmpty(t, completed.Tool.App.MessageID)
+}
+
 func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
 	bin := buildMockAgent(t)
 	client := newTestClientWithEnv(t, bin, map[string]string{

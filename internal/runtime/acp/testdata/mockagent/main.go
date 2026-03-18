@@ -339,13 +339,31 @@ func main() {
 				"kind":          "execute",
 				"status":        "pending",
 			})
-			sessionUpdate(sid, map[string]any{
-				"sessionUpdate": "tool_call_update",
-				"toolCallId":    "hist-tool-1",
-				"title":         "Bash",
-				"status":        "completed",
-				"rawOutput":     map[string]any{"output": "historical output"},
-			})
+			if os.Getenv("MOCKAGENT_LOAD_TOOL_CALL_DIFF") == "1" {
+				sessionUpdate(sid, map[string]any{
+					"sessionUpdate": "tool_call",
+					"toolCallId":    "hist-tool-edit-1",
+					"title":         "apply_patch",
+					"kind":          "edit",
+					"status":        "completed",
+					"content": []map[string]any{
+						{
+							"type":    "diff",
+							"path":    "/workspace/file.txt",
+							"oldText": "before\n",
+							"newText": "after\n",
+						},
+					},
+				})
+			} else {
+				sessionUpdate(sid, map[string]any{
+					"sessionUpdate": "tool_call_update",
+					"toolCallId":    "hist-tool-1",
+					"title":         "Bash",
+					"status":        "completed",
+					"rawOutput":     map[string]any{"output": "historical output"},
+				})
+			}
 
 			mode := currentModeValue()
 			model := currentModelValue()
