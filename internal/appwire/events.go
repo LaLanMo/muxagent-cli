@@ -25,6 +25,9 @@ const (
 	EventModeChanged       EventType = "mode.changed"
 	EventModelChanged      EventType = "model.changed"
 	EventUsageUpdate       EventType = "usage.update"
+
+	// Custom app-level events (not part of ACP protocol).
+	EventHistoryComplete EventType = "history.complete" // sentinel: all history replay events delivered
 )
 
 type MessagePartEventApp struct {

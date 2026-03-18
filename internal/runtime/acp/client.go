@@ -48,6 +48,8 @@ type Client struct {
 
 	msgMu      sync.Mutex
 	sessionMsg map[string]*sessionMsgState // sessionID → current streaming state
+
+	historyDone chan string // carries sessionID; signals LoadSession completed all RPCs
 }
 
 type pendingPermission struct {
@@ -62,6 +64,7 @@ func NewClient(cfg Config) *Client {
 		events:      make(chan appwire.Event, 256),
 		pendingPerm: make(map[string]*pendingPermission),
 		sessionMsg:  make(map[string]*sessionMsgState),
+		historyDone: make(chan string, 1),
 	}
 }
 
@@ -251,6 +254,11 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		c.emit(*ev)
 	}
 
+	// Signal handleNotifications to drain remaining history notifications and
+	// emit the sentinel. Placed AFTER all RPCs (set_mode, set_config_option)
+	// to avoid draining their notifications as if they were history.
+	c.historyDone <- sessionID
+
 	return loadResp, nil
 }
 
@@ -409,12 +417,46 @@ func (c *Client) Events() <-chan appwire.Event {
 
 // handleNotifications processes ACP notifications from the agent.
 func (c *Client) handleNotifications() {
-	for notif := range c.transport.Notifications() {
-		switch notif.Method {
-		case "session/update":
-			c.handleSessionUpdate(notif.Params)
+	for {
+		select {
+		case notif, ok := <-c.transport.Notifications():
+			if !ok {
+				return
+			}
+			c.dispatchNotification(notif)
+		case sessionID := <-c.historyDone:
+			c.drainAndEmitHistoryComplete(sessionID)
+		}
+	}
+}
+
+func (c *Client) dispatchNotification(notif *Notification) {
+	switch notif.Method {
+	case "session/update":
+		c.handleSessionUpdate(notif.Params)
+	default:
+		log.Printf("[acp] unhandled notification: %s", notif.Method)
+	}
+}
+
+// drainAndEmitHistoryComplete processes any remaining notifications in the
+// channel, then emits the history.complete sentinel. This is safe because
+// session/load blocks until the agent has emitted all history notifications
+// on stdout, and readLoop enqueues them before delivering the RPC response
+// that unblocks transport.Call — so they are already buffered by the time
+// LoadSession sends on historyDone.
+func (c *Client) drainAndEmitHistoryComplete(sessionID string) {
+	for {
+		select {
+		case notif := <-c.transport.Notifications():
+			c.dispatchNotification(notif)
 		default:
-			log.Printf("[acp] unhandled notification: %s", notif.Method)
+			c.emit(appwire.Event{
+				Type:      appwire.EventHistoryComplete,
+				SessionID: sessionID,
+				At:        time.Now(),
+			})
+			return
 		}
 	}
 }
