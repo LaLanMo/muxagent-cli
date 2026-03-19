@@ -863,11 +863,25 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params appwire.ResyncEvent
 	if c.eventBuf == nil {
 		return nil, "event buffer not available"
 	}
-	events, complete := c.eventBuf.Since(params.LastSeq)
+	if params.StreamEpoch == 0 {
+		legacy := c.eventBuf.LegacyReplaySince(params.LastSeq)
+		return appwire.ResyncEventsResult{
+			Events:             legacy.Events,
+			Complete:           legacy.Complete,
+			Seq:                legacy.Seq,
+			Status:             appwire.ResyncStatusReset,
+			StreamEpoch:        legacy.StreamEpoch,
+			ReplayedThroughSeq: legacy.Seq,
+		}, ""
+	}
+	snapshot := c.eventBuf.ReplaySince(params.StreamEpoch, params.LastSeq)
 	return appwire.ResyncEventsResult{
-		Events:   events,
-		Complete: complete,
-		Seq:      c.eventBuf.Seq(),
+		Events:             snapshot.Events,
+		Complete:           snapshot.Status == appwire.ResyncStatusOK,
+		Seq:                snapshot.ReplayedThroughSeq,
+		Status:             snapshot.Status,
+		StreamEpoch:        snapshot.StreamEpoch,
+		ReplayedThroughSeq: snapshot.ReplayedThroughSeq,
 	}, ""
 }
 

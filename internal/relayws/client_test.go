@@ -461,13 +461,165 @@ func TestSendEventBuffersLocalEventsAndTracksStatus(t *testing.T) {
 	status = resolvedStatusFromRPCResult(t, result)
 	require.Equal(t, string(domain.SessionStatusIdle), status)
 
-	events, complete := client.eventBuf.Since(0)
-	require.True(t, complete)
-	require.Len(t, events, 2)
-	require.EqualValues(t, 1, events[0].Seq)
-	require.Equal(t, appwire.EventApprovalRequested, events[0].Type)
-	require.EqualValues(t, 2, events[1].Seq)
-	require.Equal(t, appwire.EventRunFinished, events[1].Type)
+	snapshot := client.eventBuf.ReplaySince(client.eventBuf.StreamEpoch(), 0)
+	require.Equal(t, appwire.ResyncStatusOK, snapshot.Status)
+	require.Len(t, snapshot.Events, 2)
+	require.EqualValues(t, 1, snapshot.Events[0].Seq)
+	require.Equal(t, appwire.EventApprovalRequested, snapshot.Events[0].Type)
+	require.EqualValues(t, 2, snapshot.Events[1].Seq)
+	require.Equal(t, appwire.EventRunFinished, snapshot.Events[1].Type)
+}
+
+func TestRpcResyncEventsReturnsReplayContract(t *testing.T) {
+	tests := []struct {
+		name        string
+		buildBuffer func() *EventBuffer
+		params      func(*EventBuffer) appwire.ResyncEventsParams
+		verify      func(*testing.T, *EventBuffer, appwire.ResyncEventsResult)
+	}{
+		{
+			name: "ok",
+			buildBuffer: func() *EventBuffer {
+				buf := NewEventBuffer(8)
+				buf.Push(makeEvent(appwire.EventMessageDelta))
+				buf.Push(makeEvent(appwire.EventReasoning))
+				buf.Push(makeEvent(appwire.EventToolStarted))
+				return buf
+			},
+			params: func(buf *EventBuffer) appwire.ResyncEventsParams {
+				return appwire.ResyncEventsParams{StreamEpoch: buf.StreamEpoch(), LastSeq: 1}
+			},
+			verify: func(t *testing.T, buf *EventBuffer, result appwire.ResyncEventsResult) {
+				t.Helper()
+				require.Equal(t, appwire.ResyncStatusOK, result.Status)
+				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
+				require.True(t, result.Complete)
+				require.Equal(t, uint64(3), result.Seq)
+				require.Equal(t, uint64(3), result.ReplayedThroughSeq)
+				require.Len(t, result.Events, 2)
+				require.Equal(t, uint64(2), result.Events[0].Seq)
+				require.Equal(t, uint64(3), result.Events[1].Seq)
+			},
+		},
+		{
+			name: "legacy",
+			buildBuffer: func() *EventBuffer {
+				buf := NewEventBuffer(8)
+				buf.Push(makeEvent(appwire.EventMessageDelta))
+				buf.Push(makeEvent(appwire.EventReasoning))
+				buf.Push(makeEvent(appwire.EventToolStarted))
+				return buf
+			},
+			params: func(*EventBuffer) appwire.ResyncEventsParams {
+				return appwire.ResyncEventsParams{LastSeq: 1}
+			},
+			verify: func(t *testing.T, buf *EventBuffer, result appwire.ResyncEventsResult) {
+				t.Helper()
+				require.Equal(t, appwire.ResyncStatusReset, result.Status)
+				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
+				require.True(t, result.Complete)
+				require.Equal(t, uint64(3), result.Seq)
+				require.Equal(t, uint64(3), result.ReplayedThroughSeq)
+				require.Len(t, result.Events, 2)
+				require.Equal(t, uint64(2), result.Events[0].Seq)
+				require.Equal(t, uint64(3), result.Events[1].Seq)
+			},
+		},
+		{
+			name: "gap",
+			buildBuffer: func() *EventBuffer {
+				buf := NewEventBuffer(3)
+				buf.Push(makeEvent(appwire.EventMessageDelta))
+				buf.Push(makeEvent(appwire.EventReasoning))
+				buf.Push(makeEvent(appwire.EventToolStarted))
+				buf.Push(makeEvent(appwire.EventToolCompleted))
+				return buf
+			},
+			params: func(buf *EventBuffer) appwire.ResyncEventsParams {
+				return appwire.ResyncEventsParams{StreamEpoch: buf.StreamEpoch(), LastSeq: 0}
+			},
+			verify: func(t *testing.T, buf *EventBuffer, result appwire.ResyncEventsResult) {
+				t.Helper()
+				require.Equal(t, appwire.ResyncStatusGap, result.Status)
+				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
+				require.False(t, result.Complete)
+				require.Equal(t, uint64(4), result.Seq)
+				require.Equal(t, uint64(4), result.ReplayedThroughSeq)
+				require.Len(t, result.Events, 3)
+				require.Equal(t, uint64(2), result.Events[0].Seq)
+				require.Equal(t, uint64(4), result.Events[2].Seq)
+			},
+		},
+		{
+			name: "reset",
+			buildBuffer: func() *EventBuffer {
+				buf := NewEventBuffer(8)
+				buf.Push(makeEvent(appwire.EventMessageDelta))
+				buf.Push(makeEvent(appwire.EventReasoning))
+				return buf
+			},
+			params: func(buf *EventBuffer) appwire.ResyncEventsParams {
+				return appwire.ResyncEventsParams{StreamEpoch: buf.StreamEpoch() + 1, LastSeq: 1}
+			},
+			verify: func(t *testing.T, buf *EventBuffer, result appwire.ResyncEventsResult) {
+				t.Helper()
+				require.Equal(t, appwire.ResyncStatusReset, result.Status)
+				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
+				require.False(t, result.Complete)
+				require.Equal(t, uint64(2), result.Seq)
+				require.Equal(t, uint64(2), result.ReplayedThroughSeq)
+				require.Len(t, result.Events, 2)
+				require.Equal(t, uint64(1), result.Events[0].Seq)
+				require.Equal(t, uint64(2), result.Events[1].Seq)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := tt.buildBuffer()
+			client := &Client{eventBuf: buf}
+
+			result, errStr := client.rpcResyncEvents(context.Background(), tt.params(buf))
+			require.Empty(t, errStr)
+
+			tt.verify(t, buf, resyncResultFromRPCResult(t, result))
+		})
+	}
+}
+
+func TestRpcResyncEventsReturnsAtomicSnapshot(t *testing.T) {
+	buf := NewEventBuffer(256)
+	for i := 0; i < 64; i++ {
+		buf.Push(makeEvent(appwire.EventMessageDelta))
+	}
+
+	client := &Client{eventBuf: buf}
+	epoch := buf.StreamEpoch()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			buf.Push(makeEvent(appwire.EventReasoning))
+		}
+	}()
+
+	for i := 0; i < 1000; i++ {
+		result, errStr := client.rpcResyncEvents(context.Background(), appwire.ResyncEventsParams{
+			StreamEpoch: epoch,
+			LastSeq:     0,
+		})
+		require.Empty(t, errStr)
+
+		wire := resyncResultFromRPCResult(t, result)
+		require.Equal(t, epoch, wire.StreamEpoch)
+		require.NotEqual(t, appwire.ResyncStatusReset, wire.Status)
+		require.NotEmpty(t, wire.Events)
+		require.Equal(t, wire.Events[len(wire.Events)-1].Seq, wire.ReplayedThroughSeq)
+	}
+
+	<-done
 }
 
 func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
@@ -526,12 +678,12 @@ func TestRpcPromptUpdatesResolvedStatus(t *testing.T) {
 		return resolvedStatusFromRPCResult(t, result) == string(domain.SessionStatusIdle)
 	}, time.Second, 10*time.Millisecond)
 
-	events, complete := client.eventBuf.Since(0)
-	require.True(t, complete)
-	require.Len(t, events, 1)
-	require.Equal(t, appwire.EventRunFinished, events[0].Type)
-	require.NotNil(t, events[0].RunFinished)
-	require.Equal(t, "end_turn", events[0].RunFinished.App.StopReason)
+	snapshot := client.eventBuf.ReplaySince(client.eventBuf.StreamEpoch(), 0)
+	require.Equal(t, appwire.ResyncStatusOK, snapshot.Status)
+	require.Len(t, snapshot.Events, 1)
+	require.Equal(t, appwire.EventRunFinished, snapshot.Events[0].Type)
+	require.NotNil(t, snapshot.Events[0].RunFinished)
+	require.Equal(t, "end_turn", snapshot.Events[0].RunFinished.App.StopReason)
 }
 
 func TestRpcPromptParsesTypedContentBlocks(t *testing.T) {
@@ -2049,6 +2201,17 @@ func resolvedStatusFromRPCResult(t *testing.T, result any) string {
 	require.NoError(t, json.Unmarshal(body, &payload))
 	require.Len(t, payload.Sessions, 1)
 	return payload.Sessions[0].Status
+}
+
+func resyncResultFromRPCResult(t *testing.T, result any) appwire.ResyncEventsResult {
+	t.Helper()
+
+	body, err := json.Marshal(result)
+	require.NoError(t, err)
+
+	var payload appwire.ResyncEventsResult
+	require.NoError(t, json.Unmarshal(body, &payload))
+	return payload
 }
 
 func newWSPair(t *testing.T) (*websocket.Conn, *websocket.Conn, func()) {

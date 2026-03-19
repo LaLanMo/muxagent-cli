@@ -88,8 +88,17 @@ type ReplyPermissionParams struct {
 	OptionID  string `json:"optionId"`
 }
 
+type ResyncStatus string
+
+const (
+	ResyncStatusOK    ResyncStatus = "ok"
+	ResyncStatusGap   ResyncStatus = "gap"
+	ResyncStatusReset ResyncStatus = "reset"
+)
+
 type ResyncEventsParams struct {
-	LastSeq uint64 `json:"lastSeq,omitempty"`
+	StreamEpoch uint64 `json:"streamEpoch,omitempty"`
+	LastSeq     uint64 `json:"lastSeq,omitempty"`
 }
 
 type FsListParams struct {
@@ -215,9 +224,12 @@ type SessionResolveResult struct {
 }
 
 type ResyncEventsResult struct {
-	Events   []Event `json:"events"`
-	Complete bool    `json:"complete"`
-	Seq      uint64  `json:"seq"`
+	Events             []Event      `json:"events"`
+	Complete           bool         `json:"complete"`
+	Seq                uint64       `json:"seq"`
+	Status             ResyncStatus `json:"status"`
+	StreamEpoch        uint64       `json:"streamEpoch"`
+	ReplayedThroughSeq uint64       `json:"replayedThroughSeq"`
 }
 
 type AcceptedResult struct {
