@@ -863,24 +863,9 @@ func (c *Client) rpcResyncEvents(ctx context.Context, params appwire.ResyncEvent
 	if c.eventBuf == nil {
 		return nil, "event buffer not available"
 	}
-	// TODO: Remove this legacy branch once every supported Flutter build sends
-	// streamEpoch on events.resync. Older clients still rely on seq-only replay.
-	if params.StreamEpoch == 0 {
-		legacy := c.eventBuf.LegacyReplaySince(params.LastSeq)
-		return appwire.ResyncEventsResult{
-			Events:             legacy.Events,
-			Complete:           legacy.Complete,
-			Seq:                legacy.Seq,
-			Status:             appwire.ResyncStatusReset,
-			StreamEpoch:        legacy.StreamEpoch,
-			ReplayedThroughSeq: legacy.Seq,
-		}, ""
-	}
 	snapshot := c.eventBuf.ReplaySince(params.StreamEpoch, params.LastSeq)
 	return appwire.ResyncEventsResult{
 		Events:             snapshot.Events,
-		Complete:           snapshot.Status == appwire.ResyncStatusOK,
-		Seq:                snapshot.ReplayedThroughSeq,
 		Status:             snapshot.Status,
 		StreamEpoch:        snapshot.StreamEpoch,
 		ReplayedThroughSeq: snapshot.ReplayedThroughSeq,

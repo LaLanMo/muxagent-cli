@@ -493,32 +493,6 @@ func TestRpcResyncEventsReturnsReplayContract(t *testing.T) {
 				t.Helper()
 				require.Equal(t, appwire.ResyncStatusOK, result.Status)
 				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
-				require.True(t, result.Complete)
-				require.Equal(t, uint64(3), result.Seq)
-				require.Equal(t, uint64(3), result.ReplayedThroughSeq)
-				require.Len(t, result.Events, 2)
-				require.Equal(t, uint64(2), result.Events[0].Seq)
-				require.Equal(t, uint64(3), result.Events[1].Seq)
-			},
-		},
-		{
-			name: "legacy",
-			buildBuffer: func() *EventBuffer {
-				buf := NewEventBuffer(8)
-				buf.Push(makeEvent(appwire.EventMessageDelta))
-				buf.Push(makeEvent(appwire.EventReasoning))
-				buf.Push(makeEvent(appwire.EventToolStarted))
-				return buf
-			},
-			params: func(*EventBuffer) appwire.ResyncEventsParams {
-				return appwire.ResyncEventsParams{LastSeq: 1}
-			},
-			verify: func(t *testing.T, buf *EventBuffer, result appwire.ResyncEventsResult) {
-				t.Helper()
-				require.Equal(t, appwire.ResyncStatusReset, result.Status)
-				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
-				require.True(t, result.Complete)
-				require.Equal(t, uint64(3), result.Seq)
 				require.Equal(t, uint64(3), result.ReplayedThroughSeq)
 				require.Len(t, result.Events, 2)
 				require.Equal(t, uint64(2), result.Events[0].Seq)
@@ -542,8 +516,6 @@ func TestRpcResyncEventsReturnsReplayContract(t *testing.T) {
 				t.Helper()
 				require.Equal(t, appwire.ResyncStatusGap, result.Status)
 				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
-				require.False(t, result.Complete)
-				require.Equal(t, uint64(4), result.Seq)
 				require.Equal(t, uint64(4), result.ReplayedThroughSeq)
 				require.Len(t, result.Events, 3)
 				require.Equal(t, uint64(2), result.Events[0].Seq)
@@ -565,8 +537,6 @@ func TestRpcResyncEventsReturnsReplayContract(t *testing.T) {
 				t.Helper()
 				require.Equal(t, appwire.ResyncStatusReset, result.Status)
 				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
-				require.False(t, result.Complete)
-				require.Equal(t, uint64(2), result.Seq)
 				require.Equal(t, uint64(2), result.ReplayedThroughSeq)
 				require.Len(t, result.Events, 2)
 				require.Equal(t, uint64(1), result.Events[0].Seq)

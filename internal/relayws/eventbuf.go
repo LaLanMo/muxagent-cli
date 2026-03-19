@@ -28,13 +28,6 @@ type ReplaySnapshot struct {
 	ReplayedThroughSeq uint64
 }
 
-type LegacyReplaySnapshot struct {
-	Events      []appwire.Event
-	Complete    bool
-	StreamEpoch uint64
-	Seq         uint64
-}
-
 var fallbackStreamEpoch uint64
 
 func NewEventBuffer(size int) *EventBuffer {
@@ -98,46 +91,6 @@ func (b *EventBuffer) ReplaySince(streamEpoch, afterSeq uint64) ReplaySnapshot {
 
 	if afterSeq < oldestSeq-1 {
 		snapshot.Status = appwire.ResyncStatusGap
-		snapshot.Events = b.snapshotAllLocked()
-		return snapshot
-	}
-
-	result := make([]appwire.Event, 0, b.count)
-	for i := 0; i < b.count; i++ {
-		idx := (oldestIdx + i) % b.size
-		if b.events[idx].Seq > afterSeq {
-			result = append(result, b.events[idx])
-		}
-	}
-	snapshot.Events = result
-	return snapshot
-}
-
-// LegacyReplaySince preserves the pre-epoch replay contract for older clients
-// that only know about {lastSeq, complete, seq}.
-func (b *EventBuffer) LegacyReplaySince(afterSeq uint64) LegacyReplaySnapshot {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	snapshot := LegacyReplaySnapshot{
-		Complete:    true,
-		StreamEpoch: b.streamEpoch,
-		Seq:         b.seq,
-	}
-
-	if b.count == 0 {
-		return snapshot
-	}
-
-	oldestIdx := (b.head - b.count + b.size) % b.size
-	oldestSeq := b.events[oldestIdx].Seq
-
-	if afterSeq >= b.seq {
-		return snapshot
-	}
-
-	if afterSeq < oldestSeq-1 {
-		snapshot.Complete = false
 		snapshot.Events = b.snapshotAllLocked()
 		return snapshot
 	}

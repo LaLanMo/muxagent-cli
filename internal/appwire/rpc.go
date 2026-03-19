@@ -224,11 +224,7 @@ type SessionResolveResult struct {
 }
 
 type ResyncEventsResult struct {
-	Events []Event `json:"events"`
-	// TODO: Remove Complete/Seq once every supported client sends streamEpoch
-	// and consumes status/streamEpoch/replayedThroughSeq directly.
-	Complete           bool         `json:"complete"`
-	Seq                uint64       `json:"seq"`
+	Events             []Event      `json:"events"`
 	Status             ResyncStatus `json:"status"`
 	StreamEpoch        uint64       `json:"streamEpoch"`
 	ReplayedThroughSeq uint64       `json:"replayedThroughSeq"`
