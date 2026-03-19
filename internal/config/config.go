@@ -17,7 +17,6 @@ import (
 type RuntimeID string
 
 const (
-	RuntimeOpenCode   RuntimeID = "opencode"
 	RuntimeClaudeCode RuntimeID = "claude-code"
 	RuntimeCodex      RuntimeID = "codex"
 

@@ -20,10 +20,6 @@ func TestDefault_ContainsBuiltInRuntimes(t *testing.T) {
 		t.Fatalf("RelaySigningPublicKey = %q, want %q", cfg.RelaySigningPublicKey, defaultRelaySigningPublicKey)
 	}
 
-	if _, ok := cfg.Runtimes[RuntimeOpenCode]; ok {
-		t.Fatal("default config unexpectedly includes opencode runtime")
-	}
-
 	cc, ok := cfg.Runtimes[RuntimeClaudeCode]
 	if !ok {
 		t.Fatal("default config missing claude-code runtime")
@@ -370,7 +366,7 @@ func TestValidateConfig_RejectsEmptyRuntimeSet(t *testing.T) {
 func TestValidateConfig_RejectsUnsupportedRuntime(t *testing.T) {
 	cfg := Config{
 		Runtimes: map[RuntimeID]RuntimeSettings{
-			RuntimeOpenCode: {},
+			"unsupported": {},
 		},
 	}
 
@@ -378,7 +374,7 @@ func TestValidateConfig_RejectsUnsupportedRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported runtime")
 	}
-	if want := `runtime "opencode" is not supported`; err.Error() != want {
+	if want := `runtime "unsupported" is not supported`; err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
