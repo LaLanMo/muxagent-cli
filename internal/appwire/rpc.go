@@ -204,6 +204,7 @@ type SessionCreateResult struct {
 type SessionLoadResultApp struct {
 	OK      bool   `json:"ok"`
 	Runtime string `json:"runtime"`
+	CWD     string `json:"cwd"`
 }
 
 type SessionLoadResult struct {

@@ -30,6 +30,7 @@ func TestStore_SetAndGet(t *testing.T) {
 		WorktreePath: "/tmp/wt/abc",
 		RepoRoot:     "/tmp/repo",
 		BranchName:   "muxagent/abc",
+		RelativeCWD:  "sub/dir",
 	}
 	s.Set("session-1", m)
 
@@ -50,6 +51,7 @@ func TestStore_PersistAndReload(t *testing.T) {
 		WorktreePath: "/tmp/wt/abc",
 		RepoRoot:     "/tmp/repo",
 		BranchName:   "muxagent/abc",
+		RelativeCWD:  "sub/dir",
 	}
 	s.Set("session-1", m)
 	require.NoError(t, s.Save())

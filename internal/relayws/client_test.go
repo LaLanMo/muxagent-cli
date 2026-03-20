@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,6 +25,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/domain"
 	"github.com/LaLanMo/muxagent-cli/internal/keyring"
 	runtimemanager "github.com/LaLanMo/muxagent-cli/internal/runtime/manager"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -32,6 +34,7 @@ type blockingRuntime struct {
 	loadStarted chan struct{}
 	unblock     chan struct{}
 	runtimes    []runtimemanager.RuntimeInfo
+	lastLoadCWD string
 }
 
 func (r *blockingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
@@ -50,6 +53,7 @@ func (r *blockingRuntime) NewSession(ctx context.Context, runtimeID, cwd string,
 }
 
 func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, acpprotocol.LoadSessionResponse, error) {
+	r.lastLoadCWD = cwd
 	select {
 	case r.loadStarted <- struct{}{}:
 	default:
@@ -168,6 +172,7 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 	app, ok := result["app"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, true, app["ok"])
+	require.Equal(t, "/tmp", app["cwd"])
 
 	require.NoError(t, clientConn.Close())
 	select {
@@ -265,6 +270,7 @@ type routingRuntime struct {
 	blockingRuntime
 	runtimes    []runtimemanager.RuntimeInfo
 	lastRuntime string
+	lastNewCWD  string
 }
 
 func (r *routingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
@@ -276,6 +282,7 @@ func (r *routingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
 
 func (r *routingRuntime) NewSession(ctx context.Context, runtimeID, cwd string, permissionMode string) (string, string, acpprotocol.NewSessionResponse, error) {
 	r.lastRuntime = runtimeID
+	r.lastNewCWD = cwd
 	return "sid", runtimeID, acpprotocol.NewSessionResponse{SessionID: "sid"}, nil
 }
 
@@ -1451,6 +1458,7 @@ func TestRpcLoadSessionDefaultsClaudeCodeWhenMissing(t *testing.T) {
 		})
 		require.Empty(t, errStr)
 		require.Equal(t, "claude-code", result.(appwire.SessionLoadResult).App.Runtime)
+		require.Equal(t, "/tmp", result.(appwire.SessionLoadResult).App.CWD)
 	}()
 
 	select {
@@ -1490,6 +1498,7 @@ func TestRpcLoadSessionDefaultsClaudeCodeWhenMultipleRuntimesExist(t *testing.T)
 		})
 		require.Empty(t, errStr)
 		require.Equal(t, "claude-code", result.(appwire.SessionLoadResult).App.Runtime)
+		require.Equal(t, "/tmp", result.(appwire.SessionLoadResult).App.CWD)
 	}()
 
 	select {
@@ -1528,6 +1537,200 @@ func TestRpcLoadSessionRequiresRuntimeWhenClaudeCodeUnavailable(t *testing.T) {
 	)
 	require.Nil(t, result)
 	require.Equal(t, "missing runtime", errStr)
+}
+
+func TestRpcLoadSessionUsesWorktreeRelativeCwdAndReturnsIt(t *testing.T) {
+	worktreeRoot := t.TempDir()
+	worktreeRootResolved, err := filepath.EvalSymlinks(worktreeRoot)
+	require.NoError(t, err)
+	worktreeCWD := filepath.Join(worktreeRootResolved, "packages", "app")
+	require.NoError(t, os.MkdirAll(worktreeCWD, 0o755))
+	runtime := &blockingRuntime{
+		loadStarted: make(chan struct{}, 1),
+		unblock:     make(chan struct{}),
+	}
+	store := worktree.NewStore(filepath.Join(t.TempDir(), "worktrees.json"))
+	require.NoError(t, store.Load())
+	store.Set("sid", worktree.Mapping{
+		WorktreeID:   "wt-1",
+		WorktreePath: worktreeRoot,
+		RepoRoot:     "/repo",
+		BranchName:   "muxagent/wt-1",
+		RelativeCWD:  filepath.Join("packages", "app"),
+	})
+
+	client := &Client{
+		runtime:    runtime,
+		sessionCWD: map[string]string{},
+		wtStore:    store,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, errStr := client.rpcLoadSession(context.Background(), appwire.LoadSessionParams{
+			SessionID: "sid",
+			CWD:       "/repo/packages/app",
+		})
+		require.Empty(t, errStr)
+		load := result.(appwire.SessionLoadResult)
+		require.Equal(t, worktreeCWD, load.App.CWD)
+		require.Equal(t, worktreeCWD, runtime.lastLoadCWD)
+	}()
+
+	select {
+	case <-runtime.loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not start")
+	}
+
+	close(runtime.unblock)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session.load did not finish")
+	}
+}
+
+func TestRpcLoadSessionRejectsMissingMappedWorktreeSubdir(t *testing.T) {
+	worktreeRoot := t.TempDir()
+	runtime := &blockingRuntime{
+		loadStarted: make(chan struct{}, 1),
+		unblock:     make(chan struct{}),
+	}
+	store := worktree.NewStore(filepath.Join(t.TempDir(), "worktrees.json"))
+	require.NoError(t, store.Load())
+	store.Set("sid", worktree.Mapping{
+		WorktreeID:   "wt-1",
+		WorktreePath: worktreeRoot,
+		RepoRoot:     "/repo",
+		BranchName:   "muxagent/wt-1",
+		RelativeCWD:  filepath.Join("packages", "app"),
+	})
+
+	client := &Client{
+		runtime:    runtime,
+		sessionCWD: map[string]string{},
+		wtStore:    store,
+	}
+
+	result, errStr := client.rpcLoadSession(context.Background(), appwire.LoadSessionParams{
+		SessionID: "sid",
+		CWD:       "/repo/packages/app",
+		Runtime:   "codex",
+	})
+	require.Nil(t, result)
+	require.Contains(t, errStr, "saved worktree cwd unavailable")
+
+	select {
+	case <-runtime.loadStarted:
+		t.Fatal("session.load should not start when mapped worktree cwd is missing")
+	default:
+	}
+}
+
+func TestRpcCreateSessionStoresWorktreeRelativeCwd(t *testing.T) {
+	repoRoot := initRelayTestRepoWithCommit(t)
+	subdir := filepath.Join(repoRoot, "packages", "app")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	t.Setenv("HOME", t.TempDir())
+
+	store := worktree.NewStore(filepath.Join(t.TempDir(), "worktrees.json"))
+	require.NoError(t, store.Load())
+
+	runtime := &routingRuntime{}
+	client := &Client{
+		runtime:    runtime,
+		sessionCWD: map[string]string{},
+		wtStore:    store,
+	}
+
+	result, errStr := client.rpcCreateSession(context.Background(), appwire.CreateSessionParams{
+		CWD:         subdir,
+		Runtime:     "codex",
+		UseWorktree: true,
+	})
+	require.Empty(t, errStr)
+
+	create := result.(appwire.SessionCreateResult)
+	mapping := store.Get("sid")
+	require.NotNil(t, mapping)
+
+	wantRelative := filepath.Join("packages", "app")
+	wantCWD := filepath.Join(mapping.WorktreePath, wantRelative)
+	require.Equal(t, repoRoot, mapping.RepoRoot)
+	require.Equal(t, wantRelative, mapping.RelativeCWD)
+	require.Equal(t, wantCWD, create.App.CWD)
+	require.Equal(t, wantCWD, runtime.lastNewCWD)
+
+	client.sessionCWDMu.RLock()
+	require.Equal(t, wantCWD, client.sessionCWD["sid"])
+	client.sessionCWDMu.RUnlock()
+}
+
+func TestRpcCreateSessionCanonicalizesAliasedRepoPaths(t *testing.T) {
+	repoRoot := initRelayTestRepoWithCommit(t)
+	subdir := filepath.Join(repoRoot, "packages", "app")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	t.Setenv("HOME", t.TempDir())
+
+	aliasRoot := filepath.Join(t.TempDir(), "repo-alias")
+	require.NoError(t, os.Symlink(repoRoot, aliasRoot))
+	aliasedSubdir := filepath.Join(aliasRoot, "packages", "app")
+
+	store := worktree.NewStore(filepath.Join(t.TempDir(), "worktrees.json"))
+	require.NoError(t, store.Load())
+
+	runtime := &routingRuntime{}
+	client := &Client{
+		runtime:    runtime,
+		sessionCWD: map[string]string{},
+		wtStore:    store,
+	}
+
+	result, errStr := client.rpcCreateSession(context.Background(), appwire.CreateSessionParams{
+		CWD:         aliasedSubdir,
+		Runtime:     "codex",
+		UseWorktree: true,
+	})
+	require.Empty(t, errStr)
+
+	create := result.(appwire.SessionCreateResult)
+	mapping := store.Get("sid")
+	require.NotNil(t, mapping)
+
+	wantRelative := filepath.Join("packages", "app")
+	wantCWD := filepath.Join(mapping.WorktreePath, wantRelative)
+	require.Equal(t, wantRelative, mapping.RelativeCWD)
+	require.NotContains(t, mapping.RelativeCWD, "..")
+	require.Equal(t, wantCWD, create.App.CWD)
+	require.Equal(t, wantCWD, runtime.lastNewCWD)
+}
+
+func initRelayTestRepoWithCommit(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+
+	runRelayGit(t, resolved, "git", "init")
+	runRelayGit(t, resolved, "git", "config", "user.email", "test@test.com")
+	runRelayGit(t, resolved, "git", "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(resolved, "README.md"), []byte("hello"), 0o644))
+	runRelayGit(t, resolved, "git", "add", ".")
+	runRelayGit(t, resolved, "git", "commit", "-m", "init")
+	return resolved
+}
+
+func runRelayGit(t *testing.T, dir string, name string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "command %s %v failed: %s", name, args, string(out))
 }
 
 func TestWriteForSessionErrors(t *testing.T) {

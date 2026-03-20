@@ -16,6 +16,7 @@ type Mapping struct {
 	WorktreePath string `json:"worktreePath"`
 	RepoRoot     string `json:"repoRoot"`
 	BranchName   string `json:"branchName"`
+	RelativeCWD  string `json:"relativeCwd,omitempty"`
 }
 
 // Store persists session→worktree mappings to a JSON file.
