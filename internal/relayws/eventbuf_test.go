@@ -70,6 +70,7 @@ func TestEventBuffer_ReplaySinceCaughtUp(t *testing.T) {
 	snapshot := buf.ReplaySince(buf.StreamEpoch(), 2)
 	require.Equal(t, appwire.ResyncStatusOK, snapshot.Status)
 	require.Equal(t, uint64(2), snapshot.ReplayedThroughSeq)
+	require.NotNil(t, snapshot.Events)
 	assert.Empty(t, snapshot.Events)
 }
 
@@ -91,6 +92,18 @@ func TestEventBuffer_ReplaySinceEmpty(t *testing.T) {
 	require.Equal(t, appwire.ResyncStatusOK, snapshot.Status)
 	require.Equal(t, buf.StreamEpoch(), snapshot.StreamEpoch)
 	require.Zero(t, snapshot.ReplayedThroughSeq)
+	require.NotNil(t, snapshot.Events)
+	assert.Empty(t, snapshot.Events)
+}
+
+func TestEventBuffer_ReplaySinceResetOnEmptyStillReturnsEmptySlice(t *testing.T) {
+	buf := NewEventBuffer(10)
+
+	snapshot := buf.ReplaySince(buf.StreamEpoch()+1, 1)
+	require.Equal(t, appwire.ResyncStatusReset, snapshot.Status)
+	require.Equal(t, buf.StreamEpoch(), snapshot.StreamEpoch)
+	require.Zero(t, snapshot.ReplayedThroughSeq)
+	require.NotNil(t, snapshot.Events)
 	assert.Empty(t, snapshot.Events)
 }
 

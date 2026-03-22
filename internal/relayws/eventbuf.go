@@ -65,6 +65,7 @@ func (b *EventBuffer) ReplaySince(streamEpoch, afterSeq uint64) ReplaySnapshot {
 	defer b.mu.RUnlock()
 
 	snapshot := ReplaySnapshot{
+		Events:             make([]appwire.Event, 0),
 		Status:             appwire.ResyncStatusOK,
 		StreamEpoch:        b.streamEpoch,
 		ReplayedThroughSeq: b.seq,
@@ -136,7 +137,7 @@ func (b *EventBuffer) StreamEpoch() uint64 {
 
 func (b *EventBuffer) snapshotAllLocked() []appwire.Event {
 	if b.count == 0 {
-		return nil
+		return make([]appwire.Event, 0)
 	}
 
 	oldestIdx := (b.head - b.count + b.size) % b.size

@@ -507,6 +507,23 @@ func TestRpcResyncEventsReturnsReplayContract(t *testing.T) {
 			},
 		},
 		{
+			name: "empty caught up",
+			buildBuffer: func() *EventBuffer {
+				return NewEventBuffer(8)
+			},
+			params: func(buf *EventBuffer) appwire.ResyncEventsParams {
+				return appwire.ResyncEventsParams{StreamEpoch: buf.StreamEpoch(), LastSeq: 0}
+			},
+			verify: func(t *testing.T, buf *EventBuffer, result appwire.ResyncEventsResult) {
+				t.Helper()
+				require.Equal(t, appwire.ResyncStatusOK, result.Status)
+				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
+				require.Zero(t, result.ReplayedThroughSeq)
+				require.NotNil(t, result.Events)
+				require.Empty(t, result.Events)
+			},
+		},
+		{
 			name: "gap",
 			buildBuffer: func() *EventBuffer {
 				buf := NewEventBuffer(3)
@@ -548,6 +565,23 @@ func TestRpcResyncEventsReturnsReplayContract(t *testing.T) {
 				require.Len(t, result.Events, 2)
 				require.Equal(t, uint64(1), result.Events[0].Seq)
 				require.Equal(t, uint64(2), result.Events[1].Seq)
+			},
+		},
+		{
+			name: "reset empty buffer",
+			buildBuffer: func() *EventBuffer {
+				return NewEventBuffer(8)
+			},
+			params: func(buf *EventBuffer) appwire.ResyncEventsParams {
+				return appwire.ResyncEventsParams{StreamEpoch: buf.StreamEpoch() + 1, LastSeq: 1}
+			},
+			verify: func(t *testing.T, buf *EventBuffer, result appwire.ResyncEventsResult) {
+				t.Helper()
+				require.Equal(t, appwire.ResyncStatusReset, result.Status)
+				require.Equal(t, buf.StreamEpoch(), result.StreamEpoch)
+				require.Zero(t, result.ReplayedThroughSeq)
+				require.NotNil(t, result.Events)
+				require.Empty(t, result.Events)
 			},
 		},
 	}
