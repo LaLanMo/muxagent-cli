@@ -167,6 +167,9 @@ func (m *Manager) LoadSession(
 	}
 	resp, err := client.LoadSession(ctx, sessionID, cwd, permissionMode, model)
 	if err != nil {
+		if shouldRetryRuntimeCall(client, err) {
+			m.retireRuntimeClient(rid, client)
+		}
 		return "", acpprotocol.LoadSessionResponse{}, err
 	}
 	m.setSessionRuntime(sessionID, rid)
@@ -183,6 +186,16 @@ func (m *Manager) ResolveSessions(
 		if err != nil {
 			return nil, err
 		}
+		sessions, err := client.ListSessions(ctx, "")
+		if err == nil || !shouldRetryRuntimeCall(client, err) {
+			return sessions, err
+		}
+		rid := config.RuntimeID(runtimeID)
+		m.retireRuntimeClient(rid, client)
+		client, _, retryErr := m.ensureRuntime(ctx, runtimeID, "")
+		if retryErr != nil {
+			return nil, fmt.Errorf("retired stale runtime after %v; restart failed: %w", err, retryErr)
+		}
 		return client.ListSessions(ctx, "")
 	}
 
@@ -195,6 +208,17 @@ func (m *Manager) ResolveSessions(
 			continue
 		}
 		sessions, err := client.ListSessions(ctx, "")
+		if err != nil {
+			if shouldRetryRuntimeCall(client, err) {
+				m.retireRuntimeClient(rid, client)
+				client, _, retryErr := m.ensureRuntime(ctx, string(rid), "")
+				if retryErr == nil {
+					sessions, err = client.ListSessions(ctx, "")
+				} else {
+					err = fmt.Errorf("retired stale runtime after %v; restart failed: %w", err, retryErr)
+				}
+			}
+		}
 		if err != nil {
 			log.Printf("[runtime] resolve list %s failed: %v", rid, err)
 			continue
@@ -297,6 +321,13 @@ func (m *Manager) ensureRuntime(ctx context.Context, runtimeID string, startupCW
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	if rt.client != nil {
+		if !runtimeClientAlive(rt.client) {
+			log.Printf("[runtime] retiring stale %s runtime client", rid)
+			_ = rt.client.Stop()
+			rt.client = nil
+		}
+	}
+	if rt.client != nil {
 		return rt.client, rid, nil
 	}
 
@@ -336,6 +367,7 @@ func (m *Manager) resolveSettings(id config.RuntimeID, settings config.RuntimeSe
 		log.Printf("[runtime] resolved %s: %s", id, resolved)
 	} else if id == config.RuntimeCodex {
 		if config.IsRuntimeCommandOverridden(id) && settings.Command != "" {
+			settings.CWD = selectRuntimeStartupCWD(settings.CWD, startupCWD)
 			return settings, nil
 		}
 		resolved, err := codexbin.Resolve(m.cfg, func(ev codexbin.ProgressEvent) {
@@ -367,6 +399,44 @@ func selectRuntimeStartupCWD(configuredCWD string, startupCWD string) string {
 		return ""
 	}
 	return home
+}
+
+func runtimeClientAlive(client runtime.Client) bool {
+	withHealth, ok := client.(interface{ IsAlive() bool })
+	if !ok {
+		return true
+	}
+	return withHealth.IsAlive()
+}
+
+func shouldRetryRuntimeCall(client runtime.Client, err error) bool {
+	if err == nil {
+		return false
+	}
+	if !runtimeClientAlive(client) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "broken pipe") ||
+		strings.Contains(message, "transport stopped") ||
+		strings.Contains(message, "process exited")
+}
+
+func (m *Manager) retireRuntimeClient(rid config.RuntimeID, target runtime.Client) {
+	m.mu.RLock()
+	rt := m.runtimes[rid]
+	m.mu.RUnlock()
+	if rt == nil {
+		return
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.client == nil || rt.client != target {
+		return
+	}
+	_ = rt.client.Stop()
+	rt.client = nil
 }
 
 func (m *Manager) forwardEvents(events <-chan appwire.Event) {

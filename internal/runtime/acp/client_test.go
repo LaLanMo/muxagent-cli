@@ -428,6 +428,7 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	assert.GreaterOrEqual(t, typeMap[appwire.EventMessageDelta], 2, "expected replayed message chunks")
 	assert.GreaterOrEqual(t, typeMap[appwire.EventToolStarted], 1, "expected replayed tool.started")
 	assert.GreaterOrEqual(t, typeMap[appwire.EventToolCompleted], 1, "expected replayed tool.completed")
+	assert.Equal(t, 1, typeMap[appwire.EventHistoryComplete], "expected exactly one history.complete")
 
 	// Verify content
 	var messageParts []string
@@ -449,6 +450,55 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	assert.Contains(t, messageParts, "there")
 	assert.Contains(t, messageParts, "History: ")
 	assert.Contains(t, messageParts, "replayed message")
+}
+
+func TestClient_LoadSessionFailsWithoutHistoryCompleteWhenAgentExitsDuringReplay(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_EXIT_DURING_LOAD": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan []appwire.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 2*time.Second)
+	}()
+
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "session/load")
+
+	events := <-done
+	for _, ev := range events {
+		if ev.Type == appwire.EventHistoryComplete {
+			t.Fatalf("unexpected history.complete after failed load: %#v", ev)
+		}
+	}
+}
+
+func TestClient_LoadSessionRejectsConcurrentReplay(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_LOAD_DELAY_MS": "250",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
+		firstDone <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	_, err := client.LoadSession(ctx, "test-session-002", "/tmp", "", "")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "session/load already in progress")
+
+	require.NoError(t, <-firstDone)
 }
 
 func TestClient_LoadSessionReplaysCompletedToolCallWithDiff(t *testing.T) {
@@ -607,4 +657,26 @@ func TestClient_RequiresAbsoluteCWD(t *testing.T) {
 
 	_, err = client.LoadSession(context.Background(), "sid", "relative/path", "", "")
 	require.ErrorContains(t, err, "cwd must be an absolute path")
+}
+
+func TestClientMarksTransportDeadAfterChildExit(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(
+		t,
+		bin,
+		map[string]string{"MOCKAGENT_EXIT_AFTER_INITIALIZE": "1"},
+	)
+
+	require.Eventually(t, func() bool {
+		return !client.IsAlive()
+	}, 5*time.Second, 50*time.Millisecond)
+
+	_, err := client.ListSessions(context.Background(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transport stopped")
+
+	require.Eventually(t, func() bool {
+		_, ok := <-client.Events()
+		return !ok
+	}, 5*time.Second, 50*time.Millisecond)
 }

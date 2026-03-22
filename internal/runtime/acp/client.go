@@ -39,9 +39,13 @@ type sessionMsgState struct {
 
 // Client implements runtime.Client over ACP (JSON-RPC 2.0 over stdio).
 type Client struct {
-	cfg       Config
-	transport *Transport
-	events    chan appwire.Event
+	cfg          Config
+	transport    *Transport
+	events       chan appwire.Event
+	closeOnce    sync.Once
+	loopsWG      sync.WaitGroup
+	eventsMu     sync.RWMutex
+	eventsClosed bool
 
 	permMu      sync.Mutex
 	pendingPerm map[string]*pendingPermission // requestID (string) → pending
@@ -49,7 +53,15 @@ type Client struct {
 	msgMu      sync.Mutex
 	sessionMsg map[string]*sessionMsgState // sessionID → current streaming state
 
-	historyDone chan string // carries sessionID; signals LoadSession completed all RPCs
+	loadMu         sync.Mutex
+	loadInFlight   bool
+	historyDone    chan *historyDrainRequest
+	notifyLoopDone chan struct{}
+}
+
+type historyDrainRequest struct {
+	sessionID string
+	done      chan error
 }
 
 type pendingPermission struct {
@@ -60,11 +72,12 @@ type pendingPermission struct {
 // NewClient creates a new ACP client with the given configuration.
 func NewClient(cfg Config) *Client {
 	return &Client{
-		cfg:         cfg,
-		events:      make(chan appwire.Event, 256),
-		pendingPerm: make(map[string]*pendingPermission),
-		sessionMsg:  make(map[string]*sessionMsgState),
-		historyDone: make(chan string, 1),
+		cfg:            cfg,
+		events:         make(chan appwire.Event, 256),
+		pendingPerm:    make(map[string]*pendingPermission),
+		sessionMsg:     make(map[string]*sessionMsgState),
+		historyDone:    make(chan *historyDrainRequest, 1),
+		notifyLoopDone: make(chan struct{}),
 	}
 }
 
@@ -97,18 +110,37 @@ func (c *Client) Start(ctx context.Context) error {
 	log.Printf("[acp] initialized: %s", string(result))
 
 	// Start notification and request handlers
-	go c.handleNotifications()
-	go c.handleRequests()
+	c.loopsWG.Add(2)
+	go func() {
+		defer c.loopsWG.Done()
+		defer close(c.notifyLoopDone)
+		c.handleNotifications()
+	}()
+	go func() {
+		defer c.loopsWG.Done()
+		c.handleRequests()
+	}()
+	go func() {
+		c.loopsWG.Wait()
+		c.closeEvents()
+	}()
 
 	return nil
 }
 
 // Stop terminates the agent process.
 func (c *Client) Stop() error {
+	var err error
 	if c.transport != nil {
-		return c.transport.Stop()
+		err = c.transport.Stop()
 	}
-	return nil
+	c.loopsWG.Wait()
+	c.closeEvents()
+	return err
+}
+
+func (c *Client) IsAlive() bool {
+	return c.transport != nil && c.transport.IsAlive()
 }
 
 // NewSession creates a new ACP session. If permissionMode is non-empty and
@@ -185,6 +217,11 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 // LoadSession loads an existing session. History is replayed via session/update notifications.
 // If permissionMode is non-default, it calls session/set_mode after loading.
 func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode, model string) (acpprotocol.LoadSessionResponse, error) {
+	if err := c.beginLoad(); err != nil {
+		return acpprotocol.LoadSessionResponse{}, err
+	}
+	defer c.endLoad()
+
 	resolved, err := expandAndValidateCWD(cwd)
 	if err != nil {
 		return acpprotocol.LoadSessionResponse{}, err
@@ -193,6 +230,12 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 	c.msgMu.Lock()
 	c.sessionMsg[sessionID] = &sessionMsgState{}
 	c.msgMu.Unlock()
+	clearState := true
+	defer func() {
+		if clearState {
+			c.clearSessionMsgState(sessionID)
+		}
+	}()
 
 	params := map[string]any{
 		"sessionId":  sessionID,
@@ -254,11 +297,11 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		c.emit(*ev)
 	}
 
-	// Signal handleNotifications to drain remaining history notifications and
-	// emit the sentinel. Placed AFTER all RPCs (set_mode, set_config_option)
-	// to avoid draining their notifications as if they were history.
-	c.historyDone <- sessionID
+	if err := c.awaitHistoryDrain(sessionID); err != nil {
+		return acpprotocol.LoadSessionResponse{}, err
+	}
 
+	clearState = false
 	return loadResp, nil
 }
 
@@ -417,15 +460,25 @@ func (c *Client) Events() <-chan appwire.Event {
 
 // handleNotifications processes ACP notifications from the agent.
 func (c *Client) handleNotifications() {
+	var pendingLoad *historyDrainRequest
 	for {
+		if pendingLoad != nil {
+			if err := c.drainAndEmitHistoryComplete(pendingLoad.sessionID); err != nil {
+				pendingLoad.done <- err
+				return
+			}
+			pendingLoad.done <- nil
+			pendingLoad = nil
+			continue
+		}
+
 		select {
 		case notif, ok := <-c.transport.Notifications():
 			if !ok {
 				return
 			}
 			c.dispatchNotification(notif)
-		case sessionID := <-c.historyDone:
-			c.drainAndEmitHistoryComplete(sessionID)
+		case pendingLoad = <-c.historyDone:
 		}
 	}
 }
@@ -445,10 +498,13 @@ func (c *Client) dispatchNotification(notif *Notification) {
 // on stdout, and readLoop enqueues them before delivering the RPC response
 // that unblocks transport.Call — so they are already buffered by the time
 // LoadSession sends on historyDone.
-func (c *Client) drainAndEmitHistoryComplete(sessionID string) {
+func (c *Client) drainAndEmitHistoryComplete(sessionID string) error {
 	for {
 		select {
-		case notif := <-c.transport.Notifications():
+		case notif, ok := <-c.transport.Notifications():
+			if !ok {
+				return c.transport.currentStopErr()
+			}
 			c.dispatchNotification(notif)
 		default:
 			c.emit(appwire.Event{
@@ -456,7 +512,7 @@ func (c *Client) drainAndEmitHistoryComplete(sessionID string) {
 				SessionID: sessionID,
 				At:        time.Now(),
 			})
-			return
+			return nil
 		}
 	}
 }
@@ -861,11 +917,75 @@ func (c *Client) handleUsageUpdate(sessionID string, raw json.RawMessage) {
 }
 
 func (c *Client) emit(ev appwire.Event) {
+	c.eventsMu.RLock()
+	if c.eventsClosed {
+		c.eventsMu.RUnlock()
+		return
+	}
+	defer c.eventsMu.RUnlock()
+
 	select {
 	case c.events <- ev:
 	default:
 		log.Printf("[acp] event channel full, dropping event: %s", ev.Type)
 	}
+}
+
+func (c *Client) closeEvents() {
+	c.closeOnce.Do(func() {
+		c.eventsMu.Lock()
+		defer c.eventsMu.Unlock()
+		c.eventsClosed = true
+		close(c.events)
+	})
+}
+
+func (c *Client) beginLoad() error {
+	c.loadMu.Lock()
+	defer c.loadMu.Unlock()
+	if c.loadInFlight {
+		return fmt.Errorf("session/load already in progress")
+	}
+	c.loadInFlight = true
+	return nil
+}
+
+func (c *Client) endLoad() {
+	c.loadMu.Lock()
+	c.loadInFlight = false
+	c.loadMu.Unlock()
+}
+
+func (c *Client) awaitHistoryDrain(sessionID string) error {
+	req := &historyDrainRequest{
+		sessionID: sessionID,
+		done:      make(chan error, 1),
+	}
+
+	select {
+	case <-c.notifyLoopDone:
+		return c.transport.currentStopErr()
+	default:
+	}
+
+	select {
+	case c.historyDone <- req:
+	case <-c.notifyLoopDone:
+		return c.transport.currentStopErr()
+	}
+
+	select {
+	case err := <-req.done:
+		return err
+	case <-c.notifyLoopDone:
+		return c.transport.currentStopErr()
+	}
+}
+
+func (c *Client) clearSessionMsgState(sessionID string) {
+	c.msgMu.Lock()
+	delete(c.sessionMsg, sessionID)
+	c.msgMu.Unlock()
 }
 
 func (c *Client) ensureSessionMsgStateLocked(sessionID string) *sessionMsgState {

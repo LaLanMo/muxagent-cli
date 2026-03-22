@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 )
 
 type message struct {
@@ -292,6 +294,9 @@ func main() {
 					"version": "0.1.0",
 				},
 			})
+			if os.Getenv("MOCKAGENT_EXIT_AFTER_INITIALIZE") == "1" {
+				return
+			}
 
 		case "session/new":
 			mode := currentModeValue()
@@ -313,6 +318,9 @@ func main() {
 			sid := params.SessionID
 			if sid == "" {
 				sid = "test-session-001"
+			}
+			if delayMs, err := strconv.Atoi(os.Getenv("MOCKAGENT_LOAD_DELAY_MS")); err == nil && delayMs > 0 {
+				time.Sleep(time.Duration(delayMs) * time.Millisecond)
 			}
 
 			// Replay history
@@ -339,6 +347,9 @@ func main() {
 				"kind":          "execute",
 				"status":        "pending",
 			})
+			if os.Getenv("MOCKAGENT_EXIT_DURING_LOAD") == "1" {
+				return
+			}
 			if os.Getenv("MOCKAGENT_LOAD_TOOL_CALL_DIFF") == "1" {
 				sessionUpdate(sid, map[string]any{
 					"sessionUpdate": "tool_call",

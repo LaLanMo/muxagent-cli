@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,11 +30,14 @@ type Transport struct {
 	mu      sync.Mutex
 	nextID  int64
 	pending map[int64]chan *Response
+	exited  bool
 
 	notifications chan *Notification
 	requests      chan *IncomingMessage // agent→client requests (e.g. permission)
 
-	done chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+	stopErr  error
 }
 
 // NewTransport creates a new transport for the given command.
@@ -87,45 +91,29 @@ func (t *Transport) Start(ctx context.Context) error {
 
 	// Read loop for stdout
 	go t.readLoop()
+	go t.waitLoop()
 
 	return nil
 }
 
 // Stop gracefully terminates the child process.
 func (t *Transport) Stop() error {
+	if t.processExited() {
+		<-t.done
+		return nil
+	}
+
 	// Signal the process to terminate
 	if t.cmd != nil && t.cmd.Process != nil {
 		_ = t.cmd.Process.Signal(syscall.SIGTERM)
 
-		// Wait up to 3 seconds for graceful exit
-		done := make(chan error, 1)
-		go func() { done <- t.cmd.Wait() }()
-
 		select {
-		case <-done:
+		case <-t.done:
 		case <-time.After(3 * time.Second):
 			_ = t.cmd.Process.Kill()
-			<-done
+			<-t.done
 		}
 	}
-
-	// Close channels
-	select {
-	case <-t.done:
-	default:
-		close(t.done)
-	}
-
-	// Fail all pending calls
-	t.mu.Lock()
-	for id, ch := range t.pending {
-		ch <- &Response{
-			ID:    id,
-			Error: &RPCError{Code: -1, Message: "transport stopped"},
-		}
-		delete(t.pending, id)
-	}
-	t.mu.Unlock()
 
 	return nil
 }
@@ -210,6 +198,12 @@ func (t *Transport) Requests() <-chan *IncomingMessage {
 	return t.requests
 }
 
+func (t *Transport) IsAlive() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopErr == nil
+}
+
 func (t *Transport) send(msg any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -218,15 +212,24 @@ func (t *Transport) send(msg any) error {
 	data = append(data, '\n')
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	if t.stopErr != nil {
+		err := t.stopErr
+		t.mu.Unlock()
+		return err
+	}
 	_, err = t.stdin.Write(data)
+	t.mu.Unlock()
 	if err != nil {
-		return fmt.Errorf("write to stdin: %w", err)
+		t.markFailed(fmt.Errorf("transport stopped: write to stdin: %w", err))
+		return t.currentStopErr()
 	}
 	return nil
 }
 
 func (t *Transport) readLoop() {
+	defer close(t.notifications)
+	defer close(t.requests)
+
 	scanner := bufio.NewScanner(t.stdout)
 	scanner.Buffer(make([]byte, 0, 5*1024*1024), 5*1024*1024) // 5MB buffer for image payloads
 
@@ -280,6 +283,85 @@ func (t *Transport) readLoop() {
 	if err := scanner.Err(); err != nil {
 		log.Printf("[acp] stdout scanner error: %v", err)
 	}
+}
+
+func (t *Transport) waitLoop() {
+	if t.cmd == nil {
+		t.markExited(errors.New("transport stopped"))
+		return
+	}
+	err := t.cmd.Wait()
+	if err != nil {
+		t.markExited(fmt.Errorf("transport stopped: process exited: %w", err))
+		return
+	}
+	t.markExited(errors.New("transport stopped: process exited"))
+}
+
+func (t *Transport) markFailed(err error) {
+	if err == nil {
+		err = errors.New("transport stopped")
+	}
+
+	pending := t.failPending(err)
+	for id, ch := range pending {
+		ch <- &Response{
+			ID:    id,
+			Error: &RPCError{Code: -1, Message: err.Error()},
+		}
+	}
+}
+
+func (t *Transport) markExited(err error) {
+	if err == nil {
+		err = errors.New("transport stopped: process exited")
+	}
+
+	pending := t.failPending(err)
+
+	t.mu.Lock()
+	t.exited = true
+	t.mu.Unlock()
+
+	for id, ch := range pending {
+		ch <- &Response{
+			ID:    id,
+			Error: &RPCError{Code: -1, Message: err.Error()},
+		}
+	}
+
+	t.stopOnce.Do(func() {
+		close(t.done)
+	})
+}
+
+func (t *Transport) failPending(err error) map[int64]chan *Response {
+	t.mu.Lock()
+	if t.stopErr == nil {
+		t.stopErr = err
+	}
+	pending := make(map[int64]chan *Response, len(t.pending))
+	for id, ch := range t.pending {
+		pending[id] = ch
+	}
+	t.pending = make(map[int64]chan *Response)
+	t.mu.Unlock()
+	return pending
+}
+
+func (t *Transport) processExited() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.exited
+}
+
+func (t *Transport) currentStopErr() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopErr == nil {
+		return errors.New("transport stopped")
+	}
+	return t.stopErr
 }
 
 // buildEnv merges overrides into a base environ slice. An override with an
