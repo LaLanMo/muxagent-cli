@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/acpbin"
 	"github.com/LaLanMo/muxagent-cli/internal/acpprotocol"
@@ -119,12 +120,15 @@ func TestSelectRuntimeStartupCWD_FallsBackToHome(t *testing.T) {
 }
 
 type fakeRuntimeClient struct {
-	alive     bool
-	loadErr   error
-	listErr   error
-	loadCalls int
-	listCalls int
-	stopCalls int
+	alive          bool
+	newSessionResp acpprotocol.NewSessionResponse
+	loadResp       acpprotocol.LoadSessionResponse
+	listSessions   []domain.SessionSummary
+	loadErr        error
+	listErr        error
+	loadCalls      int
+	listCalls      int
+	stopCalls      int
 }
 
 func (f *fakeRuntimeClient) Start(context.Context) error { return nil }
@@ -134,15 +138,15 @@ func (f *fakeRuntimeClient) Stop() error {
 	return nil
 }
 func (f *fakeRuntimeClient) NewSession(context.Context, string, string) (acpprotocol.NewSessionResponse, error) {
-	return acpprotocol.NewSessionResponse{}, nil
+	return f.newSessionResp, nil
 }
 func (f *fakeRuntimeClient) LoadSession(context.Context, string, string, string, string) (acpprotocol.LoadSessionResponse, error) {
 	f.loadCalls++
-	return acpprotocol.LoadSessionResponse{}, f.loadErr
+	return f.loadResp, f.loadErr
 }
 func (f *fakeRuntimeClient) ListSessions(context.Context, string) ([]domain.SessionSummary, error) {
 	f.listCalls++
-	return nil, f.listErr
+	return f.listSessions, f.listErr
 }
 func (f *fakeRuntimeClient) Prompt(context.Context, string, []domain.ContentBlock) (string, *domain.PromptUsage, error) {
 	return "", nil, nil
@@ -256,4 +260,489 @@ func TestResolveSessionsReturnsRestartFailureAfterRetiringStaleRuntime(t *testin
 	if client.stopCalls != 1 {
 		t.Fatalf("stopCalls = %d, want 1", client.stopCalls)
 	}
+}
+
+func TestResolveSessionsUsesStoredConfigOptionsAfterManagerRestart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	m1 := New(cfg)
+	modeCategory := "mode"
+	m1.persistSessionSnapshot(
+		"session-123",
+		config.RuntimeCodex,
+		[]acpprotocol.SessionConfigOption{{
+			ID:           "mode",
+			Name:         "Approval Preset",
+			Type:         "select",
+			Category:     &modeCategory,
+			CurrentValue: "full-access",
+		}},
+	)
+
+	m2 := New(cfg)
+	client := &fakeRuntimeClient{
+		alive: true,
+		listSessions: []domain.SessionSummary{{
+			SessionID: "session-123",
+			CWD:       "/tmp/project",
+			Title:     "Stored Session",
+			Runtime:   string(config.RuntimeCodex),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	m2.runtimes[config.RuntimeCodex].client = client
+
+	sessions, err := m2.ResolveSessions(
+		context.Background(),
+		string(config.RuntimeCodex),
+		[]string{"session-123"},
+	)
+	if err != nil {
+		t.Fatalf("ResolveSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("len(sessions) = %d, want 1", len(sessions))
+	}
+	if got := sessions[0].ConfigOptions; len(got) != 1 {
+		t.Fatalf("len(configOptions) = %d, want 1", len(got))
+	} else if got[0].CurrentValue != "full-access" {
+		t.Fatalf("current mode = %q, want full-access", got[0].CurrentValue)
+	}
+	if got := m2.resolveRuntimeID("session-123", ""); got != config.RuntimeCodex {
+		t.Fatalf("runtime = %q, want %q", got, config.RuntimeCodex)
+	}
+}
+
+func TestSetModePersistsStoredConfigSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	modeCategory := "mode"
+	m1 := New(cfg)
+	client := &fakeRuntimeClient{alive: true}
+	m1.runtimes[config.RuntimeCodex].client = client
+	m1.setSessionRuntime("session-123", config.RuntimeCodex)
+	m1.persistSessionSnapshot(
+		"session-123",
+		config.RuntimeCodex,
+		[]acpprotocol.SessionConfigOption{{
+			ID:           "mode",
+			Name:         "Approval Preset",
+			Type:         "select",
+			Category:     &modeCategory,
+			CurrentValue: "read-only",
+		}},
+	)
+
+	if err := m1.SetMode(context.Background(), "session-123", "full-access"); err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+
+	m2 := New(cfg)
+	restartedClient := &fakeRuntimeClient{
+		alive: true,
+		listSessions: []domain.SessionSummary{{
+			SessionID: "session-123",
+			CWD:       "/tmp/project",
+			Title:     "Stored Session",
+			Runtime:   string(config.RuntimeCodex),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	m2.runtimes[config.RuntimeCodex].client = restartedClient
+
+	sessions, err := m2.ResolveSessions(
+		context.Background(),
+		string(config.RuntimeCodex),
+		[]string{"session-123"},
+	)
+	if err != nil {
+		t.Fatalf("ResolveSessions: %v", err)
+	}
+	if len(sessions) != 1 || len(sessions[0].ConfigOptions) != 1 {
+		t.Fatalf("sessions = %#v, want one stored session with config", sessions)
+	}
+	if sessions[0].ConfigOptions[0].CurrentValue != "full-access" {
+		t.Fatalf(
+			"current mode = %q, want full-access",
+			sessions[0].ConfigOptions[0].CurrentValue,
+		)
+	}
+}
+
+func TestSetModeBootstrapsStoredModeSnapshotWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	m1 := New(cfg)
+	client := &fakeRuntimeClient{alive: true}
+	m1.runtimes[config.RuntimeCodex].client = client
+	m1.setSessionRuntime("session-123", config.RuntimeCodex)
+
+	if err := m1.SetMode(context.Background(), "session-123", "full-access"); err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+
+	m2 := New(cfg)
+	restartedClient := &fakeRuntimeClient{
+		alive: true,
+		listSessions: []domain.SessionSummary{{
+			SessionID: "session-123",
+			CWD:       "/tmp/project",
+			Title:     "Stored Session",
+			Runtime:   string(config.RuntimeCodex),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	m2.runtimes[config.RuntimeCodex].client = restartedClient
+
+	sessions, err := m2.ResolveSessions(
+		context.Background(),
+		string(config.RuntimeCodex),
+		[]string{"session-123"},
+	)
+	if err != nil {
+		t.Fatalf("ResolveSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("len(sessions) = %d, want 1", len(sessions))
+	}
+	if got := findConfigOptionValue(sessions[0].ConfigOptions, "mode"); got != "full-access" {
+		t.Fatalf("mode = %q, want full-access", got)
+	}
+}
+
+func TestNewSessionEnrichesModeConfigFromRuntimeCatalog(t *testing.T) {
+	cfg := config.Default()
+	modelCategory := "model"
+	m := New(cfg)
+	client := &fakeRuntimeClient{
+		alive: true,
+		newSessionResp: acpprotocol.NewSessionResponse{
+			SessionID: "session-123",
+			ConfigOptions: []acpprotocol.SessionConfigOption{{
+				ID:           "model",
+				Name:         "Model",
+				Type:         "select",
+				Category:     &modelCategory,
+				CurrentValue: "gpt-5",
+			}},
+		},
+	}
+	m.runtimes[config.RuntimeCodex].client = client
+
+	sessionID, runtimeID, resp, err := m.NewSession(
+		context.Background(),
+		string(config.RuntimeCodex),
+		"/tmp/project",
+		"full-access",
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if sessionID != "session-123" {
+		t.Fatalf("sessionID = %q, want session-123", sessionID)
+	}
+	if runtimeID != string(config.RuntimeCodex) {
+		t.Fatalf("runtimeID = %q, want %q", runtimeID, config.RuntimeCodex)
+	}
+	if got := findConfigOptionValue(resp.ConfigOptions, "mode"); got != "full-access" {
+		t.Fatalf("mode = %q, want full-access", got)
+	}
+	modeOption := findConfigOption(resp.ConfigOptions, "mode")
+	if modeOption == nil {
+		t.Fatal("expected mode config option in new-session response")
+	}
+	if got := len(modeOption.Options.Flatten()); got != 3 {
+		t.Fatalf("len(mode options) = %d, want 3", got)
+	}
+
+	snapshot, ok := m.sessionSnapshot(config.RuntimeCodex, "session-123")
+	if !ok {
+		t.Fatal("expected persisted session snapshot")
+	}
+	if got := findConfigOptionValue(snapshot.ConfigOptions, "mode"); got != "full-access" {
+		t.Fatalf("stored mode = %q, want full-access", got)
+	}
+	if modeOption := findConfigOption(snapshot.ConfigOptions, "mode"); modeOption == nil || len(modeOption.Options.Flatten()) != 3 {
+		t.Fatalf("stored mode option = %#v, want runtime catalog choices", modeOption)
+	}
+}
+
+func TestLoadSessionEnrichesModeConfigFromStoredSnapshotAndRuntimeCatalog(t *testing.T) {
+	cfg := config.Default()
+	modelCategory := "model"
+	m := New(cfg)
+	m.setSessionRuntime("session-123", config.RuntimeCodex)
+	m.persistSessionSnapshot(
+		"session-123",
+		config.RuntimeCodex,
+		[]acpprotocol.SessionConfigOption{{
+			ID:           "mode",
+			Name:         "Mode",
+			Type:         "select",
+			CurrentValue: "full-access",
+		}},
+	)
+	client := &fakeRuntimeClient{
+		alive: true,
+		loadResp: acpprotocol.LoadSessionResponse{
+			ConfigOptions: []acpprotocol.SessionConfigOption{{
+				ID:           "model",
+				Name:         "Model",
+				Type:         "select",
+				Category:     &modelCategory,
+				CurrentValue: "gpt-5",
+			}},
+		},
+	}
+	m.runtimes[config.RuntimeCodex].client = client
+
+	runtimeID, resp, err := m.LoadSession(
+		context.Background(),
+		string(config.RuntimeCodex),
+		"session-123",
+		"/tmp/project",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if runtimeID != string(config.RuntimeCodex) {
+		t.Fatalf("runtimeID = %q, want %q", runtimeID, config.RuntimeCodex)
+	}
+	if got := findConfigOptionValue(resp.ConfigOptions, "mode"); got != "full-access" {
+		t.Fatalf("mode = %q, want full-access", got)
+	}
+	modeOption := findConfigOption(resp.ConfigOptions, "mode")
+	if modeOption == nil {
+		t.Fatal("expected mode config option in load-session response")
+	}
+	if got := len(modeOption.Options.Flatten()); got != 3 {
+		t.Fatalf("len(mode options) = %d, want 3", got)
+	}
+}
+
+func TestMergeConfigOptionsByIDPreservesExistingChoicesWhenIncomingStubOnlyChangesCurrentValue(t *testing.T) {
+	modeCategory := "mode"
+	current := []acpprotocol.SessionConfigOption{{
+		ID:           "mode",
+		Name:         "Approval Preset",
+		Type:         "select",
+		Category:     &modeCategory,
+		CurrentValue: "read-only",
+		Options: acpprotocol.SessionConfigSelectOptions{
+			Ungrouped: []acpprotocol.SessionConfigSelectOption{
+				{Value: "read-only", Name: "Read Only"},
+				{Value: "auto", Name: "Default"},
+				{Value: "full-access", Name: "Full Access"},
+			},
+		},
+	}}
+	incoming := []acpprotocol.SessionConfigOption{{
+		ID:           "mode",
+		Name:         "Mode",
+		Type:         "select",
+		Category:     &modeCategory,
+		CurrentValue: "full-access",
+	}}
+
+	merged := mergeConfigOptionsByID(current, incoming)
+	if got := findConfigOptionValue(merged, "mode"); got != "full-access" {
+		t.Fatalf("mode = %q, want full-access", got)
+	}
+	modeOption := findConfigOption(merged, "mode")
+	if modeOption == nil {
+		t.Fatal("expected merged mode option")
+	}
+	if got := len(modeOption.Options.Flatten()); got != 3 {
+		t.Fatalf("len(mode options) = %d, want 3", got)
+	}
+}
+
+func TestResolveSessionsMergesRuntimeConfigOptionsWithStoredSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	modeCategory := "mode"
+	modelCategory := "model"
+	m1 := New(cfg)
+	m1.persistSessionSnapshot(
+		"session-123",
+		config.RuntimeCodex,
+		[]acpprotocol.SessionConfigOption{
+			{
+				ID:           "mode",
+				Name:         "Approval Preset",
+				Type:         "select",
+				Category:     &modeCategory,
+				CurrentValue: "full-access",
+			},
+			{
+				ID:           "reasoning_effort",
+				Name:         "Reasoning Effort",
+				Type:         "select",
+				CurrentValue: "high",
+			},
+		},
+	)
+
+	m2 := New(cfg)
+	client := &fakeRuntimeClient{
+		alive: true,
+		listSessions: []domain.SessionSummary{{
+			SessionID: "session-123",
+			CWD:       "/tmp/project",
+			Title:     "Stored Session",
+			Runtime:   string(config.RuntimeCodex),
+			UpdatedAt: time.Now(),
+			ConfigOptions: []acpprotocol.SessionConfigOption{{
+				ID:           "model",
+				Name:         "Model",
+				Type:         "select",
+				Category:     &modelCategory,
+				CurrentValue: "gpt-5",
+			}},
+		}},
+	}
+	m2.runtimes[config.RuntimeCodex].client = client
+
+	sessions, err := m2.ResolveSessions(
+		context.Background(),
+		string(config.RuntimeCodex),
+		[]string{"session-123"},
+	)
+	if err != nil {
+		t.Fatalf("ResolveSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("len(sessions) = %d, want 1", len(sessions))
+	}
+	if got := findConfigOptionValue(sessions[0].ConfigOptions, "mode"); got != "full-access" {
+		t.Fatalf("mode = %q, want full-access", got)
+	}
+	if got := findConfigOptionValue(sessions[0].ConfigOptions, "model"); got != "gpt-5" {
+		t.Fatalf("model = %q, want gpt-5", got)
+	}
+	if got := findConfigOptionValue(sessions[0].ConfigOptions, "reasoning_effort"); got != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", got)
+	}
+
+	m3 := New(cfg)
+	snapshot, ok := m3.sessionSnapshot(config.RuntimeCodex, "session-123")
+	if !ok {
+		t.Fatal("expected stored snapshot after restart")
+	}
+	if got := findConfigOptionValue(snapshot.ConfigOptions, "mode"); got != "full-access" {
+		t.Fatalf("stored mode = %q, want full-access", got)
+	}
+	if got := findConfigOptionValue(snapshot.ConfigOptions, "model"); got != "" {
+		t.Fatalf("stored model = %q, want empty because resolve should be read-only", got)
+	}
+	if got := findConfigOptionValue(snapshot.ConfigOptions, "reasoning_effort"); got != "high" {
+		t.Fatalf("stored reasoning_effort = %q, want high", got)
+	}
+}
+
+func TestCaptureSessionSnapshotFromModeEventBootstrapsModeWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	m := New(cfg)
+	m.setSessionRuntime("session-123", config.RuntimeCodex)
+
+	m.captureSessionSnapshotFromEvent(appwire.Event{
+		Type:      appwire.EventModeChanged,
+		SessionID: "session-123",
+		ModeChanged: &appwire.ModeChangedEvent{
+			App: appwire.ModeChangedEventApp{CurrentModeID: "read-only"},
+		},
+	})
+
+	snapshot, ok := m.sessionSnapshot(config.RuntimeCodex, "session-123")
+	if !ok {
+		t.Fatal("expected stored snapshot")
+	}
+	if got := findConfigOptionValue(snapshot.ConfigOptions, "mode"); got != "read-only" {
+		t.Fatalf("mode = %q, want read-only", got)
+	}
+}
+
+func TestResolveSessionsScopesStoredSnapshotsByRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	modeCategory := "mode"
+	m1 := New(cfg)
+	m1.persistSessionSnapshot(
+		"session-123",
+		config.RuntimeCodex,
+		[]acpprotocol.SessionConfigOption{{
+			ID:           "mode",
+			Name:         "Approval Preset",
+			Type:         "select",
+			Category:     &modeCategory,
+			CurrentValue: "full-access",
+		}},
+	)
+
+	m2 := New(cfg)
+	client := &fakeRuntimeClient{
+		alive: true,
+		listSessions: []domain.SessionSummary{{
+			SessionID: "session-123",
+			CWD:       "/tmp/project",
+			Title:     "Other Runtime Session",
+			Runtime:   string(config.RuntimeClaudeCode),
+			UpdatedAt: time.Now(),
+		}},
+	}
+	m2.runtimes[config.RuntimeClaudeCode].client = client
+
+	sessions, err := m2.ResolveSessions(
+		context.Background(),
+		string(config.RuntimeClaudeCode),
+		[]string{"session-123"},
+	)
+	if err != nil {
+		t.Fatalf("ResolveSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("len(sessions) = %d, want 1", len(sessions))
+	}
+	if len(sessions[0].ConfigOptions) != 0 {
+		t.Fatalf("configOptions = %#v, want empty for different runtime", sessions[0].ConfigOptions)
+	}
+}
+
+func findConfigOptionValue(
+	options []acpprotocol.SessionConfigOption,
+	id string,
+) string {
+	for _, option := range options {
+		if option.ID == id {
+			return option.CurrentValue
+		}
+	}
+	return ""
+}
+
+func findConfigOption(
+	options []acpprotocol.SessionConfigOption,
+	id string,
+) *acpprotocol.SessionConfigOption {
+	for i := range options {
+		if options[i].ID == id {
+			return &options[i]
+		}
+	}
+	return nil
 }

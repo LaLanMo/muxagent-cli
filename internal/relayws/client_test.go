@@ -321,7 +321,23 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 				SessionID: "sid-1",
 				CWD:       "/tmp/project",
 				Title:     "Generated title",
+				Runtime:   "codex",
 				UpdatedAt: time.Date(2026, time.March, 2, 12, 0, 0, 0, time.UTC),
+				ConfigOptions: []acpprotocol.SessionConfigOption{
+					{
+						ID:           "mode",
+						Name:         "Approval Preset",
+						Type:         "select",
+						CurrentValue: "read-only",
+						Category:     stringPtr("mode"),
+						Options: acpprotocol.SessionConfigSelectOptions{
+							Ungrouped: []acpprotocol.SessionConfigSelectOption{
+								{Value: "full-access", Name: "Full Access"},
+								{Value: "read-only", Name: "Read Only"},
+							},
+						},
+					},
+				},
 			},
 		},
 	}
@@ -362,7 +378,11 @@ func TestRunHandlesSessionResolveRPC(t *testing.T) {
 	require.Equal(t, "sid-1", entry["sessionId"])
 	require.Equal(t, "/tmp/project", entry["cwd"])
 	require.Equal(t, "Generated title", entry["title"])
+	require.Equal(t, "codex", entry["runtime"])
 	require.Equal(t, string(domain.SessionStatusIdle), entry["status"])
+	configOptions, ok := entry["configOptions"].([]any)
+	require.True(t, ok)
+	require.Len(t, configOptions, 1)
 
 	require.NoError(t, clientConn.Close())
 	select {

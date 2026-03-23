@@ -734,11 +734,13 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params appwire.ResolveS
 		for _, s := range all {
 			if _, ok := wanted[s.SessionID]; ok {
 				filtered = append(filtered, appwire.ResolvedSession{
-					SessionID: s.SessionID,
-					CWD:       s.CWD,
-					Title:     s.Title,
-					UpdatedAt: s.UpdatedAt,
-					Status:    sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
+					SessionID:     s.SessionID,
+					CWD:           s.CWD,
+					Title:         s.Title,
+					Runtime:       s.Runtime,
+					UpdatedAt:     s.UpdatedAt,
+					Status:        sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
+					ConfigOptions: s.ConfigOptions,
 				})
 			}
 		}
@@ -747,11 +749,13 @@ func (c *Client) rpcResolveSessions(ctx context.Context, params appwire.ResolveS
 	resolved := make([]appwire.ResolvedSession, 0, len(all))
 	for _, s := range all {
 		resolved = append(resolved, appwire.ResolvedSession{
-			SessionID: s.SessionID,
-			CWD:       s.CWD,
-			Title:     s.Title,
-			UpdatedAt: s.UpdatedAt,
-			Status:    sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
+			SessionID:     s.SessionID,
+			CWD:           s.CWD,
+			Title:         s.Title,
+			Runtime:       s.Runtime,
+			UpdatedAt:     s.UpdatedAt,
+			Status:        sessionStatusToWire(c.resolvedSessionStatus(s.SessionID)),
+			ConfigOptions: s.ConfigOptions,
 		})
 	}
 	return appwire.SessionResolveResult{Sessions: resolved}, ""

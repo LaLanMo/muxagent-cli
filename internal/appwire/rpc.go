@@ -213,11 +213,13 @@ type SessionLoadResult struct {
 }
 
 type ResolvedSession struct {
-	SessionID string        `json:"sessionId"`
-	CWD       string        `json:"cwd"`
-	Title     string        `json:"title"`
-	UpdatedAt time.Time     `json:"updatedAt"`
-	Status    SessionStatus `json:"status"`
+	SessionID     string                            `json:"sessionId"`
+	CWD           string                            `json:"cwd"`
+	Title         string                            `json:"title"`
+	Runtime       string                            `json:"runtime,omitempty"`
+	UpdatedAt     time.Time                         `json:"updatedAt"`
+	Status        SessionStatus                     `json:"status"`
+	ConfigOptions []acpprotocol.SessionConfigOption `json:"configOptions,omitempty"`
 }
 
 type SessionResolveResult struct {

@@ -32,6 +32,7 @@ type Manager struct {
 	mu             sync.RWMutex
 	runtimes       map[config.RuntimeID]*managedRuntime
 	sessionRuntime map[string]config.RuntimeID
+	snapshotStore  *sessionSnapshotStore
 
 	events    chan appwire.Event
 	closeOnce sync.Once
@@ -57,10 +58,37 @@ func New(cfg config.Config) *Manager {
 			settings: settings,
 		}
 	}
+	sessionRuntime := make(map[string]config.RuntimeID)
+	var snapshotStore *sessionSnapshotStore
+	if storePath, err := defaultSessionSnapshotStorePath(); err != nil {
+		log.Printf("[runtime] session snapshot store path unavailable: %v", err)
+	} else {
+		snapshotStore = newSessionSnapshotStore(storePath)
+		if err := snapshotStore.Load(); err != nil {
+			log.Printf("[runtime] session snapshot store load failed: %v", err)
+		} else {
+			for runtimeID, runtimeSnapshots := range snapshotStore.All() {
+				rid := config.RuntimeID(strings.TrimSpace(runtimeID))
+				if rid == "" {
+					continue
+				}
+				for sessionID := range runtimeSnapshots {
+					if sessionID == "" {
+						continue
+					}
+					if _, exists := sessionRuntime[sessionID]; exists {
+						continue
+					}
+					sessionRuntime[sessionID] = rid
+				}
+			}
+		}
+	}
 	return &Manager{
 		cfg:            cfg,
 		runtimes:       runtimes,
-		sessionRuntime: make(map[string]config.RuntimeID),
+		sessionRuntime: sessionRuntime,
+		snapshotStore:  snapshotStore,
 		events:         make(chan appwire.Event, 512),
 		done:           make(chan struct{}),
 	}
@@ -145,7 +173,14 @@ func (m *Manager) NewSession(
 	if err != nil {
 		return "", "", acpprotocol.NewSessionResponse{}, err
 	}
+	resp.ConfigOptions = m.enrichSessionConfigOptions(
+		rid,
+		resp.SessionID,
+		resp.ConfigOptions,
+		permissionMode,
+	)
 	m.setSessionRuntime(resp.SessionID, rid)
+	m.persistSessionSnapshot(resp.SessionID, rid, resp.ConfigOptions)
 	return resp.SessionID, string(rid), resp, nil
 }
 
@@ -172,7 +207,14 @@ func (m *Manager) LoadSession(
 		}
 		return "", acpprotocol.LoadSessionResponse{}, err
 	}
+	resp.ConfigOptions = m.enrichSessionConfigOptions(
+		rid,
+		sessionID,
+		resp.ConfigOptions,
+		permissionMode,
+	)
 	m.setSessionRuntime(sessionID, rid)
+	m.persistSessionSnapshot(sessionID, rid, resp.ConfigOptions)
 	return string(rid), resp, nil
 }
 
@@ -182,21 +224,21 @@ func (m *Manager) ResolveSessions(
 	sessionIDs []string,
 ) ([]domain.SessionSummary, error) {
 	if runtimeID != "" {
-		client, _, err := m.ensureRuntime(ctx, runtimeID, "")
+		client, rid, err := m.ensureRuntime(ctx, runtimeID, "")
 		if err != nil {
 			return nil, err
 		}
 		sessions, err := client.ListSessions(ctx, "")
 		if err == nil || !shouldRetryRuntimeCall(client, err) {
-			return sessions, err
+			return m.applyStoredSessionSnapshots(sessions, rid), err
 		}
-		rid := config.RuntimeID(runtimeID)
 		m.retireRuntimeClient(rid, client)
 		client, _, retryErr := m.ensureRuntime(ctx, runtimeID, "")
 		if retryErr != nil {
 			return nil, fmt.Errorf("retired stale runtime after %v; restart failed: %w", err, retryErr)
 		}
-		return client.ListSessions(ctx, "")
+		sessions, err = client.ListSessions(ctx, "")
+		return m.applyStoredSessionSnapshots(sessions, rid), err
 	}
 
 	seen := make(map[string]struct{}, len(sessionIDs))
@@ -224,6 +266,7 @@ func (m *Manager) ResolveSessions(
 			continue
 		}
 		for _, session := range sessions {
+			session = m.applyStoredSessionSnapshot(session, rid)
 			if _, ok := seen[session.SessionID]; ok {
 				continue
 			}
@@ -259,7 +302,18 @@ func (m *Manager) SetMode(ctx context.Context, sessionID string, modeID string) 
 	if err != nil {
 		return err
 	}
-	return client.SetMode(ctx, sessionID, modeID)
+	if err := client.SetMode(ctx, sessionID, modeID); err != nil {
+		return err
+	}
+	m.updateSessionSnapshot(sessionID, func(snapshot *sessionSnapshot) bool {
+		next, changed := updateModeConfigCurrentValue(snapshot.ConfigOptions, modeID)
+		if !changed {
+			return false
+		}
+		snapshot.ConfigOptions = next
+		return true
+	})
+	return nil
 }
 
 func (m *Manager) SetConfigOption(ctx context.Context, sessionID string, configID string, value string) error {
@@ -267,7 +321,22 @@ func (m *Manager) SetConfigOption(ctx context.Context, sessionID string, configI
 	if err != nil {
 		return err
 	}
-	return client.SetConfigOption(ctx, sessionID, configID, value)
+	if err := client.SetConfigOption(ctx, sessionID, configID, value); err != nil {
+		return err
+	}
+	m.updateSessionSnapshot(sessionID, func(snapshot *sessionSnapshot) bool {
+		next, changed := updateConfigOptionCurrentValue(
+			snapshot.ConfigOptions,
+			configID,
+			value,
+		)
+		if !changed {
+			return false
+		}
+		snapshot.ConfigOptions = next
+		return true
+	})
+	return nil
 }
 
 func (m *Manager) ReplyPermission(ctx context.Context, sessionID string, requestID string, optionID string) error {
@@ -448,6 +517,7 @@ func (m *Manager) forwardEvents(events <-chan appwire.Event) {
 			if !ok {
 				return
 			}
+			m.captureSessionSnapshotFromEvent(ev)
 			select {
 			case <-m.done:
 				return
@@ -471,6 +541,376 @@ func (m *Manager) setSessionRuntime(sessionID string, runtimeID config.RuntimeID
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessionRuntime[sessionID] = runtimeID
+}
+
+func (m *Manager) applyStoredSessionSnapshots(
+	sessions []domain.SessionSummary,
+	rid config.RuntimeID,
+) []domain.SessionSummary {
+	for i := range sessions {
+		sessions[i] = m.applyStoredSessionSnapshot(sessions[i], rid)
+	}
+	return sessions
+}
+
+func (m *Manager) applyStoredSessionSnapshot(
+	session domain.SessionSummary,
+	fallbackRuntime config.RuntimeID,
+) domain.SessionSummary {
+	runtimeID := config.RuntimeID(strings.TrimSpace(session.Runtime))
+	if runtimeID == "" {
+		runtimeID = fallbackRuntime
+		if runtimeID != "" {
+			session.Runtime = string(runtimeID)
+		}
+	}
+	if session.SessionID == "" {
+		return session
+	}
+	if runtimeID != "" {
+		m.setSessionRuntime(session.SessionID, runtimeID)
+	}
+	storedSnapshot, hasStoredSnapshot := m.sessionSnapshot(
+		runtimeID,
+		session.SessionID,
+	)
+	if len(session.ConfigOptions) > 0 {
+		if hasStoredSnapshot {
+			session.ConfigOptions = mergeConfigOptionsByID(
+				storedSnapshot.ConfigOptions,
+				session.ConfigOptions,
+			)
+		}
+		session.ConfigOptions = enrichModeConfigOptions(
+			runtimeID,
+			session.ConfigOptions,
+			"",
+		)
+		return session
+	}
+
+	if !hasStoredSnapshot {
+		if runtimeID != "" {
+			m.persistSessionRuntime(session.SessionID, runtimeID)
+		}
+		return session
+	}
+	if len(storedSnapshot.ConfigOptions) > 0 {
+		session.ConfigOptions = cloneConfigOptions(storedSnapshot.ConfigOptions)
+		session.ConfigOptions = enrichModeConfigOptions(
+			runtimeID,
+			session.ConfigOptions,
+			"",
+		)
+	}
+	return session
+}
+
+func (m *Manager) enrichSessionConfigOptions(
+	runtimeID config.RuntimeID,
+	sessionID string,
+	current []acpprotocol.SessionConfigOption,
+	modeID string,
+) []acpprotocol.SessionConfigOption {
+	enriched := cloneConfigOptions(current)
+	if sessionID != "" {
+		if storedSnapshot, ok := m.sessionSnapshot(runtimeID, sessionID); ok {
+			enriched = mergeConfigOptionsByID(storedSnapshot.ConfigOptions, enriched)
+		}
+	}
+	return enrichModeConfigOptions(runtimeID, enriched, modeID)
+}
+
+func (m *Manager) sessionSnapshot(
+	runtimeID config.RuntimeID,
+	sessionID string,
+) (sessionSnapshot, bool) {
+	if m.snapshotStore == nil || runtimeID == "" || sessionID == "" {
+		return sessionSnapshot{}, false
+	}
+	return m.snapshotStore.Get(string(runtimeID), sessionID)
+}
+
+func (m *Manager) persistSessionRuntime(
+	sessionID string,
+	runtimeID config.RuntimeID,
+) {
+	if sessionID == "" || runtimeID == "" || m.snapshotStore == nil {
+		return
+	}
+	if err := m.snapshotStore.Ensure(string(runtimeID), sessionID); err != nil {
+		log.Printf("[runtime] save session snapshot runtime failed: %v", err)
+	}
+}
+
+func (m *Manager) persistSessionSnapshot(
+	sessionID string,
+	runtimeID config.RuntimeID,
+	configOptions []acpprotocol.SessionConfigOption,
+) {
+	if sessionID == "" || runtimeID == "" || m.snapshotStore == nil {
+		return
+	}
+	if err := m.snapshotStore.Put(string(runtimeID), sessionID, sessionSnapshot{
+		ConfigOptions: configOptions,
+	}); err != nil {
+		log.Printf("[runtime] save session snapshot failed: %v", err)
+	}
+}
+
+func (m *Manager) updateSessionSnapshot(
+	sessionID string,
+	update func(*sessionSnapshot) bool,
+) {
+	if sessionID == "" || m.snapshotStore == nil {
+		return
+	}
+	runtimeID := m.resolveRuntimeID(sessionID, "")
+	if runtimeID == "" {
+		return
+	}
+	if err := m.snapshotStore.Update(string(runtimeID), sessionID, update); err != nil {
+		log.Printf("[runtime] update session snapshot failed: %v", err)
+	}
+}
+
+func (m *Manager) captureSessionSnapshotFromEvent(ev appwire.Event) {
+	if ev.SessionID == "" {
+		return
+	}
+	switch ev.Type {
+	case appwire.EventModeChanged:
+		if ev.ModeChanged == nil {
+			return
+		}
+		if update := ev.ModeChanged.ACPConfigOption; update != nil &&
+			len(update.ConfigOptions) > 0 {
+			m.updateSessionSnapshot(ev.SessionID, func(snapshot *sessionSnapshot) bool {
+				snapshot.ConfigOptions = mergeConfigOptionsByID(
+					snapshot.ConfigOptions,
+					update.ConfigOptions,
+				)
+				return true
+			})
+			return
+		}
+		currentModeID := strings.TrimSpace(ev.ModeChanged.App.CurrentModeID)
+		if currentModeID == "" {
+			return
+		}
+		m.updateSessionSnapshot(ev.SessionID, func(snapshot *sessionSnapshot) bool {
+			next, changed := updateModeConfigCurrentValue(
+				snapshot.ConfigOptions,
+				currentModeID,
+			)
+			if !changed {
+				return false
+			}
+			snapshot.ConfigOptions = next
+			return true
+		})
+	case appwire.EventModelChanged:
+		if ev.ConfigChanged == nil {
+			return
+		}
+		if update := ev.ConfigChanged.ACP; update != nil &&
+			len(update.ConfigOptions) > 0 {
+			m.updateSessionSnapshot(ev.SessionID, func(snapshot *sessionSnapshot) bool {
+				snapshot.ConfigOptions = mergeConfigOptionsByID(
+					snapshot.ConfigOptions,
+					update.ConfigOptions,
+				)
+				return true
+			})
+			return
+		}
+		configID := strings.TrimSpace(ev.ConfigChanged.App.ConfigID)
+		if configID == "" {
+			return
+		}
+		m.updateSessionSnapshot(ev.SessionID, func(snapshot *sessionSnapshot) bool {
+			next, changed := updateConfigOptionCurrentValue(
+				snapshot.ConfigOptions,
+				configID,
+				ev.ConfigChanged.App.CurrentValue,
+			)
+			if !changed {
+				return false
+			}
+			snapshot.ConfigOptions = next
+			return true
+		})
+	}
+}
+
+func mergeConfigOptionsByID(
+	current []acpprotocol.SessionConfigOption,
+	incoming []acpprotocol.SessionConfigOption,
+) []acpprotocol.SessionConfigOption {
+	if len(incoming) == 0 {
+		return cloneConfigOptions(current)
+	}
+	if len(current) == 0 {
+		return cloneConfigOptions(incoming)
+	}
+	merged := cloneConfigOptions(current)
+	for _, next := range incoming {
+		replaced := false
+		for i, existing := range merged {
+			if existing.ID == next.ID {
+				merged[i] = mergeConfigOption(existing, next)
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			merged = append(merged, next)
+		}
+	}
+	return merged
+}
+
+func mergeConfigOption(
+	existing acpprotocol.SessionConfigOption,
+	incoming acpprotocol.SessionConfigOption,
+) acpprotocol.SessionConfigOption {
+	merged := existing
+	if incoming.Meta != nil {
+		merged.Meta = incoming.Meta
+	}
+	if strings.TrimSpace(incoming.ID) != "" {
+		merged.ID = incoming.ID
+	}
+	if strings.TrimSpace(incoming.Name) != "" {
+		merged.Name = incoming.Name
+	}
+	if strings.TrimSpace(incoming.Type) != "" {
+		merged.Type = incoming.Type
+	}
+	if incoming.Description != nil {
+		merged.Description = incoming.Description
+	}
+	if incoming.Category != nil {
+		merged.Category = incoming.Category
+	}
+	if strings.TrimSpace(incoming.CurrentValue) != "" {
+		merged.CurrentValue = incoming.CurrentValue
+	}
+	if len(incoming.Options.Flatten()) > 0 {
+		merged.Options = incoming.Options
+	}
+	return merged
+}
+
+func enrichModeConfigOptions(
+	runtimeID config.RuntimeID,
+	current []acpprotocol.SessionConfigOption,
+	modeID string,
+) []acpprotocol.SessionConfigOption {
+	modeOption, ok := runtimeModeConfigOption(runtimeID)
+	if !ok {
+		return cloneConfigOptions(current)
+	}
+	resolvedModeID := strings.TrimSpace(modeID)
+	if resolvedModeID == "" {
+		resolvedModeID = currentConfigOptionValue(current, "mode")
+	}
+	if resolvedModeID == "" {
+		return cloneConfigOptions(current)
+	}
+	modeOption.CurrentValue = resolvedModeID
+	return mergeConfigOptionsByID(
+		[]acpprotocol.SessionConfigOption{modeOption},
+		current,
+	)
+}
+
+func runtimeModeConfigOption(
+	runtimeID config.RuntimeID,
+) (acpprotocol.SessionConfigOption, bool) {
+	for _, option := range runtimeConfigOptions(runtimeID) {
+		category := strings.TrimSpace(derefString(option.Category))
+		if category == "mode" || option.ID == "mode" {
+			return option, true
+		}
+	}
+	return acpprotocol.SessionConfigOption{}, false
+}
+
+func currentConfigOptionValue(
+	options []acpprotocol.SessionConfigOption,
+	configID string,
+) string {
+	target := strings.TrimSpace(configID)
+	if target == "" {
+		return ""
+	}
+	for _, option := range options {
+		category := strings.TrimSpace(derefString(option.Category))
+		if option.ID == target || category == target {
+			return strings.TrimSpace(option.CurrentValue)
+		}
+	}
+	return ""
+}
+
+func updateConfigOptionCurrentValue(
+	current []acpprotocol.SessionConfigOption,
+	configID string,
+	value string,
+) ([]acpprotocol.SessionConfigOption, bool) {
+	if len(current) == 0 || strings.TrimSpace(configID) == "" {
+		return cloneConfigOptions(current), false
+	}
+	next := cloneConfigOptions(current)
+	for i := range next {
+		if next[i].ID != configID {
+			continue
+		}
+		if next[i].CurrentValue == value {
+			return next, false
+		}
+		next[i].CurrentValue = value
+		return next, true
+	}
+	return next, false
+}
+
+func updateModeConfigCurrentValue(
+	current []acpprotocol.SessionConfigOption,
+	modeID string,
+) ([]acpprotocol.SessionConfigOption, bool) {
+	if strings.TrimSpace(modeID) == "" {
+		return cloneConfigOptions(current), false
+	}
+	next := cloneConfigOptions(current)
+	for i := range next {
+		category := strings.TrimSpace(derefString(next[i].Category))
+		if category != "mode" && next[i].ID != "mode" {
+			continue
+		}
+		if next[i].CurrentValue == modeID {
+			return next, false
+		}
+		next[i].CurrentValue = modeID
+		return next, true
+	}
+	modeCategory := "mode"
+	next = append(next, acpprotocol.SessionConfigOption{
+		ID:           "mode",
+		Name:         "Mode",
+		Type:         "select",
+		Category:     &modeCategory,
+		CurrentValue: modeID,
+	})
+	return next, true
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (m *Manager) startedClients() []runtime.Client {

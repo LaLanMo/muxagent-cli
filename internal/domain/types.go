@@ -20,10 +20,12 @@ const (
 
 // SessionSummary is a lightweight ACP session list entry.
 type SessionSummary struct {
-	SessionID string    `json:"sessionId"`
-	CWD       string    `json:"cwd"`
-	Title     string    `json:"title"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	SessionID     string                            `json:"sessionId"`
+	CWD           string                            `json:"cwd"`
+	Title         string                            `json:"title"`
+	Runtime       string                            `json:"runtime,omitempty"`
+	UpdatedAt     time.Time                         `json:"updatedAt"`
+	ConfigOptions []acpprotocol.SessionConfigOption `json:"configOptions,omitempty"`
 }
 
 // PromptUsage holds cumulative token usage returned by ACP PromptResponse.

@@ -596,6 +596,37 @@ func TestClient_SetModeEmitsWrappedModeChangedEvent(t *testing.T) {
 	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))
 }
 
+func TestClient_ListSessionsIncludesCachedConfigOptions(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := startTestClient(t, acp.NewClient(acp.Config{
+		Command:   bin,
+		RuntimeID: "claude-code",
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := client.NewSession(ctx, "/tmp", "")
+	require.NoError(t, err)
+	require.NoError(t, client.SetMode(ctx, "test-session-001", domain.ModeAcceptEdits))
+	require.NoError(t, client.SetConfigOption(ctx, "test-session-001", "model", "opus"))
+
+	sessions, err := client.ListSessions(ctx, "")
+	require.NoError(t, err)
+
+	var resolved *domain.SessionSummary
+	for i := range sessions {
+		if sessions[i].SessionID == "test-session-001" {
+			resolved = &sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, resolved)
+	assert.Equal(t, "claude-code", resolved.Runtime)
+	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(resolved.ConfigOptions, "mode"))
+	assert.Equal(t, "opus", findCurrentValue(resolved.ConfigOptions, "model"))
+}
+
 func TestClient_LoadSessionReturnsParseErrorForInvalidACPResponse(t *testing.T) {
 	bin := buildMockAgent(t)
 	client := newTestClientWithEnv(t, bin, map[string]string{

@@ -53,6 +53,9 @@ type Client struct {
 	msgMu      sync.Mutex
 	sessionMsg map[string]*sessionMsgState // sessionID → current streaming state
 
+	configMu            sync.RWMutex
+	sessionConfigOption map[string][]acpprotocol.SessionConfigOption // sessionID → authoritative config options
+
 	loadMu         sync.Mutex
 	loadInFlight   bool
 	historyDone    chan *historyDrainRequest
@@ -72,12 +75,13 @@ type pendingPermission struct {
 // NewClient creates a new ACP client with the given configuration.
 func NewClient(cfg Config) *Client {
 	return &Client{
-		cfg:            cfg,
-		events:         make(chan appwire.Event, 256),
-		pendingPerm:    make(map[string]*pendingPermission),
-		sessionMsg:     make(map[string]*sessionMsgState),
-		historyDone:    make(chan *historyDrainRequest, 1),
-		notifyLoopDone: make(chan struct{}),
+		cfg:                 cfg,
+		events:              make(chan appwire.Event, 256),
+		pendingPerm:         make(map[string]*pendingPermission),
+		sessionMsg:          make(map[string]*sessionMsgState),
+		sessionConfigOption: make(map[string][]acpprotocol.SessionConfigOption),
+		historyDone:         make(chan *historyDrainRequest, 1),
+		notifyLoopDone:      make(chan struct{}),
 	}
 }
 
@@ -191,8 +195,17 @@ func (c *Client) NewSession(ctx context.Context, cwd string, permissionMode stri
 	if modeApplied {
 		setConfigOptionCurrentValue(resp.ConfigOptions, "mode", permissionMode)
 	}
+	resp.ConfigOptions = normalizeSessionConfigOptions(resp.ConfigOptions, resp.Modes)
+	if modeApplied {
+		setConfigOptionCurrentValue(resp.ConfigOptions, "mode", permissionMode)
+	}
+	c.storeSessionConfigOptions(resp.SessionID, resp.ConfigOptions)
 
-	if ev := modeEvent(resp.SessionID, resolveCurrentModeID(permissionMode, modeApplied, resp.Modes, resp.ConfigOptions), nil); ev != nil {
+	if ev := modeConfigOptionEvent(
+		resp.SessionID,
+		resolveCurrentModeID(permissionMode, modeApplied, resp.Modes, resp.ConfigOptions),
+		resp.ConfigOptions,
+	); ev != nil {
 		c.emit(*ev)
 	}
 
@@ -284,13 +297,25 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd, permissionMode
 		}
 	}
 
-	if ev := modeEvent(sessionID, resolveCurrentModeID(permissionMode, modeApplied, loadResp.Modes, loadResp.ConfigOptions), nil); ev != nil {
-		c.emit(*ev)
-	}
-
 	// If model was re-applied, override the currentValue in configOptions.
 	if model != "" && model != "default" {
 		setConfigOptionCurrentValue(loadResp.ConfigOptions, "model", model)
+	}
+	loadResp.ConfigOptions = normalizeSessionConfigOptions(
+		loadResp.ConfigOptions,
+		loadResp.Modes,
+	)
+	if modeApplied {
+		setConfigOptionCurrentValue(loadResp.ConfigOptions, "mode", permissionMode)
+	}
+	c.storeSessionConfigOptions(sessionID, loadResp.ConfigOptions)
+
+	if ev := modeConfigOptionEvent(
+		sessionID,
+		resolveCurrentModeID(permissionMode, modeApplied, loadResp.Modes, loadResp.ConfigOptions),
+		loadResp.ConfigOptions,
+	); ev != nil {
+		c.emit(*ev)
 	}
 
 	if ev := configOptionEvent(sessionID, loadResp.ConfigOptions, "model", appwire.EventModelChanged, nil); ev != nil {
@@ -335,10 +360,12 @@ func (c *Client) ListSessions(ctx context.Context, cwd string) ([]domain.Session
 			updatedAt = time.Now()
 		}
 		summaries = append(summaries, domain.SessionSummary{
-			SessionID: s.SessionID,
-			CWD:       s.CWD,
-			Title:     s.Title,
-			UpdatedAt: updatedAt,
+			SessionID:     s.SessionID,
+			CWD:           s.CWD,
+			Title:         s.Title,
+			Runtime:       c.cfg.RuntimeID,
+			UpdatedAt:     updatedAt,
+			ConfigOptions: c.sessionConfigOptionsSnapshot(s.SessionID),
 		})
 	}
 	return summaries, nil
@@ -394,7 +421,12 @@ func (c *Client) SetMode(ctx context.Context, sessionID, modeID string) error {
 	if err != nil {
 		return fmt.Errorf("session/set_mode: %w", err)
 	}
-	if ev := modeEvent(sessionID, modeID, nil); ev != nil {
+	c.updateSessionConfigMode(sessionID, modeID)
+	if ev := modeConfigOptionEvent(
+		sessionID,
+		modeID,
+		c.sessionConfigOptionsSnapshot(sessionID),
+	); ev != nil {
 		c.emit(*ev)
 	}
 	return nil
@@ -419,6 +451,7 @@ func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value
 			return fmt.Errorf("parse session/set_config_option result: %w", err)
 		}
 	}
+	c.mergeSessionConfigOptions(sessionID, resp.ConfigOptions)
 	if ev := configOptionEvent(sessionID, resp.ConfigOptions, "model", appwire.EventModelChanged, nil); ev != nil {
 		c.emit(*ev)
 	}
@@ -886,7 +919,12 @@ func (c *Client) handleCurrentModeUpdate(sessionID string, raw json.RawMessage) 
 	if update.CurrentModeID == "" {
 		return
 	}
-	if ev := modeEvent(sessionID, update.CurrentModeID, &update); ev != nil {
+	c.updateSessionConfigMode(sessionID, update.CurrentModeID)
+	if ev := modeConfigOptionEvent(
+		sessionID,
+		update.CurrentModeID,
+		c.sessionConfigOptionsSnapshot(sessionID),
+	); ev != nil {
 		c.emit(*ev)
 	}
 }
@@ -897,6 +935,7 @@ func (c *Client) handleConfigOptionUpdate(sessionID string, raw json.RawMessage)
 		log.Printf("[acp] failed to parse config_option_update: %v", err)
 		return
 	}
+	c.mergeSessionConfigOptions(sessionID, update.ConfigOptions)
 	if ev := configOptionEvent(sessionID, update.ConfigOptions, "model", appwire.EventModelChanged, &update); ev != nil {
 		c.emit(*ev)
 	}
@@ -1020,6 +1059,71 @@ func (c *Client) cancelPendingPermissions(sessionID string) error {
 	return firstErr
 }
 
+func (c *Client) storeSessionConfigOptions(sessionID string, opts []acpprotocol.SessionConfigOption) {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	c.sessionConfigOption[sessionID] = append([]acpprotocol.SessionConfigOption(nil), opts...)
+}
+
+func (c *Client) mergeSessionConfigOptions(sessionID string, opts []acpprotocol.SessionConfigOption) {
+	if len(opts) == 0 {
+		return
+	}
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+
+	current := append([]acpprotocol.SessionConfigOption(nil), c.sessionConfigOption[sessionID]...)
+	for _, incoming := range opts {
+		replaced := false
+		for i, existing := range current {
+			if existing.ID == incoming.ID {
+				current[i] = incoming
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			current = append(current, incoming)
+		}
+	}
+	c.sessionConfigOption[sessionID] = current
+}
+
+func (c *Client) updateSessionConfigMode(sessionID, modeID string) {
+	if sessionID == "" || modeID == "" {
+		return
+	}
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+
+	current := append([]acpprotocol.SessionConfigOption(nil), c.sessionConfigOption[sessionID]...)
+	modeOption, ok := modeConfigOptionFromState(current, &acpprotocol.SessionModeState{
+		CurrentModeID: modeID,
+	})
+	if !ok {
+		return
+	}
+	for i, opt := range current {
+		if configOptionCategory(opt) != "mode" {
+			continue
+		}
+		current[i] = modeOption
+		c.sessionConfigOption[sessionID] = current
+		return
+	}
+	c.sessionConfigOption[sessionID] = append(current, modeOption)
+}
+
+func (c *Client) sessionConfigOptionsSnapshot(sessionID string) []acpprotocol.SessionConfigOption {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	opts := c.sessionConfigOption[sessionID]
+	if len(opts) == 0 {
+		return nil
+	}
+	return append([]acpprotocol.SessionConfigOption(nil), opts...)
+}
+
 // configOptionEvent builds an event for a config option matching the given category.
 // Returns nil if no matching option is found.
 func configOptionEvent(
@@ -1107,11 +1211,101 @@ func configOptionCategory(opt acpprotocol.SessionConfigOption) string {
 	return *opt.Category
 }
 
-func modeEvent(
+func normalizeSessionConfigOptions(
+	opts []acpprotocol.SessionConfigOption,
+	modes *acpprotocol.SessionModeState,
+) []acpprotocol.SessionConfigOption {
+	current := append([]acpprotocol.SessionConfigOption(nil), opts...)
+	modeOption, hasModeOption := modeConfigOptionFromState(current, modes)
+	if !hasModeOption {
+		return current
+	}
+
+	for i, opt := range current {
+		if configOptionCategory(opt) != "mode" {
+			continue
+		}
+		current[i] = modeOption
+		return current
+	}
+	return append(current, modeOption)
+}
+
+func modeConfigOptionFromState(
+	opts []acpprotocol.SessionConfigOption,
+	modes *acpprotocol.SessionModeState,
+) (acpprotocol.SessionConfigOption, bool) {
+	var existing *acpprotocol.SessionConfigOption
+	for i := range opts {
+		if configOptionCategory(opts[i]) == "mode" {
+			existing = &opts[i]
+			break
+		}
+	}
+
+	modeCategory := "mode"
+	modeID := "mode"
+	modeName := "Mode"
+	modeType := "select"
+	if existing != nil {
+		if existing.ID != "" {
+			modeID = existing.ID
+		}
+		if existing.Name != "" {
+			modeName = existing.Name
+		}
+		if existing.Type != "" {
+			modeType = existing.Type
+		}
+	}
+
+	currentValue := ""
+	if modes != nil {
+		currentValue = modes.CurrentModeID
+	}
+	if currentValue == "" && existing != nil {
+		currentValue = existing.CurrentValue
+	}
+	if currentValue == "" {
+		return acpprotocol.SessionConfigOption{}, false
+	}
+
+	options := acpprotocol.SessionConfigSelectOptions{}
+	if modes != nil && len(modes.AvailableModes) > 0 {
+		ungrouped := make([]acpprotocol.SessionConfigSelectOption, 0, len(modes.AvailableModes))
+		for _, mode := range modes.AvailableModes {
+			ungrouped = append(ungrouped, acpprotocol.SessionConfigSelectOption{
+				Value:       mode.ID,
+				Name:        mode.Name,
+				Description: mode.Description,
+			})
+		}
+		options.Ungrouped = ungrouped
+	} else if existing != nil {
+		options = existing.Options
+	}
+
+	return acpprotocol.SessionConfigOption{
+		ID:           modeID,
+		Name:         modeName,
+		Type:         modeType,
+		Category:     &modeCategory,
+		CurrentValue: currentValue,
+		Options:      options,
+	}, true
+}
+
+func modeConfigOptionEvent(
 	sessionID, modeID string,
-	acpUpdate *acpprotocol.CurrentModeUpdate,
+	opts []acpprotocol.SessionConfigOption,
 ) *appwire.Event {
 	if modeID == "" {
+		return nil
+	}
+	modeOption, ok := modeConfigOptionFromState(opts, &acpprotocol.SessionModeState{
+		CurrentModeID: modeID,
+	})
+	if !ok {
 		return nil
 	}
 	return &appwire.Event{
@@ -1119,7 +1313,9 @@ func modeEvent(
 		SessionID: sessionID,
 		At:        time.Now(),
 		ModeChanged: &appwire.ModeChangedEvent{
-			ACPCurrentMode: acpUpdate,
+			ACPConfigOption: &acpprotocol.ConfigOptionUpdate{
+				ConfigOptions: []acpprotocol.SessionConfigOption{modeOption},
+			},
 			App: appwire.ModeChangedEventApp{
 				CurrentModeID: modeID,
 			},
