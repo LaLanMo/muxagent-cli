@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildEnv_NoOverrides(t *testing.T) {
@@ -106,31 +108,28 @@ func TestBuildEnv_OverrideExistingVar(t *testing.T) {
 func TestTransportStopReapsProcessAfterWriteFailure(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "close-stdin-and-wait.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec 0<&-\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n"), 0o755); err != nil {
+	ready := filepath.Join(dir, "stdin-closed.ready")
+	scriptBody := "#!/bin/sh\nready_file=\"$1\"\nexec 0<&-\n: > \"$ready_file\"\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n"
+	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	transport := NewTransport(script, nil, dir, nil)
+	transport := NewTransport(script, []string{ready}, dir, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := transport.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	var notifyErr error
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		notifyErr = transport.Notify("session/cancel", map[string]any{
-			"sessionId": "test-session-001",
-		})
-		if notifyErr != nil {
-			break
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	if notifyErr == nil {
-		t.Fatal("expected notify to fail after child closed stdin")
-	}
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	}, 5*time.Second, 25*time.Millisecond, "expected child to confirm stdin closure")
+
+	notifyErr := transport.Notify("session/cancel", map[string]any{
+		"sessionId": "test-session-001",
+	})
+	require.Error(t, notifyErr, "expected notify to fail after child closed stdin")
 	if transport.IsAlive() {
 		t.Fatal("expected transport to be marked dead after write failure")
 	}
