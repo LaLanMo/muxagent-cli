@@ -31,11 +31,12 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 	require.NoError(t, store.CreateTask(ctx, task))
 
 	run := taskdomain.NodeRun{
-		ID:        "run-1",
-		TaskID:    task.ID,
-		NodeName:  "upsert_plan",
-		Status:    taskdomain.NodeRunAwaitingUser,
-		SessionID: "session-123",
+		ID:            "run-1",
+		TaskID:        task.ID,
+		NodeName:      "upsert_plan",
+		Status:        taskdomain.NodeRunAwaitingUser,
+		SessionID:     "session-123",
+		FailureReason: "interrupted_by_user",
 		Result: map[string]interface{}{
 			"file_paths": []interface{}{"/tmp/project/.muxagent/tasks/task-1/artifacts/01-upsert_plan/plan.md"},
 		},
@@ -74,6 +75,7 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
 	assert.Equal(t, run.SessionID, runs[0].SessionID)
+	assert.Equal(t, run.FailureReason, runs[0].FailureReason)
 	assert.Len(t, runs[0].Clarifications, 1)
 
 	cfg, err := taskconfig.LoadDefault()
@@ -155,6 +157,7 @@ func TestStoreSchemaDeclaresJSONValidityChecks(t *testing.T) {
 	assert.Contains(t, tableSQL, "json_valid(result_json)")
 	assert.Contains(t, tableSQL, "json_valid(clarifications_json)")
 	assert.Contains(t, tableSQL, "json_valid(triggered_by_json)")
+	assert.Contains(t, tableSQL, "failure_reason")
 }
 
 func TestNormalizeWorkDirResolvesSymlinks(t *testing.T) {

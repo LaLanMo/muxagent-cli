@@ -34,6 +34,7 @@ const (
 		node_name TEXT NOT NULL,
 		status TEXT NOT NULL,
 		session_id TEXT,
+		failure_reason TEXT,
 		result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
 		clarifications_json TEXT NOT NULL CHECK (json_valid(clarifications_json)),
 		triggered_by_json TEXT CHECK (triggered_by_json IS NULL OR json_valid(triggered_by_json)),
@@ -96,6 +97,9 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.ensureNodeRunsColumns(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -155,11 +159,12 @@ func (s *Store) SaveNodeRun(ctx context.Context, run taskdomain.NodeRun) error {
 	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO node_runs (
-			id, task_id, node_name, status, session_id, result_json, clarifications_json, triggered_by_json, started_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, task_id, node_name, status, session_id, failure_reason, result_json, clarifications_json, triggered_by_json, started_at, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			session_id = excluded.session_id,
+			failure_reason = excluded.failure_reason,
 			result_json = excluded.result_json,
 			clarifications_json = excluded.clarifications_json,
 			triggered_by_json = excluded.triggered_by_json,
@@ -170,6 +175,7 @@ func (s *Store) SaveNodeRun(ctx context.Context, run taskdomain.NodeRun) error {
 		run.NodeName,
 		string(run.Status),
 		nullableString(run.SessionID),
+		nullableString(run.FailureReason),
 		resultJSON,
 		string(clarificationsJSON),
 		triggeredByJSON,
@@ -184,14 +190,14 @@ func (s *Store) SaveNodeRun(ctx context.Context, run taskdomain.NodeRun) error {
 
 func (s *Store) GetNodeRun(ctx context.Context, runID string) (taskdomain.NodeRun, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, task_id, node_name, status, session_id, result_json, clarifications_json, triggered_by_json, started_at, completed_at
+		SELECT id, task_id, node_name, status, session_id, failure_reason, result_json, clarifications_json, triggered_by_json, started_at, completed_at
 		FROM node_runs WHERE id = ?`, runID)
 	return scanNodeRun(row)
 }
 
 func (s *Store) ListNodeRunsByTask(ctx context.Context, taskID string) ([]taskdomain.NodeRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, task_id, node_name, status, session_id, result_json, clarifications_json, triggered_by_json, started_at, completed_at
+		SELECT id, task_id, node_name, status, session_id, failure_reason, result_json, clarifications_json, triggered_by_json, started_at, completed_at
 		FROM node_runs
 		WHERE task_id = ?
 		ORDER BY started_at, id`, taskID)
@@ -213,6 +219,28 @@ func (s *Store) ListNodeRunsByTask(ctx context.Context, taskID string) ([]taskdo
 		}
 		return runs[i].StartedAt.Before(runs[j].StartedAt)
 	})
+	return runs, rows.Err()
+}
+
+func (s *Store) ListNodeRunsByStatus(ctx context.Context, status taskdomain.NodeRunStatus) ([]taskdomain.NodeRun, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, node_name, status, session_id, failure_reason, result_json, clarifications_json, triggered_by_json, started_at, completed_at
+		FROM node_runs
+		WHERE status = ?
+		ORDER BY started_at, id`, string(status))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []taskdomain.NodeRun
+	for rows.Next() {
+		run, err := scanNodeRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
 	return runs, rows.Err()
 }
 
@@ -247,7 +275,7 @@ func scanNodeRun(scanner interface {
 	var (
 		run                                taskdomain.NodeRun
 		status                             string
-		sessionID                          sql.NullString
+		sessionID, failureReason           sql.NullString
 		resultJSON, clarificationsJSON     sql.NullString
 		triggeredByJSON, completedAtString sql.NullString
 		startedAtString                    string
@@ -258,6 +286,7 @@ func scanNodeRun(scanner interface {
 		&run.NodeName,
 		&status,
 		&sessionID,
+		&failureReason,
 		&resultJSON,
 		&clarificationsJSON,
 		&triggeredByJSON,
@@ -268,6 +297,7 @@ func scanNodeRun(scanner interface {
 	}
 	run.Status = taskdomain.NodeRunStatus(status)
 	run.SessionID = sessionID.String
+	run.FailureReason = failureReason.String
 	var err error
 	run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAtString)
 	if err != nil {
@@ -316,6 +346,44 @@ func nullableString(value string) interface{} {
 		return nil
 	}
 	return value
+}
+
+func (s *Store) ensureNodeRunsColumns(ctx context.Context) error {
+	hasFailureReason, err := s.tableHasColumn(ctx, "node_runs", "failure_reason")
+	if err != nil {
+		return err
+	}
+	if hasFailureReason {
+		return nil
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE node_runs ADD COLUMN failure_reason TEXT`)
+	return err
+}
+
+func (s *Store) tableHasColumn(ctx context.Context, tableName, columnName string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+tableName+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typ        string
+			notNull    int
+			defaultVal sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
+			return false, err
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func DBPath(workDir string) string {

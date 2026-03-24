@@ -2,8 +2,10 @@ package taskruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
@@ -86,24 +88,7 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		return progressErr
 	}
 	if err != nil {
-		now := time.Now().UTC()
-		run.Status = taskdomain.NodeRunFailed
-		run.CompletedAt = &now
-		if saveErr := s.store.SaveNodeRun(context.Background(), run); saveErr != nil {
-			return saveErr
-		}
-		view, viewErr := s.refreshTaskView(context.Background(), task.ID)
-		if viewErr == nil {
-			s.publish(RunEvent{
-				Type:      EventTaskFailed,
-				TaskID:    task.ID,
-				NodeRunID: run.ID,
-				NodeName:  run.NodeName,
-				TaskView:  &view,
-				Error:     &RunError{Message: err.Error()},
-			})
-		}
-		return err
+		return s.failRun(context.Background(), task, cfg, run, err)
 	}
 	if result.SessionID != "" {
 		run.SessionID = result.SessionID
@@ -116,6 +101,7 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		}
 		now := time.Now().UTC()
 		run.Status = taskdomain.NodeRunAwaitingUser
+		run.FailureReason = ""
 		run.Clarifications = append(run.Clarifications, taskdomain.ClarificationExchange{
 			Request:     *result.Clarification,
 			RequestedAt: now,
@@ -144,6 +130,7 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		now := time.Now().UTC()
 		run.Result = result.Result
 		run.Status = taskdomain.NodeRunDone
+		run.FailureReason = ""
 		run.CompletedAt = &now
 		if err := s.store.SaveNodeRun(context.Background(), run); err != nil {
 			return err
@@ -250,6 +237,7 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 func (s *Service) failRun(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun, runErr error) error {
 	now := time.Now().UTC()
 	run.Status = taskdomain.NodeRunFailed
+	run.FailureReason = s.failureReasonForError(runErr)
 	run.CompletedAt = &now
 	if err := s.store.SaveNodeRun(ctx, run); err != nil {
 		return err
@@ -267,6 +255,21 @@ func (s *Service) failRun(ctx context.Context, task taskdomain.Task, cfg *taskco
 		Error:     &RunError{Message: runErr.Error()},
 	})
 	return runErr
+}
+
+func (s *Service) failureReasonForError(runErr error) string {
+	if runErr == nil {
+		return ""
+	}
+	if shutdownReason := s.currentShutdownReason(); shutdownReason != "" {
+		if errors.Is(runErr, context.Canceled) {
+			return shutdownReason
+		}
+		if strings.Contains(strings.ToLower(runErr.Error()), "context canceled") {
+			return shutdownReason
+		}
+	}
+	return runErr.Error()
 }
 
 func initialStatus(def taskconfig.NodeDefinition) taskdomain.NodeRunStatus {

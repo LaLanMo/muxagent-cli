@@ -2,6 +2,7 @@ package tasktui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image/color"
 	"path/filepath"
@@ -27,6 +28,7 @@ type RuntimeService interface {
 	ListTaskViews(ctx context.Context, workDir string) ([]taskdomain.TaskView, error)
 	LoadTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, *taskconfig.Config, error)
 	BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*taskruntime.InputRequest, error)
+	PrepareShutdown(ctx context.Context) error
 	Close() error
 }
 
@@ -40,15 +42,24 @@ type App struct {
 
 func (a App) Run(ctx context.Context) error {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	runDone := make(chan error, 1)
 	go func() {
-		_ = a.Service.Run(runtimeCtx)
+		runDone <- a.Service.Run(runtimeCtx)
 	}()
 
 	model := NewModel(a.Service, a.WorkDir, a.ConfigOverride, a.LaunchConfig, a.Version)
 	_, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	shutdownErr := a.Service.PrepareShutdown(context.Background())
+	cancel()
+	runErr := <-runDone
 	if err != nil {
 		return err
+	}
+	if shutdownErr != nil {
+		return shutdownErr
+	}
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		return runErr
 	}
 	return nil
 }
@@ -195,9 +206,6 @@ func (m Model) View() tea.View {
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, m.keys.quit):
-		if m.service != nil {
-			m.service.Dispatch(taskruntime.RunCommand{Type: taskruntime.CommandShutdown})
-		}
 		return m, tea.Quit
 	case keyMatches(msg, m.keys.newTask):
 		cmd := m.openNewTask()
@@ -1477,7 +1485,7 @@ func (m Model) renderClarificationFooter(width int) string {
 
 func (m Model) renderFailureFooter(width int) string {
 	retryability := m.currentRetryability()
-	body := firstNonEmpty(m.errorText, "Review the failed node output and try again.")
+	body := firstNonEmpty(m.errorText, m.currentFailureMessage(), "Review the failed node output and try again.")
 	if retryability != nil && !retryability.RetryAllowed {
 		body += fmt.Sprintf("\n\nRetry limit reached for %s (%d/%d). Press Shift+R to force retry.", retryability.Run.NodeName, retryability.NextIteration-1, retryability.MaxIterations)
 	}
@@ -1502,6 +1510,16 @@ func (m Model) failureHint() string {
 	}
 	parts = append(parts, "Ctrl+N new task")
 	return strings.Join(parts, "  ")
+}
+
+func (m Model) currentFailureMessage() string {
+	if m.current == nil {
+		return ""
+	}
+	if run := taskdomain.LatestOpenFailedRun(currentTaskRuns(*m.current)); run != nil {
+		return taskdomain.DisplayFailureReason(run.FailureReason)
+	}
+	return ""
 }
 
 func (m Model) detailHint(base string, includeNewTask bool) string {
@@ -1600,6 +1618,9 @@ func nodeRunTimestamp(run taskdomain.NodeRunView) time.Time {
 }
 
 func summarizeNodeRun(run taskdomain.NodeRunView, current *taskdomain.TaskView) string {
+	if run.Status == taskdomain.NodeRunFailed && run.FailureReason != "" {
+		return taskdomain.DisplayFailureReason(run.FailureReason)
+	}
 	if run.Result != nil {
 		if approved, ok := run.Result["approved"].(bool); ok {
 			return fmt.Sprintf("approved: %t", approved)

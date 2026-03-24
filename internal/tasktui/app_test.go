@@ -822,4 +822,5 @@ func (f *fakeService) LoadTaskView(ctx context.Context, taskID string) (taskdoma
 func (f *fakeService) BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*taskruntime.InputRequest, error) {
 	return f.inputs[nodeRunID], nil
 }
-func (f *fakeService) Close() error { return nil }
+func (f *fakeService) PrepareShutdown(ctx context.Context) error { return nil }
+func (f *fakeService) Close() error                              { return nil }

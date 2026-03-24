@@ -25,10 +25,11 @@ type Service struct {
 	executor       taskexecutor.Executor
 	bus            *LocalBus
 
-	mu          sync.Mutex
-	rootCtx     context.Context
-	taskCancels map[string]context.CancelFunc
-	taskCtxs    map[string]context.Context
+	mu             sync.Mutex
+	rootCtx        context.Context
+	taskCancels    map[string]context.CancelFunc
+	taskCtxs       map[string]context.Context
+	shutdownReason string
 }
 
 func NewService(workDir, configOverride string, executor taskexecutor.Executor) (*Service, error) {
@@ -37,7 +38,7 @@ func NewService(workDir, configOverride string, executor taskexecutor.Executor) 
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	service := &Service{
 		workDir:        workDir,
 		configOverride: configOverride,
 		store:          store,
@@ -46,7 +47,12 @@ func NewService(workDir, configOverride string, executor taskexecutor.Executor) 
 		bus:            NewLocalBus(16, 64),
 		taskCancels:    map[string]context.CancelFunc{},
 		taskCtxs:       map[string]context.Context{},
-	}, nil
+	}
+	if err := service.reconcileStaleRunning(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return service, nil
 }
 
 func (s *Service) Close() error {
@@ -58,6 +64,12 @@ func (s *Service) Close() error {
 	s.taskCtxs = map[string]context.Context{}
 	s.mu.Unlock()
 	return s.store.Close()
+}
+
+func (s *Service) PrepareShutdown(ctx context.Context) error {
+	s.setShutdownReason(taskdomain.FailureReasonInterruptedByUser)
+	s.cancelTasks()
+	return s.failActiveRunningNodeRuns(ctx, taskdomain.FailureReasonInterruptedByUser)
 }
 
 func (s *Service) Events() <-chan RunEvent {
@@ -73,6 +85,7 @@ func (s *Service) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			s.cancelTasks()
 			return ctx.Err()
 		case cmd := <-s.bus.Commands:
 			if err := s.handleCommand(ctx, cmd); err != nil {
@@ -98,7 +111,7 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	case CommandRetryNode:
 		return s.retryNode(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Force)
 	case CommandShutdown:
-		return s.Close()
+		return s.PrepareShutdown(ctx)
 	default:
 		return fmt.Errorf("unsupported command %q", cmd.Type)
 	}
@@ -183,6 +196,7 @@ func (s *Service) submitInput(ctx context.Context, taskID, nodeRunID string, pay
 		}
 		run.Result = result
 		run.Status = taskdomain.NodeRunDone
+		run.FailureReason = ""
 		run.CompletedAt = &now
 		if err := s.store.SaveNodeRun(ctx, run); err != nil {
 			return err
@@ -200,6 +214,7 @@ func (s *Service) submitInput(ctx context.Context, taskID, nodeRunID string, pay
 	run.Clarifications[len(run.Clarifications)-1].Response = response
 	run.Clarifications[len(run.Clarifications)-1].AnsweredAt = &now
 	run.Status = taskdomain.NodeRunRunning
+	run.FailureReason = ""
 	if err := s.store.SaveNodeRun(ctx, run); err != nil {
 		return err
 	}
@@ -235,6 +250,14 @@ func (s *Service) publish(event RunEvent) {
 	}
 }
 
+func (s *Service) cancelTasks() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, cancel := range s.taskCancels {
+		cancel()
+	}
+}
+
 func (s *Service) lookupTaskContext(taskID string) context.Context {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -245,6 +268,20 @@ func (s *Service) lookupTaskContext(taskID string) context.Context {
 		return context.Background()
 	}
 	return s.rootCtx
+}
+
+func (s *Service) setShutdownReason(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shutdownReason == "" {
+		s.shutdownReason = reason
+	}
+}
+
+func (s *Service) currentShutdownReason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shutdownReason
 }
 
 func firstNonEmpty(values ...string) string {

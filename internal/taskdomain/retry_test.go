@@ -38,11 +38,11 @@ func TestDeriveTaskStatusReturnsDoneAfterSuccessfulRetry(t *testing.T) {
 	runs := []NodeRun{
 		{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: NodeRunFailed, StartedAt: now, CompletedAt: timePtr(now)},
 		{
-			ID:        "run-2",
-			TaskID:    "task-1",
-			NodeName:  "implement",
-			Status:    NodeRunDone,
-			StartedAt: now.Add(time.Second),
+			ID:          "run-2",
+			TaskID:      "task-1",
+			NodeName:    "implement",
+			Status:      NodeRunDone,
+			StartedAt:   now.Add(time.Second),
 			CompletedAt: timePtr(now.Add(2 * time.Second)),
 			TriggeredBy: &TriggeredBy{
 				NodeRunID: "run-1",
@@ -50,11 +50,11 @@ func TestDeriveTaskStatusReturnsDoneAfterSuccessfulRetry(t *testing.T) {
 			},
 		},
 		{
-			ID:        "run-3",
-			TaskID:    "task-1",
-			NodeName:  "done",
-			Status:    NodeRunDone,
-			StartedAt: now.Add(3 * time.Second),
+			ID:          "run-3",
+			TaskID:      "task-1",
+			NodeName:    "done",
+			Status:      NodeRunDone,
+			StartedAt:   now.Add(3 * time.Second),
 			CompletedAt: timePtr(now.Add(4 * time.Second)),
 			TriggeredBy: &TriggeredBy{
 				NodeRunID: "run-2",

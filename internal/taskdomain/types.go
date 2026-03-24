@@ -40,6 +40,7 @@ type NodeRun struct {
 	NodeName       string
 	Status         NodeRunStatus
 	SessionID      string
+	FailureReason  string
 	Result         map[string]interface{}
 	Clarifications []ClarificationExchange
 	TriggeredBy    *TriggeredBy

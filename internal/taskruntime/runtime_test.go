@@ -14,6 +14,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
+	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -553,6 +554,72 @@ func TestServiceRetryNodeRequiresForceAfterMaxIterations(t *testing.T) {
 	require.Len(t, runs, 3)
 	require.NotNil(t, runs[1].TriggeredBy)
 	assert.Equal(t, taskdomain.TriggerReasonManualRetryForce, runs[1].TriggeredBy.Reason)
+}
+
+func TestNewServiceReconcilesStaleRunningRunsOnStartup(t *testing.T) {
+	workDir := t.TempDir()
+	store, err := taskstore.Open(workDir)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	task := taskdomain.Task{
+		ID:          "task-stale",
+		Description: "stale",
+		WorkDir:     workDir,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	require.NoError(t, store.CreateTask(context.Background(), task))
+	_, err = taskconfig.Materialize(workDir, task.ID, "")
+	require.NoError(t, err)
+	require.NoError(t, store.SaveNodeRun(context.Background(), taskdomain.NodeRun{
+		ID:        "run-stale",
+		TaskID:    task.ID,
+		NodeName:  "upsert_plan",
+		Status:    taskdomain.NodeRunRunning,
+		StartedAt: now,
+	}))
+	require.NoError(t, store.Close())
+
+	service, err := NewService(workDir, "", &fakeExecutor{steps: map[string][]taskexecutor.Result{}})
+	require.NoError(t, err)
+	defer service.Close()
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, taskdomain.NodeRunFailed, runs[0].Status)
+	assert.Equal(t, taskdomain.FailureReasonOrphanedAfterRestart, runs[0].FailureReason)
+	require.NotNil(t, runs[0].CompletedAt)
+}
+
+func TestPrepareShutdownMarksRunningRunsInterrupted(t *testing.T) {
+	blockRelease := make(chan struct{})
+	blockStarted := make(chan struct{}, 1)
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), &blockingExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
+		},
+		blockNode:    "implement",
+		blockRelease: blockRelease,
+		blockStarted: blockStarted,
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "shutdown", WorkDir: service.workDir})
+	<-blockStarted
+	require.NoError(t, service.PrepareShutdown(context.Background()))
+	cancel()
+	close(blockRelease)
+
+	runs, err := service.store.ListNodeRunsByStatus(context.Background(), taskdomain.NodeRunFailed)
+	require.NoError(t, err)
+	require.NotEmpty(t, runs)
+	assert.Equal(t, taskdomain.FailureReasonInterruptedByUser, runs[0].FailureReason)
 }
 
 type fakeExecutor struct {

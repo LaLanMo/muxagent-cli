@@ -5,6 +5,9 @@ import "github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 const (
 	TriggerReasonManualRetry      = "manual_retry"
 	TriggerReasonManualRetryForce = "manual_retry_force"
+
+	FailureReasonInterruptedByUser    = "interrupted_by_user"
+	FailureReasonOrphanedAfterRestart = "orphaned_after_restart"
 )
 
 type Retryability struct {
@@ -102,4 +105,17 @@ func RetryabilityForTask(cfg *taskconfig.Config, runs []NodeRun) *Retryability {
 		return info
 	}
 	return nil
+}
+
+func DisplayFailureReason(reason string) string {
+	switch reason {
+	case "":
+		return ""
+	case FailureReasonInterruptedByUser:
+		return "Interrupted by user."
+	case FailureReasonOrphanedAfterRestart:
+		return "Muxagent restarted while this step was running."
+	default:
+		return reason
+	}
 }
