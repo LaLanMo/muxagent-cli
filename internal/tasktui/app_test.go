@@ -316,6 +316,53 @@ func TestDetailScreenShowsLatestFourRunningStreamMessagesAndThreadID(t *testing.
 	assert.Contains(t, view, "stream-five")
 }
 
+func TestNodeProgressDoesNotReopenCollapsedArtifacts(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	now := time.Now().UTC()
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusRunning,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: now}},
+		},
+	}
+	model.screen = ScreenRunning
+	model.artifactCollapsed = true
+	model.syncComponents()
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "implement",
+		Progress:  &taskruntime.ProgressInfo{Message: "stream update"},
+	})
+	model = next.(Model)
+
+	assert.True(t, model.artifactCollapsed)
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Tab expand artifacts")
+	assert.NotContains(t, view, "Files")
+}
+
+func TestProgressLinesTruncateLongMessagesInsteadOfWrapping(t *testing.T) {
+	lines := progressLines([]string{
+		`{"type":"item.updated","message":"` + strings.Repeat("artifact stream ", 12) + `"}`,
+	}, 18)
+
+	require.Len(t, lines, 1)
+	stripped := ansi.Strip(lines[0])
+	assert.NotContains(t, stripped, "\n")
+	assert.Contains(t, stripped, "…")
+}
+
 func TestCompletedDetailShowsThreadIDWithoutOldStreamMessages(t *testing.T) {
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
