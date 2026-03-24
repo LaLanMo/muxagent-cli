@@ -1,0 +1,610 @@
+package taskconfig
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestLoadDefaultConfig(t *testing.T) {
+	cfg, err := LoadDefault()
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, cfg.Version)
+	assert.Equal(t, "upsert_plan", cfg.Topology.Entry)
+	assert.Len(t, cfg.Topology.Nodes, 6)
+	assert.Equal(t, NodeTypeHuman, cfg.NodeDefinitions["approve_plan"].Type)
+	assert.Equal(t, NodeTypeAgent, cfg.NodeDefinitions["verify"].Type)
+	assert.Equal(t, NodeTypeTerminal, cfg.NodeDefinitions["done"].Type)
+}
+
+func TestLoadRejectsInvalidConfigs_TableDriven(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name: "unknown top level field",
+			content: `
+version: 1
+unexpected: true
+topology:
+  max_iterations: 2
+  entry: start
+  nodes:
+    - name: start
+  edges: []
+node_definitions:
+  start:
+    system_prompt: ./prompts/start.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+`,
+			wantErr: "field unexpected not found",
+		},
+		{
+			name: "missing version",
+			content: `
+topology:
+  max_iterations: 2
+  entry: start
+  nodes:
+    - name: start
+  edges: []
+node_definitions:
+  start:
+    system_prompt: ./prompts/start.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+`,
+			wantErr: "version is required",
+		},
+		{
+			name: "unknown edge condition field",
+			content: `
+version: 1
+topology:
+  max_iterations: 2
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+      when:
+        field: approved
+        equals: true
+        extra: nope
+node_definitions:
+  start:
+    system_prompt: ./prompts/start.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        approved:
+          type: boolean
+  done:
+    system_prompt: ./prompts/done.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+`,
+			wantErr: "unsupported edge condition field",
+		},
+		{
+			name: "zero topology max iterations",
+			content: `
+version: 1
+topology:
+  max_iterations: 0
+  entry: start
+  nodes:
+    - name: start
+  edges: []
+node_definitions:
+  start:
+    system_prompt: ./prompts/start.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+`,
+			wantErr: "topology.max_iterations must be > 0",
+		},
+		{
+			name: "zero node max iterations",
+			content: `
+version: 1
+topology:
+  max_iterations: 2
+  entry: start
+  nodes:
+    - name: start
+      max_iterations: 0
+  edges: []
+node_definitions:
+  start:
+    system_prompt: ./prompts/start.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+`,
+			wantErr: "max_iterations must be > 0",
+		},
+		{
+			name: "human clarification rounds field",
+			content: `
+version: 1
+topology:
+  max_iterations: 2
+  entry: approve
+  nodes:
+    - name: approve
+  edges: []
+node_definitions:
+  approve:
+    type: human
+    max_clarification_rounds: 0
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        approved:
+          type: boolean
+`,
+			wantErr: "cannot define max_clarification_rounds",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfigFile(t, tc.content)
+
+			_, err := Load(path)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestValidateRejectsInvalidConfigs_TableDriven(t *testing.T) {
+	cases := []struct {
+		name    string
+		build   func(t *testing.T) *Config
+		wantErr string
+	}{
+		{
+			name: "mixed edge kinds",
+			build: func(t *testing.T) *Config {
+				cfg := booleanBranchFixture()
+				cfg.Topology.Edges = append(cfg.Topology.Edges, Edge{From: "start", To: "fallback"})
+				return cfg
+			},
+			wantErr: "mixes unconditional and conditional edges",
+		},
+		{
+			name: "multiple else edges",
+			build: func(t *testing.T) *Config {
+				cfg := booleanElseFixture()
+				cfg.Topology.Edges = append(cfg.Topology.Edges, Edge{From: "start", To: "done", When: EdgeCondition{Kind: ConditionElse}})
+				return cfg
+			},
+			wantErr: "multiple else edges",
+		},
+		{
+			name: "join without two incoming edges",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				cfg.Topology.Nodes[1].Join = JoinAll
+				return cfg
+			},
+			wantErr: "fewer than 2 incoming edges",
+		},
+		{
+			name: "stray else",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				cfg.NodeDefinitions["start"] = booleanNode("approved")
+				cfg.Topology.Edges = []Edge{
+					{From: "start", To: "done", When: EdgeCondition{Kind: ConditionElse}},
+				}
+				return cfg
+			},
+			wantErr: "else edge without explicit conditional siblings",
+		},
+		{
+			name: "missing conditional field",
+			build: func(t *testing.T) *Config {
+				cfg := booleanBranchFixture()
+				cfg.Topology.Edges[0].When.Field = "missing"
+				cfg.Topology.Edges[1].When.Field = "missing"
+				return cfg
+			},
+			wantErr: "does not exist in result_schema",
+		},
+		{
+			name: "conditional branches on different fields",
+			build: func(t *testing.T) *Config {
+				cfg := booleanBranchFixture()
+				start := cfg.NodeDefinitions["start"]
+				start.ResultSchema.Properties["other"] = &JSONSchema{Type: "boolean"}
+				start.ResultSchema.Required = append(start.ResultSchema.Required, "other")
+				cfg.NodeDefinitions["start"] = start
+				cfg.Topology.Edges[1].When.Field = "other"
+				return cfg
+			},
+			wantErr: "must all reference the same field",
+		},
+		{
+			name: "duplicate conditional value",
+			build: func(t *testing.T) *Config {
+				cfg := booleanBranchFixture()
+				cfg.Topology.Edges[1].When.Equals = true
+				return cfg
+			},
+			wantErr: "duplicate conditional branch",
+		},
+		{
+			name: "condition value type mismatch",
+			build: func(t *testing.T) *Config {
+				cfg := booleanBranchFixture()
+				cfg.Topology.Edges[0].When.Equals = "yes"
+				return cfg
+			},
+			wantErr: "when.equals must be a boolean",
+		},
+		{
+			name: "boolean condition without else or full coverage",
+			build: func(t *testing.T) *Config {
+				cfg := booleanBranchFixture()
+				cfg.Topology.Edges = cfg.Topology.Edges[:1]
+				return cfg
+			},
+			wantErr: "both true and false or define else",
+		},
+		{
+			name: "open domain string condition without else",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				cfg.NodeDefinitions["start"] = stringNode("mode")
+				cfg.Topology.Edges = []Edge{
+					{From: "start", To: "done", When: EdgeCondition{Kind: ConditionWhen, Field: "mode", Equals: "ship"}},
+				}
+				return cfg
+			},
+			wantErr: "must define else when branching on open-domain field",
+		},
+		{
+			name: "non exhaustive enum without else",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				cfg.NodeDefinitions["start"] = enumStringNode("mode", "ship", "skip")
+				cfg.Topology.Edges = []Edge{
+					{From: "start", To: "done", When: EdgeCondition{Kind: ConditionWhen, Field: "mode", Equals: "ship"}},
+				}
+				return cfg
+			},
+			wantErr: "must cover every enum value or define else",
+		},
+		{
+			name: "root additionalProperties true",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				allow := true
+				start := cfg.NodeDefinitions["start"]
+				start.ResultSchema.AdditionalProperties = &allow
+				cfg.NodeDefinitions["start"] = start
+				return cfg
+			},
+			wantErr: "additionalProperties: false",
+		},
+		{
+			name: "root non object schema",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				cfg.NodeDefinitions["start"] = NodeDefinition{
+					Type:         NodeTypeAgent,
+					SystemPrompt: "./prompt.md",
+					ResultSchema: JSONSchema{Type: "string"},
+				}
+				return cfg
+			},
+			wantErr: "must be a root object",
+		},
+		{
+			name: "top level type field",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				start := cfg.NodeDefinitions["start"]
+				start.ResultSchema.Properties["type"] = &JSONSchema{Type: "string"}
+				start.ResultSchema.Required = append(start.ResultSchema.Required, "type")
+				cfg.NodeDefinitions["start"] = start
+				return cfg
+			},
+			wantErr: "top-level property \"type\"",
+		},
+		{
+			name: "agent schema missing required property",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				cfg.NodeDefinitions["start"] = NodeDefinition{
+					Type:         NodeTypeAgent,
+					SystemPrompt: "./prompt.md",
+					ResultSchema: JSONSchema{
+						Type:                 "object",
+						AdditionalProperties: boolPtr(false),
+						Properties: map[string]*JSONSchema{
+							"file_paths": {
+								Type:  "array",
+								Items: &JSONSchema{Type: "string"},
+							},
+						},
+					},
+				}
+				return cfg
+			},
+			wantErr: "must require property \"file_paths\"",
+		},
+		{
+			name: "agent nested object must disallow extras",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				allow := true
+				cfg.NodeDefinitions["start"] = NodeDefinition{
+					Type:         NodeTypeAgent,
+					SystemPrompt: "./prompt.md",
+					ResultSchema: JSONSchema{
+						Type:                 "object",
+						AdditionalProperties: boolPtr(false),
+						Required:             []string{"meta"},
+						Properties: map[string]*JSONSchema{
+							"meta": {
+								Type:                 "object",
+								AdditionalProperties: &allow,
+								Required:             []string{},
+								Properties:           map[string]*JSONSchema{},
+							},
+						},
+					},
+				}
+				return cfg
+			},
+			wantErr: "must set additionalProperties: false",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.build(t)
+			err := Validate(cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestValidateAcceptsValidConfigs_TableDriven(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func(t *testing.T) *Config
+	}{
+		{
+			name: "enum with else",
+			build: func(t *testing.T) *Config {
+				cfg := basicFixture()
+				cfg.Topology.Nodes = append(cfg.Topology.Nodes, NodeRef{Name: "fallback"})
+				cfg.NodeDefinitions["start"] = enumStringNode("mode", "ship", "skip")
+				cfg.NodeDefinitions["fallback"] = terminalNode()
+				cfg.Topology.Edges = []Edge{
+					{From: "start", To: "done", When: EdgeCondition{Kind: ConditionWhen, Field: "mode", Equals: "ship"}},
+					{From: "start", To: "fallback", When: EdgeCondition{Kind: ConditionElse}},
+				}
+				return cfg
+			},
+		},
+		{
+			name: "join with two incoming edges",
+			build: func(t *testing.T) *Config {
+				return &Config{
+					Version: 1,
+					Clarification: ClarificationConfig{
+						MaxQuestions:          4,
+						MaxOptionsPerQuestion: 4,
+						MinOptionsPerQuestion: 2,
+					},
+					Topology: Topology{
+						MaxIterations: 3,
+						Entry:         "start",
+						Nodes: []NodeRef{
+							{Name: "start"},
+							{Name: "left"},
+							{Name: "right"},
+							{Name: "join", Join: JoinAll},
+							{Name: "end"},
+						},
+						Edges: []Edge{
+							{From: "start", To: "left"},
+							{From: "start", To: "right"},
+							{From: "left", To: "join"},
+							{From: "right", To: "join"},
+							{From: "join", To: "end"},
+						},
+					},
+					NodeDefinitions: map[string]NodeDefinition{
+						"start": simpleAgentNode(),
+						"left":  simpleAgentNode(),
+						"right": simpleAgentNode(),
+						"join":  simpleAgentNode(),
+						"end":   terminalNode(),
+					},
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.build(t)
+			require.NoError(t, Validate(cfg))
+		})
+	}
+}
+
+func TestMaterializeWritesConfigAndPrompts(t *testing.T) {
+	workDir := t.TempDir()
+
+	materialized, err := Materialize(workDir, "task-1", "")
+	require.NoError(t, err)
+
+	assert.FileExists(t, materialized.ConfigPath)
+	assert.FileExists(t, filepath.Join(materialized.PromptDir, "upsert_plan.md"))
+	assert.FileExists(t, filepath.Join(materialized.PromptDir, "review_plan.md"))
+
+	data, err := os.ReadFile(materialized.ConfigPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "./prompts/upsert_plan.md")
+}
+
+func writeConfigFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
+}
+
+func basicFixture() *Config {
+	return &Config{
+		Version: 1,
+		Clarification: ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: Topology{
+			MaxIterations: 3,
+			Entry:         "start",
+			Nodes: []NodeRef{
+				{Name: "start"},
+				{Name: "done"},
+			},
+			Edges: []Edge{
+				{From: "start", To: "done"},
+			},
+		},
+		NodeDefinitions: map[string]NodeDefinition{
+			"start": simpleAgentNode(),
+			"done":  terminalNode(),
+		},
+	}
+}
+
+func booleanBranchFixture() *Config {
+	cfg := basicFixture()
+	cfg.Topology.Nodes = append(cfg.Topology.Nodes, NodeRef{Name: "fallback"})
+	cfg.NodeDefinitions["start"] = booleanNode("approved")
+	cfg.NodeDefinitions["fallback"] = terminalNode()
+	cfg.Topology.Edges = []Edge{
+		{From: "start", To: "done", When: EdgeCondition{Kind: ConditionWhen, Field: "approved", Equals: true}},
+		{From: "start", To: "fallback", When: EdgeCondition{Kind: ConditionWhen, Field: "approved", Equals: false}},
+	}
+	return cfg
+}
+
+func booleanElseFixture() *Config {
+	cfg := basicFixture()
+	cfg.Topology.Nodes = append(cfg.Topology.Nodes, NodeRef{Name: "fallback"})
+	cfg.NodeDefinitions["start"] = booleanNode("approved")
+	cfg.NodeDefinitions["fallback"] = terminalNode()
+	cfg.Topology.Edges = []Edge{
+		{From: "start", To: "done", When: EdgeCondition{Kind: ConditionWhen, Field: "approved", Equals: true}},
+		{From: "start", To: "fallback", When: EdgeCondition{Kind: ConditionElse}},
+	}
+	return cfg
+}
+
+func simpleAgentNode() NodeDefinition {
+	allow := false
+	return NodeDefinition{
+		Type:         NodeTypeAgent,
+		SystemPrompt: "./prompt.md",
+		ResultSchema: JSONSchema{
+			Type:                 "object",
+			AdditionalProperties: &allow,
+			Properties:           map[string]*JSONSchema{},
+		},
+	}
+}
+
+func terminalNode() NodeDefinition {
+	return NodeDefinition{
+		Type: NodeTypeTerminal,
+	}
+}
+
+func booleanNode(field string) NodeDefinition {
+	allow := false
+	return NodeDefinition{
+		Type:         NodeTypeAgent,
+		SystemPrompt: "./prompt.md",
+		ResultSchema: JSONSchema{
+			Type:                 "object",
+			AdditionalProperties: &allow,
+			Required:             []string{field},
+			Properties: map[string]*JSONSchema{
+				field: {Type: "boolean"},
+			},
+		},
+	}
+}
+
+func stringNode(field string) NodeDefinition {
+	allow := false
+	return NodeDefinition{
+		Type:         NodeTypeAgent,
+		SystemPrompt: "./prompt.md",
+		ResultSchema: JSONSchema{
+			Type:                 "object",
+			AdditionalProperties: &allow,
+			Required:             []string{field},
+			Properties: map[string]*JSONSchema{
+				field: {Type: "string"},
+			},
+		},
+	}
+}
+
+func enumStringNode(field string, values ...string) NodeDefinition {
+	allow := false
+	enum := make([]interface{}, 0, len(values))
+	for _, value := range values {
+		enum = append(enum, value)
+	}
+	return NodeDefinition{
+		Type:         NodeTypeAgent,
+		SystemPrompt: "./prompt.md",
+		ResultSchema: JSONSchema{
+			Type:                 "object",
+			AdditionalProperties: &allow,
+			Required:             []string{field},
+			Properties: map[string]*JSONSchema{
+				field: {Type: "string", Enum: enum},
+			},
+		},
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}

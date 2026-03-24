@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"testing"
 
 	cliversion "github.com/LaLanMo/muxagent-cli/internal/version"
@@ -95,4 +97,64 @@ func TestCompletionCommandUnavailable(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown command \"completion\" for \"muxagent\"")
+}
+
+func TestRootLaunchesTaskTUIOnBareInvocation(t *testing.T) {
+	var (
+		called     bool
+		gotWorkDir string
+		gotConfig  string
+	)
+	cmd := newRootCmd(rootOptions{
+		launchTUI: func(ctx context.Context, workDir, configPath string) error {
+			called = true
+			gotWorkDir = workDir
+			gotConfig = configPath
+			return nil
+		},
+	})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(nil)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.True(t, called)
+	assert.NotEmpty(t, gotWorkDir)
+	assert.Empty(t, gotConfig)
+}
+
+func TestRootPassesConfigOverrideToTaskTUI(t *testing.T) {
+	var gotConfig string
+	cmd := newRootCmd(rootOptions{
+		launchTUI: func(ctx context.Context, workDir, configPath string) error {
+			gotConfig = configPath
+			return nil
+		},
+	})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"-c", "./my-config.yaml"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Equal(t, "./my-config.yaml", gotConfig)
+}
+
+func TestRootPropagatesTaskTUILaunchError(t *testing.T) {
+	cmd := newRootCmd(rootOptions{
+		launchTUI: func(ctx context.Context, workDir, configPath string) error {
+			return errors.New("boom")
+		},
+	})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(nil)
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "boom")
 }

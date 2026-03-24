@@ -1,0 +1,126 @@
+version: 1
+
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+
+topology:
+  max_iterations: 5
+  entry: upsert_plan
+  nodes:
+    - name: upsert_plan
+      max_iterations: 5
+    - name: review_plan
+    - name: approve_plan
+    - name: implement
+    - name: verify
+    - name: done
+  edges:
+    - from: upsert_plan
+      to: review_plan
+    - from: review_plan
+      to: upsert_plan
+      when:
+        field: passed
+        equals: false
+    - from: review_plan
+      to: approve_plan
+      when:
+        field: passed
+        equals: true
+    - from: approve_plan
+      to: upsert_plan
+      when:
+        field: approved
+        equals: false
+    - from: approve_plan
+      to: implement
+      when:
+        field: approved
+        equals: true
+    - from: implement
+      to: verify
+    - from: verify
+      to: done
+      when:
+        field: passed
+        equals: true
+    - from: verify
+      to: implement
+      when:
+        field: passed
+        equals: false
+
+node_definitions:
+  upsert_plan:
+    system_prompt: ./prompts/upsert_plan.md
+    max_clarification_rounds: 3
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - file_paths
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+  review_plan:
+    system_prompt: ./prompts/review_plan.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - passed
+        - file_paths
+      properties:
+        passed:
+          type: boolean
+        file_paths:
+          type: array
+          items:
+            type: string
+  approve_plan:
+    type: human
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - approved
+      properties:
+        approved:
+          type: boolean
+        feedback:
+          type: string
+  implement:
+    system_prompt: ./prompts/implement.md
+    max_clarification_rounds: 3
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - file_paths
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+  verify:
+    system_prompt: ./prompts/verify.md
+    max_clarification_rounds: 3
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - passed
+        - file_paths
+      properties:
+        passed:
+          type: boolean
+        file_paths:
+          type: array
+          items:
+            type: string
+  done:
+    type: terminal
