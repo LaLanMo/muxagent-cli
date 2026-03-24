@@ -106,6 +106,25 @@ func TestExecutorIncludesStructuredJSONLError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid_json_schema")
 }
 
+func TestExecutorHandlesVeryLargeJSONLMessages(t *testing.T) {
+	binaryPath := writeFakeCodex(t)
+	t.Setenv("FAKE_CODEX_MODE", "large-jsonl")
+
+	executor := New(binaryPath)
+	var progress []taskexecutor.Progress
+
+	result, err := executor.Execute(context.Background(), requestFixture(t.TempDir()), func(item taskexecutor.Progress) {
+		progress = append(progress, item)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, taskexecutor.ResultKindResult, result.Kind)
+	require.Len(t, progress, 3)
+	assert.Equal(t, "thread-123", progress[0].SessionID)
+	assert.Greater(t, len(progress[1].Message), 1024*1024)
+	assert.Contains(t, progress[1].Message, `"type":"response_item"`)
+	assert.Contains(t, progress[2].Message, `"type":"item.completed"`)
+}
+
 func TestExecutorWithoutClarificationGeneratesResultOnlySchema(t *testing.T) {
 	binaryPath := writeFakeCodex(t)
 	t.Setenv("FAKE_CODEX_MODE", "result")
@@ -321,7 +340,7 @@ func requestFixture(artifactDir string) taskexecutor.Request {
 func writeFakeCodex(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fake-codex.sh")
-script := `#!/bin/sh
+	script := `#!/bin/sh
 set -eu
 output=""
 args_file="${FAKE_CODEX_ARGS_FILE:-}"
@@ -369,9 +388,19 @@ done
 	    echo '{"type":"thread.started","thread_id":"thread-123"}'
 	    printf '%s\n' '{"kind":"result","result":{"wrong":true},"clarification":null}' > "$output"
 	    ;;
-  jsonl-error)
+	jsonl-error)
     echo '{"type":"error","message":"invalid_json_schema: boom"}'
     exit 1
+    ;;
+  large-jsonl)
+    echo '{"type":"thread.started","thread_id":"thread-123"}'
+    python3 - <<'PY'
+import json
+blob = "x" * (1024 * 1024 + 32768)
+print(json.dumps({"type":"response_item","payload":{"type":"reasoning","encrypted_content":blob}}, separators=(',', ':')))
+print(json.dumps({"type":"item.completed","message":"after huge event"}, separators=(',', ':')))
+PY
+    printf '%s\n' '{"kind":"result","result":{"file_paths":["/tmp/artifact.md"]},"clarification":null}' > "$output"
     ;;
   fail)
     echo 'stderr boom' >&2

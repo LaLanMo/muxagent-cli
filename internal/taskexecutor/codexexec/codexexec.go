@@ -1,15 +1,17 @@
 package codexexec
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
@@ -62,31 +64,40 @@ func (e *Executor) Execute(ctx context.Context, req taskexecutor.Request, progre
 
 	var sessionID string
 	resumeSessionID := resumeTargetSessionID(req)
-	stderrLines := make(chan string, 8)
+	var (
+		stderrBuf bytes.Buffer
+		stderrWG  sync.WaitGroup
+	)
+	stderrWG.Add(1)
 	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			stderrLines <- scanner.Text()
-		}
-		close(stderrLines)
+		defer stderrWG.Done()
+		_, _ = io.Copy(&stderrBuf, stderr)
 	}()
 
-	scanner := bufio.NewScanner(stdout)
+	decoder := json.NewDecoder(stdout)
 	var structuredError string
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		progressMessage, foundSessionID, errorMessage, err := parseJSONLLine(line)
+	for {
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			stopCommand(cmd)
+			stderrWG.Wait()
+			return taskexecutor.Result{}, fmt.Errorf("invalid codex jsonl line: %w", err)
+		}
+		progressMessage, foundSessionID, errorMessage, err := parseJSONLLine(raw)
 		if err != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
+			stopCommand(cmd)
+			stderrWG.Wait()
 			return taskexecutor.Result{}, err
 		}
 		if foundSessionID != "" && sessionID == "" {
 			sessionID = foundSessionID
 		}
 		if resumeSessionID != "" && foundSessionID != "" && foundSessionID != resumeSessionID {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
+			stopCommand(cmd)
+			stderrWG.Wait()
 			return taskexecutor.Result{}, fmt.Errorf("codex resume switched threads: expected %q, got %q", resumeSessionID, foundSessionID)
 		}
 		if errorMessage != "" {
@@ -99,22 +110,18 @@ func (e *Executor) Execute(ctx context.Context, req taskexecutor.Request, progre
 			})
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return taskexecutor.Result{}, err
-	}
 	if err := cmd.Wait(); err != nil {
-		var stderrText []string
-		for line := range stderrLines {
-			stderrText = append(stderrText, line)
-		}
+		stderrWG.Wait()
+		stderrText := strings.TrimSpace(stderrBuf.String())
 		if structuredError != "" {
 			return taskexecutor.Result{}, fmt.Errorf("%w: %s", err, structuredError)
 		}
-		if len(stderrText) > 0 {
-			return taskexecutor.Result{}, fmt.Errorf("%w: %s", err, strings.Join(stderrText, "\n"))
+		if stderrText != "" {
+			return taskexecutor.Result{}, fmt.Errorf("%w: %s", err, stderrText)
 		}
 		return taskexecutor.Result{}, err
 	}
+	stderrWG.Wait()
 
 	outputBytes, err := os.ReadFile(outputPath)
 	if err != nil {
@@ -201,6 +208,13 @@ func coalesceSessionID(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func stopCommand(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	_ = cmd.Wait()
 }
 
 func buildOutputSchema(req taskexecutor.Request) map[string]interface{} {
