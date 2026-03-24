@@ -95,6 +95,8 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 		return s.startTask(ctx, cmd.Description, firstNonEmpty(cmd.WorkDir, s.workDir), firstNonEmpty(cmd.ConfigPath, s.configOverride))
 	case CommandSubmitInput:
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
+	case CommandRetryNode:
+		return s.retryNode(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Force)
 	case CommandShutdown:
 		return s.Close()
 	default:

@@ -474,10 +474,92 @@ func TestServiceDoesNotCompleteUntilAllActiveTerminalRunsFinish(t *testing.T) {
 	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
 }
 
+func TestServiceRetryNodeCreatesNewRunAndRecoversFailedTask(t *testing.T) {
+	cfg := singleAgentTerminalFixture()
+	cfg.Topology.MaxIterations = 2
+	cfg.Topology.Nodes[0].MaxIterations = 2
+	service := newTestServiceWithConfig(t, cfg, &fakeExecutor{
+		errors: map[string][]error{
+			"implement": {fmt.Errorf("runtime unavailable")},
+		},
+		steps: map[string][]taskexecutor.Result{
+			"implement": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "retry after failure", WorkDir: service.workDir})
+	failed := waitForEvent(t, service.Events(), EventTaskFailed)
+	require.NotNil(t, failed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusFailed, failed.TaskView.Status)
+
+	service.Dispatch(RunCommand{
+		Type:      CommandRetryNode,
+		TaskID:    failed.TaskID,
+		NodeRunID: failed.NodeRunID,
+	})
+	completed := waitForEvent(t, service.Events(), EventTaskCompleted)
+	require.NotNil(t, completed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
+	require.NoError(t, err)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"implement": 2,
+		"done":      1,
+	})
+	require.Equal(t, taskdomain.TriggerReasonManualRetry, runs[1].TriggeredBy.Reason)
+	assert.Equal(t, failed.NodeRunID, runs[1].TriggeredBy.NodeRunID)
+}
+
+func TestServiceRetryNodeRequiresForceAfterMaxIterations(t *testing.T) {
+	cfg := singleAgentTerminalFixture()
+	cfg.Topology.MaxIterations = 1
+	cfg.Topology.Nodes[0].MaxIterations = 1
+	service := newTestServiceWithConfig(t, cfg, &fakeExecutor{
+		errors: map[string][]error{
+			"implement": {fmt.Errorf("bad environment")},
+		},
+		steps: map[string][]taskexecutor.Result{
+			"implement": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "force retry", WorkDir: service.workDir})
+	failed := waitForEvent(t, service.Events(), EventTaskFailed)
+
+	err := service.retryNode(context.Background(), failed.TaskID, failed.NodeRunID, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retry unavailable")
+
+	err = service.retryNode(context.Background(), failed.TaskID, failed.NodeRunID, true)
+	require.NoError(t, err)
+
+	completed := waitForEvent(t, service.Events(), EventTaskCompleted)
+	require.NotNil(t, completed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
+	require.NoError(t, err)
+	require.Len(t, runs, 3)
+	require.NotNil(t, runs[1].TriggeredBy)
+	assert.Equal(t, taskdomain.TriggerReasonManualRetryForce, runs[1].TriggeredBy.Reason)
+}
+
 type fakeExecutor struct {
 	mu       sync.Mutex
 	steps    map[string][]taskexecutor.Result
 	progress map[string][]taskexecutor.Progress
+	errors   map[string][]error
 	requests []taskexecutor.Request
 }
 
@@ -485,6 +567,18 @@ func (f *fakeExecutor) Execute(ctx context.Context, req taskexecutor.Request, pr
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
 	progressItems := append([]taskexecutor.Progress(nil), f.progress[req.NodeRun.NodeName]...)
+	errSequence := f.errors[req.NodeRun.NodeName]
+	if len(errSequence) > 0 {
+		execErr := errSequence[0]
+		f.errors[req.NodeRun.NodeName] = errSequence[1:]
+		f.mu.Unlock()
+		if progress != nil {
+			for _, item := range progressItems {
+				progress(item)
+			}
+		}
+		return taskexecutor.Result{}, execErr
+	}
 	sequence := f.steps[req.NodeRun.NodeName]
 	if len(sequence) == 0 {
 		f.mu.Unlock()

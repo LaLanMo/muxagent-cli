@@ -10,6 +10,7 @@ type CommandType string
 const (
 	CommandStartTask   CommandType = "task.start"
 	CommandSubmitInput CommandType = "task.submit_input"
+	CommandRetryNode   CommandType = "task.retry_node"
 	CommandShutdown    CommandType = "task.shutdown"
 )
 
@@ -21,6 +22,7 @@ type RunCommand struct {
 	WorkDir     string
 	ConfigPath  string
 	Payload     map[string]interface{}
+	Force       bool
 }
 
 type EventType string

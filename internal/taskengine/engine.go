@@ -43,6 +43,13 @@ func New() *Engine {
 	}
 }
 
+func (e *Engine) HasRun(runID string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.runTokens[runID]
+	return ok
+}
+
 func (e *Engine) RegisterEntryRun(taskID string, run taskdomain.NodeRun) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -259,20 +266,7 @@ func incomingNodesForToken(started map[string]struct{}, cfg *taskconfig.Config, 
 }
 
 func exceedsIterations(cfg *taskconfig.Config, runs []taskdomain.NodeRun, nodeName string) bool {
-	limit := cfg.Topology.MaxIterations
-	for _, node := range cfg.Topology.Nodes {
-		if node.Name == nodeName && node.MaxIterations > 0 {
-			limit = node.MaxIterations
-			break
-		}
-	}
-	iterations := 0
-	for _, run := range runs {
-		if run.NodeName == nodeName {
-			iterations++
-		}
-	}
-	return iterations >= limit
+	return taskdomain.IterationCount(runs, nodeName) >= taskdomain.MaxIterationsForNode(cfg, nodeName)
 }
 
 func hasPendingArrivals(pending map[string][]arrival) bool {
@@ -289,13 +283,16 @@ func taskFinished(cfg *taskconfig.Config, runs []taskdomain.NodeRun) bool {
 	doneTerminal := false
 	for _, run := range runs {
 		switch run.Status {
-		case taskdomain.NodeRunFailed, taskdomain.NodeRunRunning, taskdomain.NodeRunAwaitingUser:
+		case taskdomain.NodeRunRunning, taskdomain.NodeRunAwaitingUser:
 			return false
 		case taskdomain.NodeRunDone:
 			if terminalNodes[run.NodeName] {
 				doneTerminal = true
 			}
 		}
+	}
+	if taskdomain.HasOpenFailedRuns(runs) {
+		return false
 	}
 	return doneTerminal
 }

@@ -475,6 +475,14 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.screen == ScreenFailed {
+		switch {
+		case keyMatches(msg, m.keys.retry):
+			return m.triggerRetry(false)
+		case keyMatches(msg, m.keys.forceRetry):
+			return m.triggerRetry(true)
+		}
+	}
 	if keyMatches(msg, m.keys.back) {
 		m.screen = ScreenTaskList
 		m.current = nil
@@ -489,6 +497,29 @@ func (m Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	nextViewport, cmd := m.detailViewport.Update(msg)
 	m.detailViewport = nextViewport
 	return m, cmd
+}
+
+func (m Model) triggerRetry(force bool) (tea.Model, tea.Cmd) {
+	retryability := m.currentRetryability()
+	if retryability == nil || m.current == nil {
+		return m, nil
+	}
+	if !force && !retryability.RetryAllowed {
+		return m, nil
+	}
+	m.currentInput = nil
+	m.screen = ScreenRunning
+	m.startupText = "Retrying " + retryability.Run.NodeName + "…"
+	m.errorText = ""
+	m.artifactCollapsed = false
+	m.autoScrollDetail = true
+	m.syncComponents()
+	return m, m.dispatchCmd(taskruntime.RunCommand{
+		Type:      taskruntime.CommandRetryNode,
+		TaskID:    m.current.Task.ID,
+		NodeRunID: retryability.Run.ID,
+		Force:     force,
+	})
 }
 
 func (m *Model) handleEvent(event taskruntime.RunEvent) {
@@ -676,6 +707,21 @@ func (m Model) currentAwaitingRunID() string {
 		return m.currentInput.NodeRunID
 	}
 	return ""
+}
+
+func (m Model) currentRetryability() *taskdomain.Retryability {
+	if m.current == nil || m.currentConfig == nil {
+		return nil
+	}
+	return taskdomain.RetryabilityForTask(m.currentConfig, currentTaskRuns(*m.current))
+}
+
+func currentTaskRuns(view taskdomain.TaskView) []taskdomain.NodeRun {
+	runs := make([]taskdomain.NodeRun, 0, len(view.NodeRuns))
+	for _, run := range view.NodeRuns {
+		runs = append(runs, run.NodeRun)
+	}
+	return runs
 }
 
 func (m Model) waitForEvent() tea.Cmd {
@@ -1426,14 +1472,32 @@ func (m Model) renderClarificationFooter(width int) string {
 }
 
 func (m Model) renderFailureFooter(width int) string {
+	retryability := m.currentRetryability()
+	body := firstNonEmpty(m.errorText, "Review the failed node output and try again.")
+	if retryability != nil && !retryability.RetryAllowed {
+		body += fmt.Sprintf("\n\nRetry limit reached for %s (%d/%d). Press Shift+R to force retry.", retryability.Run.NodeName, retryability.NextIteration-1, retryability.MaxIterations)
+	}
 	content := []string{
 		tuiTheme.panelTitle.Render("Task failed"),
 		"",
-		tuiTheme.panelBody.Render(firstNonEmpty(m.errorText, "Review the failed node output and try again.")),
+		tuiTheme.panelBody.Render(body),
 	}
 	panel := tuiTheme.panelDanger.Width(clamp(width, 42, width)).Render(strings.Join(content, "\n"))
-	hints := joinHorizontal(tuiTheme.footerHint.Render(m.detailHint("Esc back  Ctrl+N new task", false)), tuiTheme.footerHint.Render("Ctrl+C quit"), width)
+	hints := joinHorizontal(tuiTheme.footerHint.Render(m.failureHint()), tuiTheme.footerHint.Render("Ctrl+C quit"), width)
 	return lipgloss.JoinVertical(lipgloss.Left, panel, hints)
+}
+
+func (m Model) failureHint() string {
+	parts := []string{"Esc back"}
+	if retryability := m.currentRetryability(); retryability != nil {
+		if retryability.RetryAllowed {
+			parts = append(parts, "r retry step")
+		} else if retryability.ForceRetryAllowed {
+			parts = append(parts, "R force retry")
+		}
+	}
+	parts = append(parts, "Ctrl+N new task")
+	return strings.Join(parts, "  ")
 }
 
 func (m Model) detailHint(base string, includeNewTask bool) string {

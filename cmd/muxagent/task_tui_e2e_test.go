@@ -216,6 +216,53 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				assert.Equal(t, task.ID, runs[0].TaskID)
 			},
 		},
+		{
+			name:        "failed agent node can be retried from the footer",
+			flow:        "implement-fail-once",
+			description: "Retry failed implement",
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.send(t, "Retry failed implement\r")
+				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+				session.confirm(t)
+				session.waitForAll(t, 10*time.Second, "Task failed", "r retry step")
+				session.send(t, "r")
+			},
+			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-implement", "06-verify"},
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 7)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"upsert_plan":  1,
+					"review_plan":  1,
+					"approve_plan": 1,
+					"implement":    2,
+					"verify":       1,
+					"done":         1,
+				})
+
+				var failedImplement, retriedImplement *taskdomain.NodeRun
+				for i := range runs {
+					run := &runs[i]
+					if run.NodeName != "implement" {
+						continue
+					}
+					if run.Status == taskdomain.NodeRunFailed {
+						failedImplement = run
+					}
+					if run.Status == taskdomain.NodeRunDone {
+						retriedImplement = run
+					}
+				}
+				require.NotNil(t, failedImplement)
+				require.NotNil(t, retriedImplement)
+				require.NotNil(t, retriedImplement.TriggeredBy)
+				assert.Equal(t, taskdomain.TriggerReasonManualRetry, retriedImplement.TriggeredBy.Reason)
+				assert.Equal(t, failedImplement.ID, retriedImplement.TriggeredBy.NodeRunID)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -500,7 +547,6 @@ func assertArtifactDirs(t *testing.T, task taskdomain.Task, want []string) {
 	sort.Strings(names)
 	assert.Equal(t, want, names)
 	for _, name := range names {
-		assert.FileExists(t, filepath.Join(artifactRoot, name, "output.json"))
 		assert.NoFileExists(t, filepath.Join(artifactRoot, name, "result_schema.json"))
 	}
 	schemaRoot := filepath.Join(taskstore.TaskDir(task.WorkDir, task.ID), "schemas")

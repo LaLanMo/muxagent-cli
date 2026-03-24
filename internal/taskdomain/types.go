@@ -146,11 +146,6 @@ func DeriveTaskView(task Task, cfg *taskconfig.Config, runs []NodeRun) TaskView 
 
 func deriveTaskStatus(cfg *taskconfig.Config, runs []NodeRun) TaskStatus {
 	for _, run := range runs {
-		if run.Status == NodeRunFailed {
-			return TaskStatusFailed
-		}
-	}
-	for _, run := range runs {
 		if run.Status == NodeRunAwaitingUser {
 			return TaskStatusAwaitingUser
 		}
@@ -159,6 +154,9 @@ func deriveTaskStatus(cfg *taskconfig.Config, runs []NodeRun) TaskStatus {
 		if run.Status == NodeRunRunning {
 			return TaskStatusRunning
 		}
+	}
+	if HasOpenFailedRuns(runs) {
+		return TaskStatusFailed
 	}
 	terminals := TerminalNodes(cfg)
 	for i := len(runs) - 1; i >= 0; i-- {

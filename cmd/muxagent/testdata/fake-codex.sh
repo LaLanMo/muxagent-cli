@@ -83,6 +83,10 @@ JSON
     write_result "review-${count}.md" "\"passed\":${passed}"
     ;;
   implement)
+    if [ "$flow" = "implement-fail-once" ] && [ "$count" -eq 1 ]; then
+      echo "simulated implement failure" >&2
+      exit 1
+    fi
     write_result "implementation-${count}.md" ""
     ;;
   verify)

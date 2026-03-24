@@ -271,6 +271,8 @@ type appKeyMap struct {
 	previewUp       key.Binding
 	previewDown     key.Binding
 	toggleArtifacts key.Binding
+	retry           key.Binding
+	forceRetry      key.Binding
 }
 
 func newAppKeyMap() appKeyMap {
@@ -287,6 +289,8 @@ func newAppKeyMap() appKeyMap {
 		previewUp:       key.NewBinding(key.WithKeys("ctrl+u")),
 		previewDown:     key.NewBinding(key.WithKeys("ctrl+d")),
 		toggleArtifacts: key.NewBinding(key.WithKeys("tab")),
+		retry:           key.NewBinding(key.WithKeys("r")),
+		forceRetry:      key.NewBinding(key.WithKeys("R")),
 	}
 }
 

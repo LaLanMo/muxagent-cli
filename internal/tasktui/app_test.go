@@ -648,6 +648,96 @@ func TestMarkdownArtifactPreviewRendersMarkdownInsteadOfRawSource(t *testing.T) 
 	assert.NotContains(t, view, "# Summary")
 }
 
+func TestFailureFooterShowsRetryActionAndDispatchesRetry(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.currentConfig = retryTUIConfig(2)
+	model.current = &taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Broken task"},
+		Status:          taskdomain.TaskStatusFailed,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunFailed, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+		},
+	}
+	model.screen = ScreenFailed
+	model.errorText = "executor failed"
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "r retry step")
+
+	next, cmd := model.Update(tea.KeyPressMsg{Text: "r", Code: 'r'})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, taskruntime.CommandRetryNode, service.dispatched[0].Type)
+	assert.Equal(t, "run-1", service.dispatched[0].NodeRunID)
+	assert.False(t, service.dispatched[0].Force)
+	assert.Equal(t, ScreenRunning, model.screen)
+}
+
+func TestFailureFooterShowsForceRetryWhenIterationLimitReached(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.currentConfig = retryTUIConfig(1)
+	model.current = &taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Broken task"},
+		Status:          taskdomain.TaskStatusFailed,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunFailed, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+		},
+	}
+	model.screen = ScreenFailed
+	model.errorText = "executor failed"
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "R force retry")
+	assert.Contains(t, view, "Retry limit reached")
+
+	next, cmd := model.Update(tea.KeyPressMsg{Text: "R", Code: 'R'})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, taskruntime.CommandRetryNode, service.dispatched[0].Type)
+	assert.True(t, service.dispatched[0].Force)
+}
+
+func retryTUIConfig(maxIterations int) *taskconfig.Config {
+	deny := false
+	return &taskconfig.Config{
+		Version: 1,
+		Topology: taskconfig.Topology{
+			MaxIterations: maxIterations,
+			Entry:         "implement",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "implement", MaxIterations: maxIterations},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"implement": {
+				Type: taskconfig.NodeTypeAgent,
+				ResultSchema: taskconfig.JSONSchema{
+					Type:                 "object",
+					AdditionalProperties: &deny,
+					Required:             []string{"file_paths"},
+					Properties: map[string]*taskconfig.JSONSchema{
+						"file_paths": {Type: "array", Items: &taskconfig.JSONSchema{Type: "string"}},
+					},
+				},
+			},
+		},
+	}
+}
+
 func typeText(t *testing.T, model Model, value string) Model {
 	t.Helper()
 	for _, r := range value {
