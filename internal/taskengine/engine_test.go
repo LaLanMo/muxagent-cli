@@ -165,16 +165,49 @@ func TestEngineElseFallback(t *testing.T) {
 	assert.Equal(t, "fallback", resolution.Transitions[0].To)
 }
 
-func TestEngineRejectsIterationOverflow(t *testing.T) {
+func TestEngineMaterializesBlockedTargetWhenIterationOverflows(t *testing.T) {
 	cfg := loopFixture()
 	engine := New()
 	taskID := "task-loop"
 	now := time.Now().UTC()
 	entry := taskdomain.NodeRun{ID: "start-0", TaskID: taskID, NodeName: "start", StartedAt: now, Status: taskdomain.NodeRunDone, Result: map[string]interface{}{"flag": "retry"}}
 	engine.RegisterEntryRun(taskID, entry)
-	_, err := engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{entry}, entry)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeded max_iterations")
+	resolution, err := engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{entry}, entry)
+	require.NoError(t, err)
+	require.Empty(t, resolution.Transitions)
+	require.Len(t, resolution.Blocked, 1)
+	assert.Equal(t, "start", resolution.Blocked[0].To)
+	assert.Equal(t, entry.ID, resolution.Blocked[0].Trigger.NodeRunID)
+	assert.Contains(t, resolution.Blocked[0].FailureReason, "exceeded max_iterations")
+}
+
+func TestEngineReturnsAllBlockedTargetsWhenMultipleTriggeredEdgesOverflow(t *testing.T) {
+	cfg := multiBlockedFixture()
+	engine := New()
+	taskID := "task-multi-blocked"
+	now := time.Now().UTC()
+	source := taskdomain.NodeRun{
+		ID:        "start-1",
+		TaskID:    taskID,
+		NodeName:  "start",
+		StartedAt: now,
+		Status:    taskdomain.NodeRunDone,
+		Result:    map[string]interface{}{},
+	}
+	engine.RegisterEntryRun(taskID, source)
+
+	runs := []taskdomain.NodeRun{
+		source,
+		{ID: "alpha-1", TaskID: taskID, NodeName: "alpha", StartedAt: now.Add(time.Second), Status: taskdomain.NodeRunDone},
+		{ID: "beta-1", TaskID: taskID, NodeName: "beta", StartedAt: now.Add(2 * time.Second), Status: taskdomain.NodeRunDone},
+	}
+
+	resolution, err := engine.ResolveCompletion(cfg, taskID, runs, source)
+	require.NoError(t, err)
+	require.Empty(t, resolution.Transitions)
+	require.Len(t, resolution.Blocked, 2)
+	assert.Equal(t, "alpha", resolution.Blocked[0].To)
+	assert.Equal(t, "beta", resolution.Blocked[1].To)
 }
 
 func TestMatchesConditionIsTypeSafe(t *testing.T) {
@@ -258,6 +291,35 @@ func simpleAgentNode() taskconfig.NodeDefinition {
 			Type:                 "object",
 			AdditionalProperties: &allow,
 			Properties:           map[string]*taskconfig.JSONSchema{},
+		},
+	}
+}
+
+func multiBlockedFixture() *taskconfig.Config {
+	return &taskconfig.Config{
+		Version: 1,
+		Clarification: taskconfig.ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: taskconfig.Topology{
+			MaxIterations: 1,
+			Entry:         "start",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "start"},
+				{Name: "alpha", MaxIterations: 1},
+				{Name: "beta", MaxIterations: 1},
+			},
+			Edges: []taskconfig.Edge{
+				{From: "start", To: "alpha"},
+				{From: "start", To: "beta"},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"start": simpleAgentNode(),
+			"alpha": simpleAgentNode(),
+			"beta":  simpleAgentNode(),
 		},
 	}
 }

@@ -54,6 +54,8 @@ func Open(workDir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	store := &Store{db: db}
 	if err := store.EnsureSchema(context.Background()); err != nil {
 		_ = db.Close()
@@ -70,6 +72,8 @@ func OpenAtPath(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	store := &Store{db: db}
 	if err := store.EnsureSchema(context.Background()); err != nil {
 		_ = db.Close()

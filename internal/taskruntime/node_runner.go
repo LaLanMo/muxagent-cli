@@ -10,6 +10,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/google/uuid"
@@ -193,6 +194,12 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 		}
 		return resolution.Transitions[i].To < resolution.Transitions[j].To
 	})
+	sort.Slice(resolution.Blocked, func(i, j int) bool {
+		if resolution.Blocked[i].To == resolution.Blocked[j].To {
+			return resolution.Blocked[i].Reason < resolution.Blocked[j].Reason
+		}
+		return resolution.Blocked[i].To < resolution.Blocked[j].To
+	})
 
 	nextRuns := make([]taskdomain.NodeRun, 0, len(resolution.Transitions))
 	for _, next := range resolution.Transitions {
@@ -210,6 +217,11 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 		}
 		s.engine.RegisterTriggeredRun(task.ID, nextRun, next.Trigger.NodeRunID)
 		nextRuns = append(nextRuns, nextRun)
+	}
+	for _, blocked := range resolution.Blocked {
+		if err := s.materializeBlockedTargetRun(ctx, task, blocked); err != nil {
+			return err
+		}
 	}
 	for _, nextRun := range nextRuns {
 		if err := s.startNode(s.lookupTaskContext(task.ID), task, cfg, nextRun); err != nil {
@@ -231,6 +243,38 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 			})
 		}
 	}
+	return nil
+}
+
+func (s *Service) materializeBlockedTargetRun(ctx context.Context, task taskdomain.Task, blocked taskengine.BlockedTransition) error {
+	now := time.Now().UTC()
+	blockedRun := taskdomain.NodeRun{
+		ID:            uuid.NewString(),
+		TaskID:        task.ID,
+		NodeName:      blocked.To,
+		Status:        taskdomain.NodeRunFailed,
+		FailureReason: blocked.FailureReason,
+		TriggeredBy:   &blocked.Trigger,
+		StartedAt:     now,
+		CompletedAt:   &now,
+	}
+	if err := s.store.SaveNodeRun(ctx, blockedRun); err != nil {
+		return err
+	}
+	s.engine.RegisterTriggeredRun(task.ID, blockedRun, blocked.Trigger.NodeRunID)
+
+	view, err := s.refreshTaskView(ctx, task.ID)
+	if err != nil {
+		return err
+	}
+	s.publish(RunEvent{
+		Type:      EventTaskFailed,
+		TaskID:    task.ID,
+		NodeRunID: blockedRun.ID,
+		NodeName:  blockedRun.NodeName,
+		TaskView:  &view,
+		Error:     &RunError{Message: blocked.FailureReason},
+	})
 	return nil
 }
 

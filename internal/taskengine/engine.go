@@ -30,8 +30,17 @@ type Transition struct {
 	Trigger taskdomain.TriggeredBy
 }
 
+type BlockedTransition struct {
+	To            string
+	Reason        string
+	Token         string
+	Trigger       taskdomain.TriggeredBy
+	FailureReason string
+}
+
 type Resolution struct {
 	Transitions []Transition
+	Blocked     []BlockedTransition
 	TaskDone    bool
 }
 
@@ -114,11 +123,18 @@ func (e *Engine) ResolveCompletion(cfg *taskconfig.Config, taskID string, runs [
 	resolution := Resolution{}
 	for _, next := range e.consumeReadyLocked(cfg, taskID) {
 		if exceedsIterations(cfg, runs, next.To) {
-			return Resolution{}, fmt.Errorf("node %q exceeded max_iterations", next.To)
+			resolution.Blocked = append(resolution.Blocked, BlockedTransition{
+				To:            next.To,
+				Reason:        next.Reason,
+				Token:         next.Token,
+				Trigger:       next.Trigger,
+				FailureReason: fmt.Sprintf("node %q exceeded max_iterations", next.To),
+			})
+			continue
 		}
 		resolution.Transitions = append(resolution.Transitions, next)
 	}
-	resolution.TaskDone = len(resolution.Transitions) == 0 && !hasPendingArrivals(e.pending[taskID]) && taskFinished(cfg, runs)
+	resolution.TaskDone = len(resolution.Transitions) == 0 && len(resolution.Blocked) == 0 && !hasPendingArrivals(e.pending[taskID]) && taskFinished(cfg, runs)
 	return resolution, nil
 }
 

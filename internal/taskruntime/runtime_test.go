@@ -556,6 +556,80 @@ func TestServiceRetryNodeRequiresForceAfterMaxIterations(t *testing.T) {
 	assert.Equal(t, taskdomain.TriggerReasonManualRetryForce, runs[1].TriggeredBy.Reason)
 }
 
+func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testing.T) {
+	service := newTestServiceWithConfig(t, reviewLoopLimitFixture(), &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"upsert_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": false, "file_paths": []interface{}{"/tmp/review-1.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review-2.md"}}},
+			},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "loop hits limit", WorkDir: service.workDir})
+	failed := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskFailed && event.NodeName == "upsert_plan"
+	})
+	require.NotNil(t, failed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusFailed, failed.TaskView.Status)
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
+	require.NoError(t, err)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"upsert_plan": 2,
+		"review_plan": 1,
+	})
+	var blockedUpsert taskdomain.NodeRun
+	var review taskdomain.NodeRun
+	for _, run := range runs {
+		switch run.ID {
+		case failed.NodeRunID:
+			blockedUpsert = run
+		}
+		if run.NodeName == "review_plan" {
+			review = run
+		}
+	}
+	require.Equal(t, taskdomain.NodeRunFailed, blockedUpsert.Status)
+	assert.Contains(t, blockedUpsert.FailureReason, "exceeded max_iterations")
+	require.NotNil(t, blockedUpsert.TriggeredBy)
+	assert.Equal(t, review.ID, blockedUpsert.TriggeredBy.NodeRunID)
+
+	err = service.retryNode(context.Background(), failed.TaskID, failed.NodeRunID, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retry unavailable")
+
+	err = service.retryNode(context.Background(), failed.TaskID, failed.NodeRunID, true)
+	require.NoError(t, err)
+
+	view, _, err := service.LoadTaskView(context.Background(), failed.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+
+	runs, err = service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
+	require.NoError(t, err)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"upsert_plan": 3,
+		"review_plan": 2,
+		"done":        1,
+	})
+	upsertRequests := service.executor.(*fakeExecutor).requestsForNode("upsert_plan")
+	require.Len(t, upsertRequests, 2)
+	lastUpsert := upsertRequests[len(upsertRequests)-1]
+	require.NotNil(t, lastUpsert.NodeRun.TriggeredBy)
+	assert.Equal(t, failed.NodeRunID, lastUpsert.NodeRun.TriggeredBy.NodeRunID)
+	assert.Equal(t, taskdomain.TriggerReasonManualRetryForce, lastUpsert.NodeRun.TriggeredBy.Reason)
+}
+
 func TestNewServiceReconcilesStaleRunningRunsOnStartup(t *testing.T) {
 	workDir := t.TempDir()
 	store, err := taskstore.Open(workDir)
@@ -933,6 +1007,49 @@ func singleAgentTerminalFixture() *taskconfig.Config {
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
 			"implement": artifactAgentNode(),
 			"done":      {Type: taskconfig.NodeTypeTerminal},
+		},
+	}
+}
+
+func reviewLoopLimitFixture() *taskconfig.Config {
+	deny := false
+	return &taskconfig.Config{
+		Version: 1,
+		Clarification: taskconfig.ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: taskconfig.Topology{
+			MaxIterations: 3,
+			Entry:         "upsert_plan",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "upsert_plan", MaxIterations: 1},
+				{Name: "review_plan"},
+				{Name: "done"},
+			},
+			Edges: []taskconfig.Edge{
+				{From: "upsert_plan", To: "review_plan"},
+				{From: "review_plan", To: "upsert_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
+				{From: "review_plan", To: "done", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: true}},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"upsert_plan": artifactAgentNode(),
+			"review_plan": {
+				Type:         taskconfig.NodeTypeAgent,
+				SystemPrompt: "./prompts/node.md",
+				ResultSchema: taskconfig.JSONSchema{
+					Type:                 "object",
+					AdditionalProperties: &deny,
+					Required:             []string{"passed", "file_paths"},
+					Properties: map[string]*taskconfig.JSONSchema{
+						"passed":     {Type: "boolean"},
+						"file_paths": {Type: "array", MinItems: intPtr(1), Items: &taskconfig.JSONSchema{Type: "string"}},
+					},
+				},
+			},
+			"done": {Type: taskconfig.NodeTypeTerminal},
 		},
 	}
 }
