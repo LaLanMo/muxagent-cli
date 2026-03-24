@@ -293,7 +293,7 @@ func (m Model) handleNewTaskKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.currentConfig = m.launchConfig
 		m.currentInput = nil
-		m.screen = ScreenRunning
+		m.setScreen(ScreenRunning)
 		m.syncComponents()
 		return m, m.dispatchCmd(taskruntime.RunCommand{
 			Type:        taskruntime.CommandStartTask,
@@ -356,7 +356,7 @@ func textareaSyncHeight(ta *textarea.Model) {
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, m.keys.back):
-		m.screen = ScreenTaskList
+		m.setScreen(ScreenTaskList)
 		m.currentInput = nil
 		m.syncComponents()
 		return m, tea.Batch(m.loadTasksCmd(), m.syncInputFocus())
@@ -386,7 +386,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.currentInput = nil
-		m.screen = ScreenRunning
+		m.setScreen(ScreenRunning)
 		m.syncComponents()
 		return m, tea.Batch(
 			m.syncInputFocus(),
@@ -425,7 +425,7 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			m.syncComponents()
 			return m, m.syncInputFocus()
 		}
-		m.screen = ScreenTaskList
+		m.setScreen(ScreenTaskList)
 		m.currentInput = nil
 		m.syncComponents()
 		return m, tea.Batch(m.loadTasksCmd(), m.syncInputFocus())
@@ -484,7 +484,7 @@ func (m Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if keyMatches(msg, m.keys.back) {
-		m.screen = ScreenTaskList
+		m.setScreen(ScreenTaskList)
 		m.current = nil
 		m.currentConfig = nil
 		m.currentInput = nil
@@ -538,7 +538,7 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 			m.current = &view
 			m.currentConfig = m.launchConfig
 			m.pendingCreate = false
-			m.screen = ScreenRunning
+			m.setScreen(ScreenRunning)
 		}
 	}
 	if event.Progress != nil {
@@ -553,40 +553,35 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 		m.autoScrollDetail = true
 		switch event.InputRequest.Kind {
 		case taskruntime.InputKindHumanNode:
-			m.screen = ScreenApproval
+			m.setScreen(ScreenApproval)
 		case taskruntime.InputKindClarification:
-			m.screen = ScreenClarification
+			m.setScreen(ScreenClarification)
 		}
 		return
 	}
 	switch event.Type {
 	case taskruntime.EventNodeStarted:
 		m.startupText = ""
-		m.screen = ScreenRunning
-		m.artifactCollapsed = false
+		m.setScreen(ScreenRunning)
 		m.autoScrollDetail = true
 	case taskruntime.EventNodeCompleted:
 		m.clearRunProgress(event.NodeRunID)
 		m.startupText = ""
-		m.screen = ScreenRunning
-		m.artifactCollapsed = false
+		m.setScreen(ScreenRunning)
 		m.autoScrollDetail = true
 	case taskruntime.EventNodeProgress:
 		m.startupText = ""
-		m.screen = ScreenRunning
-		m.artifactCollapsed = false
+		m.setScreen(ScreenRunning)
 		m.autoScrollDetail = true
 	case taskruntime.EventTaskCompleted:
 		m.clearTaskProgress(event.TaskView)
 		m.startupText = ""
-		m.screen = ScreenComplete
-		m.artifactCollapsed = true
+		m.setScreen(ScreenComplete)
 		m.autoScrollDetail = true
 	case taskruntime.EventTaskFailed:
 		m.clearTaskProgress(event.TaskView)
 		m.startupText = ""
-		m.screen = ScreenFailed
-		m.artifactCollapsed = false
+		m.setScreen(ScreenFailed)
 		m.autoScrollDetail = true
 	}
 }
@@ -665,20 +660,15 @@ func (m *Model) applyViewScreen(view taskdomain.TaskView, cfg *taskconfig.Config
 	m.currentConfig = cfg
 	switch {
 	case input != nil && input.Kind == taskruntime.InputKindHumanNode:
-		m.screen = ScreenApproval
-		m.artifactCollapsed = false
+		m.setScreen(ScreenApproval)
 	case input != nil && input.Kind == taskruntime.InputKindClarification:
-		m.screen = ScreenClarification
-		m.artifactCollapsed = false
+		m.setScreen(ScreenClarification)
 	case view.Status == taskdomain.TaskStatusFailed:
-		m.screen = ScreenFailed
-		m.artifactCollapsed = false
+		m.setScreen(ScreenFailed)
 	case view.Status == taskdomain.TaskStatusDone:
-		m.screen = ScreenComplete
-		m.artifactCollapsed = true
+		m.setScreen(ScreenComplete)
 	default:
-		m.screen = ScreenRunning
-		m.artifactCollapsed = false
+		m.setScreen(ScreenRunning)
 	}
 	m.resetInputState()
 }
@@ -788,9 +778,23 @@ func (m *Model) openNewTask() tea.Cmd {
 
 func (m *Model) closeNewTask() {
 	m.newTaskInput.SetValue("")
-	m.screen = m.returnScreen
+	m.setScreen(m.returnScreen)
 	if m.screen == ScreenNewTask {
-		m.screen = ScreenTaskList
+		m.setScreen(ScreenTaskList)
+	}
+}
+
+func (m *Model) setScreen(screen Screen) {
+	changed := m.screen != screen
+	m.screen = screen
+	if !changed {
+		return
+	}
+	switch screen {
+	case ScreenRunning, ScreenApproval, ScreenClarification, ScreenFailed:
+		m.artifactCollapsed = false
+	case ScreenComplete:
+		m.artifactCollapsed = true
 	}
 }
 
@@ -1564,7 +1568,7 @@ func (m Model) advanceClarificationOrSubmit() (tea.Model, tea.Cmd) {
 		answers = append(answers, map[string]interface{}{"selected": answer.Selected})
 	}
 	m.currentInput = nil
-	m.screen = ScreenRunning
+	m.setScreen(ScreenRunning)
 	m.syncComponents()
 	return m, tea.Batch(
 		m.syncInputFocus(),
@@ -1626,12 +1630,13 @@ func currentWorkDir(current *taskdomain.TaskView) string {
 
 func progressLines(progress []string, width int) []string {
 	lines := []string{}
+	lineWidth := max(8, width)
 	for _, item := range progress {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			continue
 		}
-		lines = append(lines, tuiTheme.streamJSON.Render(ansi.Wrap(item, max(8, width), "")))
+		lines = append(lines, tuiTheme.streamJSON.Render(ansi.Truncate(item, lineWidth, "…")))
 	}
 	return lines
 }
