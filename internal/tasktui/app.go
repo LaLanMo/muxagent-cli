@@ -120,6 +120,7 @@ type Model struct {
 	clarificationOption   int
 	clarificationAnswers  []taskdomain.ClarificationAnswer
 	clarificationOther    bool
+	submittingInput       bool
 
 	width  int
 	height int
@@ -397,6 +398,9 @@ func textareaSyncHeight(ta *textarea.Model) {
 }
 
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.submittingInput {
+		return m, nil
+	}
 	switch {
 	case keyMatches(msg, m.keys.back):
 		return m, m.returnToTaskList()
@@ -425,18 +429,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				payload["feedback"] = feedback
 			}
 		}
-		m.currentInput = nil
-		m.setDetailScreen(ScreenRunning, true)
-		m.syncComponents()
-		return m, tea.Batch(
-			m.syncInputFocus(),
-			m.dispatchCmd(taskruntime.RunCommand{
-				Type:      taskruntime.CommandSubmitInput,
-				TaskID:    m.current.Task.ID,
-				NodeRunID: m.currentAwaitingRunID(),
-				Payload:   payload,
-			}),
-		)
+		return m.submitCurrentInput(payload)
 	default:
 		if m.approvalChoice != 1 {
 			return m, nil
@@ -451,8 +444,11 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	if m.currentInput == nil || len(m.currentInput.Questions) == 0 {
 		return m, nil
 	}
+	if m.submittingInput {
+		return m, nil
+	}
 	question := m.currentInput.Questions[m.clarificationQuestion]
-	optionCount := len(question.Options) + 1
+	optionCount := clarificationOptionCount(question)
 	switch {
 	case keyMatches(msg, m.keys.back):
 		if m.clarificationOther {
@@ -466,12 +462,18 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case keyMatches(msg, m.keys.up):
 		if !m.clarificationOther && m.clarificationOption > 0 {
 			m.clarificationOption--
+			if m.clarificationOption == clarificationOtherIndex(question) {
+				return m, m.activateClarificationOtherInput(question)
+			}
 			m.syncComponents()
 		}
 		return m, m.syncInputFocus()
 	case keyMatches(msg, m.keys.down):
 		if !m.clarificationOther && m.clarificationOption < optionCount-1 {
 			m.clarificationOption++
+			if m.clarificationOption == clarificationOtherIndex(question) {
+				return m, m.activateClarificationOtherInput(question)
+			}
 			m.syncComponents()
 		}
 		return m, m.syncInputFocus()
@@ -481,16 +483,36 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			if answer == "" {
 				return m, nil
 			}
+			if question.MultiSelect {
+				m.clarificationAnswers = setClarificationMultiSelectOtherAnswer(m.clarificationAnswers, m.clarificationQuestion, question, answer)
+				m.clarificationOther = false
+				m.clarificationOption = len(question.Options) + 1
+				m.detailInput.Reset()
+				m.detailInput.SetHeight(1)
+				m.syncComponents()
+				return m, m.syncInputFocus()
+			}
 			m.clarificationAnswers = appendOrReplaceAnswer(m.clarificationAnswers, m.clarificationQuestion, answer)
 			return m.advanceClarificationOrSubmit()
 		}
-		if m.clarificationOption == len(question.Options) {
-			m.clarificationOther = true
-			m.detailInput.Reset()
-			m.detailInput.SetHeight(1)
-			m.detailInput.Placeholder = "Write your own answer…"
-			m.syncComponents()
-			return m, m.syncInputFocus()
+		if question.MultiSelect {
+			switch {
+			case m.clarificationOption < len(question.Options):
+				answer := question.Options[m.clarificationOption].Label
+				m.clarificationAnswers = toggleClarificationMultiSelectAnswer(m.clarificationAnswers, m.clarificationQuestion, answer)
+				m.syncComponents()
+				return m, nil
+			case m.clarificationOption == clarificationSubmitIndex(question):
+				if len(clarificationAnswerValues(clarificationAnswerAt(m.clarificationAnswers, m.clarificationQuestion))) == 0 {
+					return m, nil
+				}
+				return m.advanceClarificationOrSubmit()
+			default:
+				return m, m.activateClarificationOtherInput(question)
+			}
+		}
+		if m.clarificationOption == clarificationOtherIndex(question) {
+			return m, m.activateClarificationOtherInput(question)
 		}
 		answer := question.Options[m.clarificationOption].Label
 		m.clarificationAnswers = appendOrReplaceAnswer(m.clarificationAnswers, m.clarificationQuestion, answer)
@@ -585,6 +607,10 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 	if event.Error != nil {
 		m.errorText = event.Error.Message
 	}
+	if m.shouldClearSubmittedInput(event) {
+		m.currentInput = nil
+		m.submittingInput = false
+	}
 	if event.InputRequest != nil {
 		m.currentInput = event.InputRequest
 		m.resetInputState()
@@ -594,18 +620,22 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 		}
 		return
 	}
+	switch event.Type {
+	case taskruntime.EventCommandError:
+		m.submittingInput = false
+	}
 	if m.screen == ScreenNewTask {
 		return
 	}
 	switch event.Type {
 	case taskruntime.EventNodeStarted:
 		m.startupText = ""
-		m.setScreen(ScreenRunning)
+		m.setScreen(detailScreenForActiveTask(m.current, m.currentInput))
 		m.autoScrollDetail = true
 	case taskruntime.EventNodeCompleted:
 		m.clearRunProgress(event.NodeRunID)
 		m.startupText = ""
-		m.setScreen(ScreenRunning)
+		m.setScreen(detailScreenForActiveTask(m.current, m.currentInput))
 		m.autoScrollDetail = true
 	case taskruntime.EventNodeFailed:
 		m.clearRunProgress(event.NodeRunID)
@@ -616,7 +646,7 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 		m.autoScrollDetail = true
 	case taskruntime.EventNodeProgress:
 		m.startupText = ""
-		m.setScreen(ScreenRunning)
+		m.setScreen(detailScreenForActiveTask(m.current, m.currentInput))
 		m.autoScrollDetail = true
 	case taskruntime.EventTaskCompleted:
 		m.clearTaskProgress(event.TaskView)
@@ -703,9 +733,38 @@ func (m *Model) resetInputState() {
 	m.clarificationOption = 0
 	m.clarificationAnswers = nil
 	m.clarificationOther = false
+	m.submittingInput = false
 	m.detailInput.Reset()
 	m.detailInput.SetHeight(1)
 	m.detailInput.Placeholder = "Type feedback..."
+}
+
+func (m *Model) activateClarificationOtherInput(question taskdomain.ClarificationQuestion) tea.Cmd {
+	m.clarificationOther = true
+	m.detailInput.Reset()
+	if existing := clarificationCustomAnswer(question, clarificationAnswerAt(m.clarificationAnswers, m.clarificationQuestion)); existing != "" {
+		m.detailInput.SetValue(existing)
+		textareaSyncHeight(&m.detailInput)
+	} else {
+		m.detailInput.SetHeight(1)
+	}
+	m.detailInput.Placeholder = "Write your own answer…"
+	m.syncComponents()
+	return m.syncInputFocus()
+}
+
+func (m Model) shouldClearSubmittedInput(event taskruntime.RunEvent) bool {
+	if !m.submittingInput || m.currentInput == nil {
+		return false
+	}
+	switch event.Type {
+	case taskruntime.EventTaskCompleted, taskruntime.EventTaskFailed:
+		return true
+	case taskruntime.EventNodeStarted, taskruntime.EventNodeProgress, taskruntime.EventNodeCompleted, taskruntime.EventNodeFailed:
+		return event.NodeRunID != "" && event.NodeRunID == m.currentInput.NodeRunID
+	default:
+		return event.TaskView != nil && event.TaskView.Status != taskdomain.TaskStatusAwaitingUser
+	}
 }
 
 func (m *Model) activateTask(view taskdomain.TaskView, cfg *taskconfig.Config, input *taskruntime.InputRequest) {
@@ -1640,6 +1699,9 @@ func (m Model) renderApprovalFooter(width int) string {
 	if m.approvalChoice == 1 {
 		content = append(content, "", tuiTheme.inputChrome.Render(m.detailInput.View()))
 	}
+	if m.errorText != "" {
+		content = append(content, "", tuiTheme.failedText.Render("× "+m.errorText))
+	}
 	panel := tuiTheme.panelWarning.Width(clamp(width, 42, width)).Render(strings.Join(content, "\n"))
 	hints := joinHorizontal(tuiTheme.footerHint.Render(m.detailHint("↑↓ select  Enter confirm  Esc back", false)), tuiTheme.footerHint.Render("Ctrl+C quit"), width)
 	return lipgloss.JoinVertical(lipgloss.Left, panel, hints)
@@ -1657,11 +1719,32 @@ func (m Model) renderClarificationFooter(width int) string {
 		"",
 	}
 	for i, option := range question.Options {
-		content = append(content, renderChoiceLine(!m.clarificationOther && i == m.clarificationOption, option.Label+" · "+option.Description))
+		label := option.Label + " · " + option.Description
+		if question.MultiSelect {
+			label = renderChecklistLabel(clarificationAnswerContains(m.clarificationAnswers, m.clarificationQuestion, option.Label), label)
+		}
+		content = append(content, renderChoiceLine(!m.clarificationOther && i == m.clarificationOption, label))
 	}
-	content = append(content, renderChoiceLine(!m.clarificationOther && m.clarificationOption == len(question.Options), "Other"))
+	if question.MultiSelect {
+		continueLabel := "Continue"
+		if m.clarificationQuestion == len(m.currentInput.Questions)-1 {
+			continueLabel = "Submit answers"
+		}
+		content = append(content, renderChoiceLine(!m.clarificationOther && m.clarificationOption == clarificationSubmitIndex(question), continueLabel))
+	}
+	otherLabel := "Other"
+	if question.MultiSelect {
+		if custom := clarificationCustomAnswer(question, clarificationAnswerAt(m.clarificationAnswers, m.clarificationQuestion)); custom != "" {
+			otherLabel = "Other · " + custom
+		}
+		otherLabel = renderChecklistLabel(clarificationCustomAnswer(question, clarificationAnswerAt(m.clarificationAnswers, m.clarificationQuestion)) != "", otherLabel)
+	}
+	content = append(content, renderChoiceLine(!m.clarificationOther && m.clarificationOption == clarificationOtherIndex(question), otherLabel))
 	if m.clarificationOther {
 		content = append(content, "", tuiTheme.inputChrome.Render(m.detailInput.View()))
+	}
+	if m.errorText != "" {
+		content = append(content, "", tuiTheme.failedText.Render("× "+m.errorText))
 	}
 	panel := tuiTheme.panelWarning.Width(clamp(width, 42, width)).Render(strings.Join(content, "\n"))
 	hints := joinHorizontal(tuiTheme.footerHint.Render(m.detailHint("↑↓ select  Enter confirm  Esc back", false)), tuiTheme.footerHint.Render("Ctrl+C quit"), width)
@@ -1743,6 +1826,13 @@ func renderChoiceLine(selected bool, label string) string {
 	return tuiTheme.optionInactive.Render("  " + label)
 }
 
+func renderChecklistLabel(selected bool, label string) string {
+	if selected {
+		return "[x] " + label
+	}
+	return "[ ] " + label
+}
+
 func renderCanvas(width, height int, header, body, footer string) string {
 	contentWidth, contentHeight := innerSize(width, height)
 	bodyHeight := max(1, contentHeight-lipgloss.Height(header)-lipgloss.Height(footer))
@@ -1763,6 +1853,131 @@ func appendOrReplaceAnswer(answers []taskdomain.ClarificationAnswer, index int, 
 	return answers
 }
 
+func clarificationAnswerAt(answers []taskdomain.ClarificationAnswer, index int) taskdomain.ClarificationAnswer {
+	if index < 0 || index >= len(answers) {
+		return taskdomain.ClarificationAnswer{}
+	}
+	return answers[index]
+}
+
+func clarificationAnswerValues(answer taskdomain.ClarificationAnswer) []string {
+	switch selected := answer.Selected.(type) {
+	case string:
+		text := strings.TrimSpace(selected)
+		if text == "" {
+			return nil
+		}
+		return []string{text}
+	case []string:
+		values := make([]string, 0, len(selected))
+		for _, item := range selected {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			values = append(values, item)
+		}
+		return values
+	case []interface{}:
+		values := make([]string, 0, len(selected))
+		for _, item := range selected {
+			text, ok := item.(string)
+			if !ok {
+				continue
+			}
+			text = strings.TrimSpace(text)
+			if text == "" {
+				continue
+			}
+			values = append(values, text)
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+func clarificationOptionCount(question taskdomain.ClarificationQuestion) int {
+	count := len(question.Options) + 1
+	if question.MultiSelect {
+		count++
+	}
+	return count
+}
+
+func clarificationSubmitIndex(question taskdomain.ClarificationQuestion) int {
+	if !question.MultiSelect {
+		return -1
+	}
+	return len(question.Options)
+}
+
+func clarificationOtherIndex(question taskdomain.ClarificationQuestion) int {
+	if question.MultiSelect {
+		return len(question.Options) + 1
+	}
+	return len(question.Options)
+}
+
+func clarificationAnswerContains(answers []taskdomain.ClarificationAnswer, index int, value string) bool {
+	for _, candidate := range clarificationAnswerValues(clarificationAnswerAt(answers, index)) {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func clarificationCustomAnswer(question taskdomain.ClarificationQuestion, answer taskdomain.ClarificationAnswer) string {
+	for _, candidate := range clarificationAnswerValues(answer) {
+		if !clarificationQuestionHasOption(question, candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func clarificationQuestionHasOption(question taskdomain.ClarificationQuestion, value string) bool {
+	for _, option := range question.Options {
+		if option.Label == value {
+			return true
+		}
+	}
+	return false
+}
+
+func toggleClarificationMultiSelectAnswer(answers []taskdomain.ClarificationAnswer, index int, value string) []taskdomain.ClarificationAnswer {
+	current := clarificationAnswerValues(clarificationAnswerAt(answers, index))
+	next := make([]string, 0, len(current)+1)
+	found := false
+	for _, candidate := range current {
+		if candidate == value {
+			found = true
+			continue
+		}
+		next = append(next, candidate)
+	}
+	if !found {
+		next = append(next, value)
+	}
+	return appendOrReplaceAnswer(answers, index, next)
+}
+
+func setClarificationMultiSelectOtherAnswer(answers []taskdomain.ClarificationAnswer, index int, question taskdomain.ClarificationQuestion, value string) []taskdomain.ClarificationAnswer {
+	value = strings.TrimSpace(value)
+	current := clarificationAnswerValues(clarificationAnswerAt(answers, index))
+	next := make([]string, 0, len(current)+1)
+	for _, candidate := range current {
+		if clarificationQuestionHasOption(question, candidate) {
+			next = append(next, candidate)
+		}
+	}
+	if value != "" {
+		next = append(next, value)
+	}
+	return appendOrReplaceAnswer(answers, index, next)
+}
+
 func (m Model) advanceClarificationOrSubmit() (tea.Model, tea.Cmd) {
 	m.clarificationOther = false
 	m.clarificationOption = 0
@@ -1780,19 +1995,30 @@ func (m Model) advanceClarificationOrSubmit() (tea.Model, tea.Cmd) {
 	for _, answer := range m.clarificationAnswers {
 		answers = append(answers, map[string]interface{}{"selected": answer.Selected})
 	}
-	m.currentInput = nil
-	m.setScreen(ScreenRunning)
+	return m.submitCurrentInput(map[string]interface{}{
+		"answers": answers,
+	})
+}
+
+func (m Model) submitCurrentInput(payload map[string]interface{}) (tea.Model, tea.Cmd) {
+	if m.currentInput == nil || m.current == nil || m.submittingInput {
+		return m, nil
+	}
+	command := taskruntime.RunCommand{
+		Type:      taskruntime.CommandSubmitInput,
+		TaskID:    m.current.Task.ID,
+		NodeRunID: m.currentAwaitingRunID(),
+		Payload:   payload,
+	}
+	if command.TaskID == "" || command.NodeRunID == "" {
+		return m, nil
+	}
+	m.submittingInput = true
+	m.errorText = ""
 	m.syncComponents()
 	return m, tea.Batch(
 		m.syncInputFocus(),
-		m.dispatchCmd(taskruntime.RunCommand{
-			Type:      taskruntime.CommandSubmitInput,
-			TaskID:    m.current.Task.ID,
-			NodeRunID: m.currentAwaitingRunID(),
-			Payload: map[string]interface{}{
-				"answers": answers,
-			},
-		}),
+		m.dispatchCmd(command),
 	)
 }
 

@@ -284,6 +284,237 @@ func TestModelHandlesClarificationEvent(t *testing.T) {
 	assert.Contains(t, strippedView(model.View().Content), "Need direction")
 }
 
+func TestClarificationMultiSelectSubmitsArrayAnswers(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:      taskruntime.InputKindClarification,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "upsert_plan",
+		Questions: []taskdomain.ClarificationQuestion{
+			{
+				Question:     "Which outputs should we include?",
+				WhyItMatters: "The final plan depends on the selected outputs.",
+				MultiSelect:  true,
+				Options: []taskdomain.ClarificationOption{
+					{Label: "API", Description: "Add an API spec"},
+					{Label: "UI", Description: "Add a UI mock"},
+				},
+			},
+		},
+	}
+	model.screen = ScreenClarification
+	model.syncComponents()
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	assert.Nil(t, cmd, "toggling a multi-select option should not submit immediately")
+	assert.Empty(t, service.dispatched)
+	assert.Contains(t, strippedView(model.View().Content), "[x] API")
+
+	for range 2 {
+		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = next.(Model)
+	}
+	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.True(t, model.submittingInput)
+	assert.Equal(t, ScreenClarification, model.screen)
+	assert.Equal(t, taskruntime.CommandSubmitInput, service.dispatched[0].Type)
+	assert.Equal(t, "run-1", service.dispatched[0].NodeRunID)
+	assert.Equal(t, map[string]interface{}{
+		"answers": []interface{}{
+			map[string]interface{}{"selected": []string{"API"}},
+		},
+	}, service.dispatched[0].Payload)
+}
+
+func TestClarificationSelectingOtherImmediatelyShowsInput(t *testing.T) {
+	tests := []struct {
+		name        string
+		question    taskdomain.ClarificationQuestion
+		downPresses int
+	}{
+		{
+			name: "single select",
+			question: taskdomain.ClarificationQuestion{
+				Question:     "What should we do?",
+				WhyItMatters: "Need direction",
+				Options: []taskdomain.ClarificationOption{
+					{Label: "A", Description: "Option A"},
+					{Label: "B", Description: "Option B"},
+				},
+			},
+			downPresses: 2,
+		},
+		{
+			name: "multi select",
+			question: taskdomain.ClarificationQuestion{
+				Question:     "Which outputs should we include?",
+				WhyItMatters: "Need direction",
+				MultiSelect:  true,
+				Options: []taskdomain.ClarificationOption{
+					{Label: "API", Description: "Option A"},
+					{Label: "UI", Description: "Option B"},
+				},
+			},
+			downPresses: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+			model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+			next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+			model = next.(Model)
+			model.current = &taskdomain.TaskView{
+				Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+				Status: taskdomain.TaskStatusAwaitingUser,
+				NodeRuns: []taskdomain.NodeRunView{
+					{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+				},
+			}
+			model.activeTaskID = "task-1"
+			model.currentInput = &taskruntime.InputRequest{
+				Kind:      taskruntime.InputKindClarification,
+				TaskID:    "task-1",
+				NodeRunID: "run-1",
+				NodeName:  "upsert_plan",
+				Questions: []taskdomain.ClarificationQuestion{tt.question},
+			}
+			model.screen = ScreenClarification
+			model.syncComponents()
+
+			for range tt.downPresses {
+				next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+				model = next.(Model)
+				if cmd != nil {
+					if msg := cmd(); msg != nil {
+						next, _ = model.Update(msg)
+						model = next.(Model)
+					}
+				}
+			}
+
+			assert.True(t, model.clarificationOther)
+			assert.Empty(t, service.dispatched)
+			assert.Equal(t, "Write your own answer…", model.detailInput.Placeholder)
+			view := strippedView(model.View().Content)
+			assert.Contains(t, view, "Other")
+			assert.Contains(t, view, "Write your own answer")
+		})
+	}
+}
+
+func TestClarificationCommandErrorKeepsInputVisibleAndShowsError(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:      taskruntime.InputKindClarification,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "upsert_plan",
+		Questions: []taskdomain.ClarificationQuestion{
+			{
+				Question:     "What should we do?",
+				WhyItMatters: "Need direction",
+				Options: []taskdomain.ClarificationOption{
+					{Label: "A", Description: "Option A"},
+					{Label: "B", Description: "Option B"},
+				},
+			},
+		},
+	}
+	model.screen = ScreenClarification
+	model.syncComponents()
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	assert.True(t, model.submittingInput)
+	assert.Equal(t, ScreenClarification, model.screen)
+	require.NotNil(t, model.currentInput)
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:   taskruntime.EventCommandError,
+		TaskID: "task-1",
+		Error:  &taskruntime.RunError{Message: "clarification answer 0: must be an array for multi-select questions"},
+	})
+	model = next.(Model)
+
+	assert.False(t, model.submittingInput)
+	assert.Equal(t, ScreenClarification, model.screen)
+	require.NotNil(t, model.currentInput)
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "What should we do?")
+	assert.Contains(t, view, "clarification answer 0: must be an array for multi-select questions")
+}
+
+func TestSubmittingClarificationIgnoresUnrelatedNodeProgress(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunRunning}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:      taskruntime.InputKindClarification,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "upsert_plan",
+		Questions: []taskdomain.ClarificationQuestion{{Question: "What should we do?"}},
+	}
+	model.screen = ScreenClarification
+	model.submittingInput = true
+	model.syncComponents()
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-2",
+		NodeName:  "verify",
+		Progress:  &taskruntime.ProgressInfo{Message: "still running"},
+	})
+	model = next.(Model)
+
+	assert.True(t, model.submittingInput)
+	require.NotNil(t, model.currentInput)
+	assert.Equal(t, "run-1", model.currentInput.NodeRunID)
+	assert.Equal(t, ScreenClarification, model.screen)
+}
+
 func TestBackgroundEventsDoNotLeaveTaskList(t *testing.T) {
 	baseTask := taskdomain.Task{ID: "task-1", Description: "Implement login"}
 	draftView := taskdomain.TaskView{Task: baseTask, Status: taskdomain.TaskStatusDraft}
