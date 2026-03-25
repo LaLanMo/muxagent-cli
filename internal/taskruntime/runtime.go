@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
@@ -105,7 +106,7 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	switch cmd.Type {
 	case CommandStartTask:
-		return s.startTask(ctx, cmd.Description, firstNonEmpty(cmd.WorkDir, s.workDir), firstNonEmpty(cmd.ConfigPath, s.configOverride))
+		return s.startTask(ctx, cmd.Description, firstNonEmpty(cmd.WorkDir, s.workDir), firstNonEmpty(cmd.ConfigPath, s.configOverride), cmd.Runtime)
 	case CommandSubmitInput:
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
 	case CommandRetryNode:
@@ -117,7 +118,7 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	}
 }
 
-func (s *Service) startTask(ctx context.Context, description, workDir, configOverride string) error {
+func (s *Service) startTask(ctx context.Context, description, workDir, configOverride string, runtimeOverride appconfig.RuntimeID) error {
 	workDir = taskstore.NormalizeWorkDir(workDir)
 	taskID := uuid.NewString()
 	now := time.Now().UTC()
@@ -128,7 +129,7 @@ func (s *Service) startTask(ctx context.Context, description, workDir, configOve
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	materialized, err := taskconfig.Materialize(workDir, taskID, configOverride)
+	materialized, err := taskconfig.MaterializeWithRuntime(workDir, taskID, configOverride, runtimeOverride)
 	if err != nil {
 		return err
 	}

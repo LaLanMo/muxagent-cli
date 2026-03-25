@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -308,6 +309,7 @@ func (m Model) handleNewTaskKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			Description: desc,
 			WorkDir:     m.workDir,
 			ConfigPath:  m.configOverride,
+			Runtime:     m.effectiveLaunchRuntime(),
 		})
 	default:
 		// Pre-grow: ensure textarea has room for a new line before processing
@@ -1011,10 +1013,10 @@ func (m Model) renderNewTaskModal(width int) string {
 		for _, node := range cfg.Topology.Nodes {
 			nodeNames = append(nodeNames, node.Name)
 		}
-		subtitle += " · " + strings.Join(nodeNames, ", ")
+		subtitle += " · runtime " + string(m.effectiveLaunchRuntime()) + " · " + strings.Join(nodeNames, ", ")
 	}
 	if m.configOverride != "" {
-		subtitle = "custom config · " + filepath.Base(m.configOverride)
+		subtitle = "custom config · " + filepath.Base(m.configOverride) + " · runtime " + string(m.effectiveLaunchRuntime())
 	}
 	// inputChrome border adds 2 chars; keep input within modal inner width
 	inputWidth := max(18, innerWidth-2)
@@ -1039,6 +1041,14 @@ func (m Model) renderDetailHeader(width int) string {
 	dag := m.renderDAG(width)
 	divider := tuiTheme.divider.Render(strings.Repeat("─", max(8, width)))
 	return lipgloss.JoinVertical(lipgloss.Left, title, dag, divider)
+}
+
+func (m Model) effectiveLaunchRuntime() appconfig.RuntimeID {
+	runtime, err := taskconfig.ResolveRuntime("", m.launchConfig)
+	if err != nil {
+		return appconfig.RuntimeCodex
+	}
+	return runtime
 }
 
 func (m Model) renderDAG(width int) string {

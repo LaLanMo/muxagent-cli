@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,6 +15,7 @@ func TestLoadDefaultConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, cfg.Version)
+	assert.Equal(t, appconfig.RuntimeCodex, cfg.Runtime)
 	assert.Equal(t, "upsert_plan", cfg.Topology.Entry)
 	assert.Len(t, cfg.Topology.Nodes, 6)
 	assert.Equal(t, NodeTypeHuman, cfg.NodeDefinitions["approve_plan"].Type)
@@ -474,7 +476,95 @@ func TestMaterializeWritesConfigAndPrompts(t *testing.T) {
 
 	data, err := os.ReadFile(materialized.ConfigPath)
 	require.NoError(t, err)
+	assert.Contains(t, string(data), "runtime: codex")
 	assert.Contains(t, string(data), "./prompts/upsert_plan.md")
+}
+
+func TestTaskRuntimeSelection(t *testing.T) {
+	t.Run("explicit claude runtime loads from config", func(t *testing.T) {
+		path := writeConfigFile(t, `
+version: 1
+runtime: claude-code
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompt.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
+	})
+
+	t.Run("runtime override takes precedence", func(t *testing.T) {
+		cfg := basicFixture()
+		cfg.Runtime = appconfig.RuntimeClaudeCode
+
+		runtime, err := ResolveRuntime(appconfig.RuntimeCodex, cfg)
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeCodex, runtime)
+
+		runtime, err = ResolveRuntime("", cfg)
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeClaudeCode, runtime)
+	})
+
+	t.Run("materialize persists resolved runtime", func(t *testing.T) {
+		workDir := t.TempDir()
+		cfgPath := writeConfigFile(t, `
+version: 1
+runtime: claude-code
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompt.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+		require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(cfgPath), "prompt.md"), []byte("# prompt"), 0o644))
+
+		materialized, err := MaterializeWithRuntime(workDir, "task-claude", cfgPath, "")
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeClaudeCode, materialized.Config.Runtime)
+
+		persisted, err := Load(materialized.ConfigPath)
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeClaudeCode, persisted.Runtime)
+	})
 }
 
 func writeConfigFile(t *testing.T, content string) string {

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,6 +27,7 @@ const (
 
 type Config struct {
 	Version         int                       `yaml:"version" json:"version"`
+	Runtime         appconfig.RuntimeID       `yaml:"runtime" json:"runtime"`
 	Clarification   ClarificationConfig       `yaml:"clarification" json:"clarification"`
 	Topology        Topology                  `yaml:"topology" json:"topology"`
 	NodeDefinitions map[string]NodeDefinition `yaml:"node_definitions" json:"node_definitions"`
@@ -163,6 +165,7 @@ type MaterializedConfig struct {
 
 type rawConfig struct {
 	Version         *int                         `yaml:"version"`
+	Runtime         *appconfig.RuntimeID         `yaml:"runtime"`
 	Clarification   *rawClarificationConfig      `yaml:"clarification"`
 	Topology        *rawTopology                 `yaml:"topology"`
 	NodeDefinitions map[string]rawNodeDefinition `yaml:"node_definitions"`
@@ -227,6 +230,9 @@ func parse(data []byte) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
+	if strings.TrimSpace(string(cfg.Runtime)) == "" {
+		cfg.Runtime = appconfig.RuntimeCodex
+	}
 	if cfg.Clarification.MaxQuestions == 0 {
 		cfg.Clarification.MaxQuestions = 4
 	}
@@ -250,6 +256,12 @@ func applyDefaults(cfg *Config) {
 func Validate(cfg *Config) error {
 	if cfg.Version != 1 {
 		return fmt.Errorf("unsupported config version %d", cfg.Version)
+	}
+	if strings.TrimSpace(string(cfg.Runtime)) == "" {
+		cfg.Runtime = appconfig.RuntimeCodex
+	}
+	if !appconfig.IsSupportedRuntime(cfg.Runtime) {
+		return fmt.Errorf("runtime %q is not supported", cfg.Runtime)
 	}
 	if cfg.Topology.Entry == "" {
 		return errors.New("topology.entry is required")
@@ -540,6 +552,9 @@ func (raw *rawConfig) toConfig() Config {
 	if raw.Version != nil {
 		cfg.Version = *raw.Version
 	}
+	if raw.Runtime != nil {
+		cfg.Runtime = *raw.Runtime
+	}
 	if raw.Clarification != nil {
 		if raw.Clarification.MaxQuestions != nil {
 			cfg.Clarification.MaxQuestions = *raw.Clarification.MaxQuestions
@@ -826,6 +841,10 @@ func isNumberValue(value interface{}) bool {
 }
 
 func Materialize(workDir, taskID, overridePath string) (*MaterializedConfig, error) {
+	return MaterializeWithRuntime(workDir, taskID, overridePath, "")
+}
+
+func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverride appconfig.RuntimeID) (*MaterializedConfig, error) {
 	taskDir := filepath.Join(workDir, ".muxagent", "tasks", taskID)
 	promptDir := filepath.Join(taskDir, "prompts")
 	if err := os.MkdirAll(promptDir, 0o755); err != nil {
@@ -859,6 +878,11 @@ func Materialize(workDir, taskID, overridePath string) (*MaterializedConfig, err
 	if err != nil {
 		return nil, err
 	}
+	resolvedRuntime, err := ResolveRuntime(runtimeOverride, cfgCopy)
+	if err != nil {
+		return nil, err
+	}
+	cfgCopy.Runtime = resolvedRuntime
 
 	names := make([]string, 0, len(cfgCopy.NodeDefinitions))
 	for name := range cfgCopy.NodeDefinitions {
@@ -902,6 +926,22 @@ func Materialize(workDir, taskID, overridePath string) (*MaterializedConfig, err
 		PromptDir:  promptDir,
 		Config:     cfgCopy,
 	}, nil
+}
+
+func ResolveRuntime(override appconfig.RuntimeID, cfg *Config) (appconfig.RuntimeID, error) {
+	if override != "" {
+		if !appconfig.IsSupportedRuntime(override) {
+			return "", fmt.Errorf("runtime %q is not supported", override)
+		}
+		return override, nil
+	}
+	if cfg != nil && cfg.Runtime != "" {
+		if !appconfig.IsSupportedRuntime(cfg.Runtime) {
+			return "", fmt.Errorf("runtime %q is not supported", cfg.Runtime)
+		}
+		return cfg.Runtime, nil
+	}
+	return appconfig.RuntimeCodex, nil
 }
 
 func readPrompt(fsys fs.FS, sourceDir, path string, embedded bool) ([]byte, error) {

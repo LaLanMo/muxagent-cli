@@ -75,6 +75,7 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		SchemaPath:          taskstore.SchemaPath(task.WorkDir, task.ID, run.NodeName),
 		WorkDir:             task.WorkDir,
 		ArtifactDir:         artifactDir,
+		Runtime:             cfg.Runtime,
 		Prompt:              prompt,
 		ResultSchema:        cfg.NodeDefinitions[run.NodeName].ResultSchema,
 	}

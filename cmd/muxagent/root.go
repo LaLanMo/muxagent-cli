@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/acptest"
@@ -10,7 +11,10 @@ import (
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/daemon"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/health"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/update"
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor/claudeexec"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor/codexexec"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
@@ -19,21 +23,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type launchFunc func(ctx context.Context, workDir, configPath string) error
+type launchFuncWithRuntime func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error
 
 type rootOptions struct {
-	launchTUI launchFunc
+	launchTUI launchFuncWithRuntime
 }
 
 func NewRootCmd() *cobra.Command {
 	return newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir, configPath string) error {
+		launchTUI: func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error {
 			workDir = taskstore.NormalizeWorkDir(workDir)
-			launchConfig, err := loadTaskLaunchConfig(configPath)
+			launchConfig, err := loadTaskLaunchConfig(configPath, runtime)
 			if err != nil {
 				return err
 			}
-			service, err := taskruntime.NewService(workDir, configPath, codexexec.New(""))
+			service, err := taskruntime.NewService(
+				workDir,
+				configPath,
+				taskexecutor.NewRouter(codexexec.New(""), claudeexec.New("")),
+			)
 			if err != nil {
 				return err
 			}
@@ -51,21 +59,30 @@ func NewRootCmd() *cobra.Command {
 
 func newRootCmd(opts rootOptions) *cobra.Command {
 	var configPath string
+	var runtimeOverride string
 	rootCmd := &cobra.Command{
 		Use:     "muxagent",
 		Short:   "MuxAgent CLI",
 		Version: cliversion.CLIString(),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var runtime appconfig.RuntimeID
+			if runtimeOverride != "" {
+				runtime = appconfig.RuntimeID(runtimeOverride)
+				if !appconfig.IsSupportedRuntime(runtime) {
+					return fmt.Errorf("runtime %q is not supported", runtimeOverride)
+				}
+			}
 			workDir, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			return opts.launchTUI(cmd.Context(), workDir, configPath)
+			return opts.launchTUI(cmd.Context(), workDir, configPath, runtime)
 		},
 	}
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.Flags().StringVarP(&configPath, "config", "c", "", "Task config override path for task-first TUI")
+	rootCmd.Flags().StringVar(&runtimeOverride, "runtime", "", "Task runtime override (codex or claude-code)")
 
 	rootCmd.AddCommand(
 		acptest.NewCmd(),
@@ -86,9 +103,23 @@ func Execute() {
 	}
 }
 
-func loadTaskLaunchConfig(configPath string) (*taskconfig.Config, error) {
+func loadTaskLaunchConfig(configPath string, runtimeOverride appconfig.RuntimeID) (*taskconfig.Config, error) {
+	var (
+		cfg *taskconfig.Config
+		err error
+	)
 	if configPath == "" {
-		return taskconfig.LoadDefault()
+		cfg, err = taskconfig.LoadDefault()
+	} else {
+		cfg, err = taskconfig.Load(configPath)
 	}
-	return taskconfig.Load(configPath)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := taskconfig.ResolveRuntime(runtimeOverride, cfg)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Runtime = runtime
+	return cfg, nil
 }

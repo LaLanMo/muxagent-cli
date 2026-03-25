@@ -3,6 +3,7 @@ package taskexecutor
 import (
 	"context"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 )
@@ -16,6 +17,7 @@ type Request struct {
 	SchemaPath          string
 	WorkDir             string
 	ArtifactDir         string
+	Runtime             appconfig.RuntimeID
 	Prompt              string
 	ResultSchema        taskconfig.JSONSchema
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
@@ -120,7 +121,9 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 
 	upsertRequests := executor.requestsForNode("upsert_plan")
 	require.Len(t, upsertRequests, 2)
+	assert.Equal(t, appconfig.RuntimeCodex, upsertRequests[0].Runtime)
 	assert.Empty(t, upsertRequests[0].NodeRun.SessionID)
+	assert.Equal(t, appconfig.RuntimeCodex, upsertRequests[1].Runtime)
 	assert.Equal(t, upsertRequests[0].NodeRun.ID+"-session", upsertRequests[1].NodeRun.SessionID)
 	require.Len(t, upsertRequests[1].NodeRun.Clarifications, 1)
 	require.NotNil(t, upsertRequests[1].NodeRun.Clarifications[0].Response)
@@ -128,6 +131,68 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	assert.Contains(t, upsertRequests[1].Prompt, "Options offered:")
 	assert.Contains(t, upsertRequests[1].Prompt, "User selected:")
 	assert.Contains(t, upsertRequests[1].Prompt, "Stay in the existing thread context")
+}
+
+func TestServicePersistsRuntimeOverrideIntoClarificationResume(t *testing.T) {
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"upsert_plan": {
+				{
+					Kind: taskexecutor.ResultKindClarification,
+					Clarification: &taskdomain.ClarificationRequest{
+						Questions: []taskdomain.ClarificationQuestion{
+							{
+								Question:     "Need a choice",
+								WhyItMatters: "Impacts plan",
+								Options: []taskdomain.ClarificationOption{
+									{Label: "A", Description: "Option A"},
+									{Label: "B", Description: "Option B"},
+								},
+							},
+						},
+					},
+				},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")},
+			},
+			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
+		},
+	}
+	service := newTestService(t, executor)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{
+		Type:        CommandStartTask,
+		Description: "Implement login",
+		WorkDir:     service.workDir,
+		Runtime:     appconfig.RuntimeClaudeCode,
+	})
+	requested := waitForEvent(t, service.Events(), EventInputRequested)
+	require.Equal(t, InputKindClarification, requested.InputRequest.Kind)
+
+	cfg, err := taskconfig.Load(taskstore.ConfigPath(service.workDir, requested.TaskID))
+	require.NoError(t, err)
+	assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
+
+	service.Dispatch(RunCommand{
+		Type:      CommandSubmitInput,
+		TaskID:    requested.TaskID,
+		NodeRunID: requested.NodeRunID,
+		Payload: map[string]interface{}{
+			"answers": []interface{}{
+				map[string]interface{}{"selected": "A"},
+			},
+		},
+	})
+	waitForEvent(t, service.Events(), EventInputRequested)
+
+	upsertRequests := executor.requestsForNode("upsert_plan")
+	require.Len(t, upsertRequests, 2)
+	assert.Equal(t, appconfig.RuntimeClaudeCode, upsertRequests[0].Runtime)
+	assert.Equal(t, appconfig.RuntimeClaudeCode, upsertRequests[1].Runtime)
 }
 
 func TestServiceReviewRejectLoopsBackToUpsertPlan(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
@@ -28,12 +29,14 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
 	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	fakeClaudeFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-claude.sh")
 	basePath := os.Getenv("PATH")
 
 	tests := []struct {
 		name              string
 		flow              string
 		description       string
+		cliArgs           []string
 		drive             func(t *testing.T, session *tuiSession)
 		expectedArtifacts []string
 		verify            func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView)
@@ -263,6 +266,37 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				assert.Equal(t, failedImplement.ID, retriedImplement.TriggeredBy.NodeRunID)
 			},
 		},
+		{
+			name:        "claude runtime persists and clarification resumes",
+			flow:        "clarify-once",
+			description: "Need clarification with Claude",
+			cliArgs:     []string{"--runtime", "claude-code"},
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "New Task", "runtime claude-code")
+				session.send(t, "Need clarification with Claude\r")
+				session.waitForAll(t, 10*time.Second, "upsert_plan", "awaiting input")
+				session.confirm(t)
+				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+				session.confirm(t)
+			},
+			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 6)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				cfg, err := taskconfig.Load(taskstore.ConfigPath(task.WorkDir, task.ID))
+				require.NoError(t, err)
+				assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
+				for _, run := range runs {
+					if run.NodeName == "upsert_plan" {
+						require.Len(t, run.Clarifications, 1)
+						require.NotNil(t, run.Clarifications[0].Response)
+						assert.Equal(t, run.ID, run.SessionID)
+					}
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -271,15 +305,19 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			homeDir := t.TempDir()
 			fakeDir := t.TempDir()
 			fakeCodexPath := filepath.Join(fakeDir, "codex")
+			fakeClaudePath := filepath.Join(fakeDir, "claude")
 			copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+			copyExecutable(t, fakeClaudeFixture, fakeClaudePath)
 
 			t.Setenv("HOME", homeDir)
 			t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
 			t.Setenv("FAKE_CODEX_FLOW", tt.flow)
 			t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+			t.Setenv("FAKE_CLAUDE_FLOW", tt.flow)
+			t.Setenv("FAKE_CLAUDE_STATE_DIR", filepath.Join(workDir, ".fake-claude-state"))
 			t.Setenv("TERM", "xterm-256color")
 
-			session := startTUISession(t, binaryPath, workDir)
+			session := startTUISession(t, binaryPath, workDir, tt.cliArgs...)
 			tt.drive(t, session)
 			task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
 
@@ -306,10 +344,10 @@ type tuiSession struct {
 	buffer   strings.Builder
 }
 
-func startTUISession(t *testing.T, binaryPath, workDir string) *tuiSession {
+func startTUISession(t *testing.T, binaryPath, workDir string, args ...string) *tuiSession {
 	t.Helper()
 
-	cmd := exec.Command(binaryPath)
+	cmd := exec.Command(binaryPath, args...)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 

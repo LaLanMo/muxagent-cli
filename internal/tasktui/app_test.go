@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -43,6 +44,7 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	model = next.(Model)
 	view = model.View()
 	assert.Contains(t, strippedView(view.Content), "New Task")
+	assert.Contains(t, strippedView(view.Content), "runtime codex")
 	assert.Contains(t, strippedView(view.Content), "Enter submit")
 }
 
@@ -50,7 +52,7 @@ func TestModelSubmitsNewTaskCommand(t *testing.T) {
 	service := &fakeService{
 		events: make(chan taskruntime.RunEvent, 8),
 	}
-	model := NewModel(service, "/tmp/project", "./taskflow.yaml", nil, "v0.1.0")
+	model := NewModel(service, "/tmp/project", "./taskflow.yaml", &taskconfig.Config{Runtime: appconfig.RuntimeClaudeCode}, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
 	next, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
@@ -66,6 +68,7 @@ func TestModelSubmitsNewTaskCommand(t *testing.T) {
 	require.Len(t, service.dispatched, 1)
 	assert.Equal(t, taskruntime.CommandStartTask, service.dispatched[0].Type)
 	assert.Equal(t, "./taskflow.yaml", service.dispatched[0].ConfigPath)
+	assert.Equal(t, appconfig.RuntimeClaudeCode, service.dispatched[0].Runtime)
 	assert.Equal(t, ScreenRunning, model.screen)
 }
 

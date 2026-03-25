@@ -1,6 +1,7 @@
 package taskruntime
 
 import (
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 )
@@ -21,6 +22,7 @@ type RunCommand struct {
 	Description string
 	WorkDir     string
 	ConfigPath  string
+	Runtime     appconfig.RuntimeID
 	Payload     map[string]interface{}
 	Force       bool
 }
