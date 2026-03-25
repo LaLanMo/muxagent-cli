@@ -320,7 +320,7 @@ func newTaskListModel() list.Model {
 	return model
 }
 
-func newTaskTextArea() textarea.Model {
+func newStyledTextArea(placeholder string) textarea.Model {
 	input := textarea.New()
 	styles := textarea.DefaultDarkStyles()
 	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(tuiTheme.muted)
@@ -333,29 +333,7 @@ func newTaskTextArea() textarea.Model {
 	styles.Cursor.Color = tuiTheme.text
 	input.SetStyles(styles)
 	input.Prompt = ""
-	input.Placeholder = "Describe your task..."
-	input.CharLimit = 512
-	input.ShowLineNumbers = false
-	input.SetHeight(1)
-	input.MaxHeight = 0
-	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
-	return input
-}
-
-func newDetailTextArea() textarea.Model {
-	input := textarea.New()
-	styles := textarea.DefaultDarkStyles()
-	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(tuiTheme.muted)
-	styles.Focused.Text = lipgloss.NewStyle().Foreground(tuiTheme.text)
-	styles.Focused.Placeholder = lipgloss.NewStyle().Foreground(tuiTheme.subtle)
-	styles.Focused.CursorLine = lipgloss.NewStyle()
-	styles.Focused.LineNumber = lipgloss.NewStyle().Foreground(tuiTheme.subtle)
-	styles.Focused.CursorLineNumber = lipgloss.NewStyle().Foreground(tuiTheme.muted)
-	styles.Blurred = styles.Focused
-	styles.Cursor.Color = tuiTheme.text
-	input.SetStyles(styles)
-	input.Prompt = ""
-	input.Placeholder = "Type feedback..."
+	input.Placeholder = placeholder
 	input.CharLimit = 512
 	input.ShowLineNumbers = false
 	input.SetHeight(1)

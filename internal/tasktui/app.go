@@ -140,8 +140,8 @@ func NewModel(service RuntimeService, workDir, configOverride string, launchConf
 		returnScreen:     ScreenTaskList,
 		keys:             newAppKeyMap(),
 		taskList:         newTaskListModel(),
-		newTaskInput:     newTaskTextArea(),
-		detailInput:      newDetailTextArea(),
+		newTaskInput:     newStyledTextArea("Describe your task..."),
+		detailInput:      newStyledTextArea("Type feedback..."),
 		detailViewport:   newDetailViewport(),
 		artifactPreview:  newArtifactPreviewViewport(),
 		launchConfig:     launchConfig,
@@ -192,6 +192,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	default:
+		return m.forwardToActiveInput(msg)
 	}
 	return m, nil
 }
@@ -233,6 +235,30 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m.handleDetailKey(msg)
 	}
+}
+
+// forwardToActiveInput routes non-key messages (e.g. clipboard paste results)
+// to whichever textarea is currently active.
+func (m Model) forwardToActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch m.screen {
+	case ScreenNewTask:
+		cmd := updateTextArea(&m.newTaskInput, msg)
+		m.syncComponents()
+		return m, cmd
+	case ScreenApproval:
+		if m.approvalChoice == 1 {
+			cmd := updateTextArea(&m.detailInput, msg)
+			m.syncComponents()
+			return m, cmd
+		}
+	case ScreenClarification:
+		if m.clarificationOther {
+			cmd := updateTextArea(&m.detailInput, msg)
+			m.syncComponents()
+			return m, cmd
+		}
+	}
+	return m, nil
 }
 
 func (m *Model) handleArtifactPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
@@ -312,15 +338,22 @@ func (m Model) handleNewTaskKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			Runtime:     m.effectiveLaunchRuntime(),
 		})
 	default:
-		// Pre-grow: ensure textarea has room for a new line before processing
-		// the keystroke, so the internal viewport doesn't scroll away line 0.
-		textareaPreGrow(&m.newTaskInput, msg)
-		var cmd tea.Cmd
-		m.newTaskInput, cmd = m.newTaskInput.Update(msg)
-		textareaSyncHeight(&m.newTaskInput)
+		cmd := updateTextArea(&m.newTaskInput, msg)
 		m.syncComponents()
 		return m, cmd
 	}
+}
+
+// updateTextArea handles a message for a textarea: pre-grows on newline,
+// delegates to the textarea's Update, and syncs visible height afterward.
+func updateTextArea(ta *textarea.Model, msg tea.Msg) tea.Cmd {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		textareaPreGrow(ta, keyMsg)
+	}
+	var cmd tea.Cmd
+	*ta, cmd = ta.Update(msg)
+	textareaSyncHeight(ta)
+	return cmd
 }
 
 // textareaPreGrow ensures the textarea has room for a new line before the
@@ -411,10 +444,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.approvalChoice != 1 {
 			return m, nil
 		}
-		textareaPreGrow(&m.detailInput, msg)
-		var cmd tea.Cmd
-		m.detailInput, cmd = m.detailInput.Update(msg)
-		textareaSyncHeight(&m.detailInput)
+		cmd := updateTextArea(&m.detailInput, msg)
 		m.syncComponents()
 		return m, cmd
 	}
@@ -475,10 +505,7 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		if !m.clarificationOther {
 			return m, nil
 		}
-		textareaPreGrow(&m.detailInput, msg)
-		var cmd tea.Cmd
-		m.detailInput, cmd = m.detailInput.Update(msg)
-		textareaSyncHeight(&m.detailInput)
+		cmd := updateTextArea(&m.detailInput, msg)
 		m.syncComponents()
 		return m, cmd
 	}
