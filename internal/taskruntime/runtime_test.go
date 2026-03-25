@@ -1142,3 +1142,21 @@ func artifactAgentNode() taskconfig.NodeDefinition {
 func intPtr(value int) *int {
 	return &value
 }
+
+func TestConcurrentInstanceRejected(t *testing.T) {
+	workDir := t.TempDir()
+	svc1, err := NewService(workDir, "", &fakeExecutor{})
+	require.NoError(t, err)
+	defer svc1.Close()
+
+	// Second instance on the same workDir must fail.
+	_, err = NewService(workDir, "", &fakeExecutor{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "another muxagent instance is already running")
+
+	// After closing the first service, a new one should succeed.
+	require.NoError(t, svc1.Close())
+	svc3, err := NewService(workDir, "", &fakeExecutor{})
+	require.NoError(t, err)
+	defer svc3.Close()
+}

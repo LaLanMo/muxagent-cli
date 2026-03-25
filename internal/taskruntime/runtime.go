@@ -14,6 +14,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
+	"github.com/LaLanMo/muxagent-cli/internal/taskruntime/instancelock"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/google/uuid"
 )
@@ -21,6 +22,7 @@ import (
 type Service struct {
 	workDir        string
 	configOverride string
+	lock           *instancelock.Lock
 	store          *taskstore.Store
 	engine         *taskengine.Engine
 	executor       taskexecutor.Executor
@@ -35,13 +37,19 @@ type Service struct {
 
 func NewService(workDir, configOverride string, executor taskexecutor.Executor) (*Service, error) {
 	workDir = taskstore.NormalizeWorkDir(workDir)
+	lock, err := instancelock.Acquire(workDir)
+	if err != nil {
+		return nil, err
+	}
 	store, err := taskstore.Open(workDir)
 	if err != nil {
+		_ = lock.Release()
 		return nil, err
 	}
 	service := &Service{
 		workDir:        workDir,
 		configOverride: configOverride,
+		lock:           lock,
 		store:          store,
 		engine:         taskengine.New(),
 		executor:       executor,
@@ -51,6 +59,7 @@ func NewService(workDir, configOverride string, executor taskexecutor.Executor) 
 	}
 	if err := service.reconcileStaleRunning(context.Background()); err != nil {
 		_ = store.Close()
+		_ = lock.Release()
 		return nil, err
 	}
 	return service, nil
@@ -64,7 +73,12 @@ func (s *Service) Close() error {
 	s.taskCancels = map[string]context.CancelFunc{}
 	s.taskCtxs = map[string]context.Context{}
 	s.mu.Unlock()
-	return s.store.Close()
+	storeErr := s.store.Close()
+	lockErr := s.lock.Release()
+	if storeErr != nil {
+		return storeErr
+	}
+	return lockErr
 }
 
 func (s *Service) PrepareShutdown(ctx context.Context) error {
