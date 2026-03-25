@@ -244,6 +244,12 @@ func TestModelHandlesClarificationEvent(t *testing.T) {
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
+	model.activeTaskID = "task-1"
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusRunning,
+	}
+	model.screen = ScreenRunning
 	event := taskruntime.RunEvent{
 		Type:      taskruntime.EventInputRequested,
 		TaskID:    "task-1",
@@ -278,6 +284,431 @@ func TestModelHandlesClarificationEvent(t *testing.T) {
 	assert.Contains(t, strippedView(model.View().Content), "Need direction")
 }
 
+func TestBackgroundEventsDoNotLeaveTaskList(t *testing.T) {
+	baseTask := taskdomain.Task{ID: "task-1", Description: "Implement login"}
+	draftView := taskdomain.TaskView{Task: baseTask, Status: taskdomain.TaskStatusDraft}
+	runningView := taskdomain.TaskView{
+		Task:            baseTask,
+		Status:          taskdomain.TaskStatusRunning,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	awaitingView := taskdomain.TaskView{
+		Task:            baseTask,
+		Status:          taskdomain.TaskStatusAwaitingUser,
+		CurrentNodeName: "approve_plan",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
+		},
+	}
+	doneView := taskdomain.TaskView{
+		Task:            baseTask,
+		Status:          taskdomain.TaskStatusDone,
+		CurrentNodeName: "done",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "done", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+		},
+	}
+	failedView := taskdomain.TaskView{
+		Task:            baseTask,
+		Status:          taskdomain.TaskStatusFailed,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunFailed, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		event     func() taskruntime.RunEvent
+		wantSnips []string
+	}{
+		{
+			name: "node started",
+			event: func() taskruntime.RunEvent {
+				view := runningView
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventNodeStarted,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "implement",
+					TaskView:  &view,
+				}
+			},
+			wantSnips: []string{"running Implement login"},
+		},
+		{
+			name: "node progress",
+			event: func() taskruntime.RunEvent {
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventNodeProgress,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "implement",
+					Progress:  &taskruntime.ProgressInfo{Message: "stream update"},
+				}
+			},
+			wantSnips: []string{"running Implement login"},
+		},
+		{
+			name: "node completed",
+			event: func() taskruntime.RunEvent {
+				view := runningView
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventNodeCompleted,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "implement",
+					TaskView:  &view,
+				}
+			},
+			wantSnips: []string{"running Implement login"},
+		},
+		{
+			name: "human input requested",
+			event: func() taskruntime.RunEvent {
+				view := awaitingView
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventInputRequested,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "approve_plan",
+					TaskView:  &view,
+					InputRequest: &taskruntime.InputRequest{
+						Kind:      taskruntime.InputKindHumanNode,
+						TaskID:    "task-1",
+						NodeRunID: "run-1",
+						NodeName:  "approve_plan",
+					},
+				}
+			},
+			wantSnips: []string{"awaiting Implement login"},
+		},
+		{
+			name: "clarification requested",
+			event: func() taskruntime.RunEvent {
+				view := awaitingView
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventInputRequested,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "upsert_plan",
+					TaskView:  &view,
+					InputRequest: &taskruntime.InputRequest{
+						Kind:      taskruntime.InputKindClarification,
+						TaskID:    "task-1",
+						NodeRunID: "run-1",
+						NodeName:  "upsert_plan",
+					},
+				}
+			},
+			wantSnips: []string{"awaiting Implement login"},
+		},
+		{
+			name: "task completed",
+			event: func() taskruntime.RunEvent {
+				view := doneView
+				return taskruntime.RunEvent{
+					Type:     taskruntime.EventTaskCompleted,
+					TaskID:   "task-1",
+					NodeName: "done",
+					TaskView: &view,
+				}
+			},
+			wantSnips: []string{"done Implement login"},
+		},
+		{
+			name: "task failed",
+			event: func() taskruntime.RunEvent {
+				view := failedView
+				return taskruntime.RunEvent{
+					Type:     taskruntime.EventTaskFailed,
+					TaskID:   "task-1",
+					NodeName: "implement",
+					TaskView: &view,
+					Error:    &taskruntime.RunError{Message: "executor failed"},
+				}
+			},
+			wantSnips: []string{"failed Implement login"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+			next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+			model = next.(Model)
+			model.tasks = []taskdomain.TaskView{draftView}
+			model.syncComponents()
+
+			next, _ = model.Update(tt.event())
+			model = next.(Model)
+
+			assert.Equal(t, ScreenTaskList, model.screen)
+			view := strippedView(model.View().Content)
+			assert.Contains(t, view, "Ctrl+N new task")
+			assert.NotContains(t, view, "Approve this plan?")
+			assert.NotContains(t, view, "Artifacts (")
+			for _, snippet := range tt.wantSnips {
+				assert.Contains(t, view, snippet)
+			}
+		})
+	}
+}
+
+func TestBackgroundNodeProgressDoesNotLeaveTaskList(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model.tasks = []taskdomain.TaskView{
+		{
+			Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+			Status: taskdomain.TaskStatusRunning,
+		},
+	}
+	model.syncComponents()
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "implement",
+		Progress:  &taskruntime.ProgressInfo{Message: "stream update"},
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenTaskList, model.screen)
+	assert.Equal(t, []string{"stream update"}, model.progressByRun["run-1"])
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Ctrl+N new task")
+	assert.NotContains(t, view, "Artifacts (")
+	assert.NotContains(t, view, "stream update")
+}
+
+func TestActiveTaskEventsStillDriveDetailTransitions(t *testing.T) {
+	baseView := taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status:          taskdomain.TaskStatusRunning,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		event      func() taskruntime.RunEvent
+		wantScreen Screen
+		wantText   string
+	}{
+		{
+			name: "progress keeps running screen",
+			event: func() taskruntime.RunEvent {
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventNodeProgress,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "implement",
+					Progress:  &taskruntime.ProgressInfo{Message: "stream update"},
+				}
+			},
+			wantScreen: ScreenRunning,
+			wantText:   "stream update",
+		},
+		{
+			name: "clarification request opens clarification screen",
+			event: func() taskruntime.RunEvent {
+				view := taskdomain.TaskView{
+					Task:            baseView.Task,
+					Status:          taskdomain.TaskStatusAwaitingUser,
+					CurrentNodeName: "implement",
+					NodeRuns: []taskdomain.NodeRunView{
+						{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
+					},
+				}
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventInputRequested,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "implement",
+					TaskView:  &view,
+					InputRequest: &taskruntime.InputRequest{
+						Kind:      taskruntime.InputKindClarification,
+						TaskID:    "task-1",
+						NodeRunID: "run-1",
+						NodeName:  "implement",
+						Questions: []taskdomain.ClarificationQuestion{{Question: "What should we do?"}},
+					},
+				}
+			},
+			wantScreen: ScreenClarification,
+			wantText:   "What should we do?",
+		},
+		{
+			name: "approval request opens approval screen",
+			event: func() taskruntime.RunEvent {
+				view := taskdomain.TaskView{
+					Task:            baseView.Task,
+					Status:          taskdomain.TaskStatusAwaitingUser,
+					CurrentNodeName: "approve_plan",
+					NodeRuns: []taskdomain.NodeRunView{
+						{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
+					},
+				}
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventInputRequested,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "approve_plan",
+					TaskView:  &view,
+					InputRequest: &taskruntime.InputRequest{
+						Kind:      taskruntime.InputKindHumanNode,
+						TaskID:    "task-1",
+						NodeRunID: "run-1",
+						NodeName:  "approve_plan",
+					},
+				}
+			},
+			wantScreen: ScreenApproval,
+			wantText:   "Approve this plan?",
+		},
+		{
+			name: "task completed opens complete screen",
+			event: func() taskruntime.RunEvent {
+				view := taskdomain.TaskView{
+					Task:            baseView.Task,
+					Status:          taskdomain.TaskStatusDone,
+					CurrentNodeName: "done",
+					NodeRuns: []taskdomain.NodeRunView{
+						{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "done", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+					},
+				}
+				return taskruntime.RunEvent{
+					Type:      taskruntime.EventTaskCompleted,
+					TaskID:    "task-1",
+					NodeRunID: "run-1",
+					NodeName:  "done",
+					TaskView:  &view,
+				}
+			},
+			wantScreen: ScreenComplete,
+			wantText:   "Task completed successfully",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+			next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+			model = next.(Model)
+			model.current = &baseView
+			model.activeTaskID = baseView.Task.ID
+			model.screen = ScreenRunning
+			model.syncComponents()
+
+			next, _ = model.Update(tt.event())
+			model = next.(Model)
+
+			assert.Equal(t, tt.wantScreen, model.screen)
+			assert.Equal(t, "task-1", model.activeTaskID)
+			assert.Contains(t, strippedView(model.View().Content), tt.wantText)
+		})
+	}
+}
+
+func TestBackgroundTaskDoesNotStealOpenedDetail(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-a", Description: "Task A"},
+		Status:          taskdomain.TaskStatusRunning,
+		CurrentNodeName: "implement",
+	}
+	model.activeTaskID = "task-a"
+	model.tasks = []taskdomain.TaskView{
+		{Task: taskdomain.Task{ID: "task-a", Description: "Task A"}, Status: taskdomain.TaskStatusRunning},
+		{Task: taskdomain.Task{ID: "task-b", Description: "Task B"}, Status: taskdomain.TaskStatusRunning},
+	}
+	model.screen = ScreenRunning
+	model.syncComponents()
+
+	backgroundView := taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-b", Description: "Task B"},
+		Status:          taskdomain.TaskStatusFailed,
+		CurrentNodeName: "verify",
+	}
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:     taskruntime.EventTaskFailed,
+		TaskID:   "task-b",
+		NodeName: "verify",
+		TaskView: &backgroundView,
+		Error:    &taskruntime.RunError{Message: "verify failed"},
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenRunning, model.screen)
+	require.NotNil(t, model.current)
+	assert.Equal(t, "task-a", model.current.Task.ID)
+	assert.Equal(t, taskdomain.TaskStatusFailed, taskStatusForID(model.tasks, "task-b"))
+}
+
+func TestBackToTaskListStopsFollowingTask(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	activeView := taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status:          taskdomain.TaskStatusRunning,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.current = &activeView
+	model.activeTaskID = "task-1"
+	model.tasks = []taskdomain.TaskView{activeView}
+	model.screen = ScreenRunning
+	model.syncComponents()
+	service.tasks = []taskdomain.TaskView{activeView}
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	if msg != nil {
+		next, _ = model.Update(msg)
+		model = next.(Model)
+	}
+	assert.Equal(t, ScreenTaskList, model.screen)
+	assert.Empty(t, model.activeTaskID)
+
+	completedView := taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status:          taskdomain.TaskStatusDone,
+		CurrentNodeName: "done",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "done", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+		},
+	}
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:      taskruntime.EventTaskCompleted,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "done",
+		TaskView:  &completedView,
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenTaskList, model.screen)
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Ctrl+N new task")
+	assert.NotContains(t, view, "Task completed successfully")
+}
+
 func TestDetailScreenShowsLatestFourRunningStreamMessagesAndThreadID(t *testing.T) {
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
@@ -290,6 +721,7 @@ func TestDetailScreenShowsLatestFourRunningStreamMessagesAndThreadID(t *testing.
 			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: now}},
 		},
 	}
+	model.activeTaskID = "task-1"
 	model.screen = ScreenRunning
 	model.handleEvent(taskruntime.RunEvent{
 		Type:      taskruntime.EventNodeProgress,
@@ -336,6 +768,7 @@ func TestNodeProgressDoesNotReopenCollapsedArtifacts(t *testing.T) {
 			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: now}},
 		},
 	}
+	model.activeTaskID = "task-1"
 	model.screen = ScreenRunning
 	model.artifactCollapsed = true
 	model.syncComponents()
@@ -712,6 +1145,7 @@ func TestFailureFooterShowsRetryActionAndDispatchesRetry(t *testing.T) {
 			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunFailed, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
 		},
 	}
+	model.activeTaskID = "task-1"
 	model.screen = ScreenFailed
 	model.errorText = "executor failed"
 	model.syncComponents()
@@ -744,6 +1178,7 @@ func TestFailureFooterShowsForceRetryWhenIterationLimitReached(t *testing.T) {
 			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunFailed, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
 		},
 	}
+	model.activeTaskID = "task-1"
 	model.screen = ScreenFailed
 	model.errorText = "executor failed"
 	model.syncComponents()
@@ -787,6 +1222,7 @@ func TestFailureFooterShowsForceContinueForBlockedStep(t *testing.T) {
 			},
 		},
 	}
+	model.activeTaskID = "task-1"
 	model.screen = ScreenFailed
 	model.syncComponents()
 
@@ -818,6 +1254,7 @@ func TestNodeFailedEventKeepsRunningScreenWhenTaskStillRunning(t *testing.T) {
 			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
 		},
 	}
+	model.activeTaskID = "task-1"
 	model.screen = ScreenRunning
 	model.syncComponents()
 
@@ -840,12 +1277,14 @@ func TestCommandErrorDoesNotForceFailedScreen(t *testing.T) {
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	model = next.(Model)
+	model.current = &taskdomain.TaskView{Task: taskdomain.Task{ID: "task-1", Description: "Running task"}}
+	model.activeTaskID = "task-1"
 	model.screen = ScreenRunning
 
 	next, _ = model.Update(taskruntime.RunEvent{
-		Type:  taskruntime.EventCommandError,
+		Type:   taskruntime.EventCommandError,
 		TaskID: "task-1",
-		Error: &taskruntime.RunError{Message: "cannot continue blocked step"},
+		Error:  &taskruntime.RunError{Message: "cannot continue blocked step"},
 	})
 	model = next.(Model)
 
@@ -895,6 +1334,15 @@ func timePtr(ts time.Time) *time.Time {
 
 func strippedView(view string) string {
 	return ansi.Strip(view)
+}
+
+func taskStatusForID(tasks []taskdomain.TaskView, taskID string) taskdomain.TaskStatus {
+	for _, task := range tasks {
+		if task.Task.ID == taskID {
+			return task.Status
+		}
+	}
+	return ""
 }
 
 type fakeService struct {

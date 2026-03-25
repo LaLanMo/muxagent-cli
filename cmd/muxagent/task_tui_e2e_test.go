@@ -359,11 +359,11 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			t.Setenv("FAKE_CLAUDE_STATE_DIR", filepath.Join(workDir, ".fake-claude-state"))
 			t.Setenv("TERM", "xterm-256color")
 
-				args := append([]string(nil), tt.cliArgs...)
-				if tt.configPath != nil {
-					args = append(args, "-c", tt.configPath(t, workDir))
-				}
-				session := startTUISession(t, binaryPath, workDir, args...)
+			args := append([]string(nil), tt.cliArgs...)
+			if tt.configPath != nil {
+				args = append(args, "-c", tt.configPath(t, workDir))
+			}
+			session := startTUISession(t, binaryPath, workDir, args...)
 			tt.drive(t, session)
 			task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
 
@@ -378,6 +378,51 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			session.quit(t)
 		})
 	}
+}
+
+func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "slow-happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
+	session.send(t, "\x0e")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.send(t, "Stay on list\r")
+	session.waitForAll(t, 10*time.Second, "Task: Stay on list", "upsert_plan")
+	session.send(t, "\x1b")
+	session.resetOutput()
+	session.waitForAll(t, 5*time.Second, "Ctrl+N new task", "running Stay on list")
+	session.waitForAll(t, 10*time.Second, "Ctrl+N new task", "awaiting Stay on list")
+
+	output := session.output()
+	assert.NotContains(t, output, "Approve this plan?")
+	assert.NotContains(t, output, "Artifacts (")
+
+	task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusAwaitingUser)
+	assert.Equal(t, "Stay on list", task.Description)
+	assert.Equal(t, taskdomain.TaskStatusAwaitingUser, view.Status)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"upsert_plan":  1,
+		"review_plan":  1,
+		"approve_plan": 1,
+	})
+
+	session.quit(t)
 }
 
 type tuiSession struct {
@@ -499,6 +544,12 @@ func (s *tuiSession) output() string {
 	clean = strings.ReplaceAll(clean, "\r", "\n")
 	clean = strings.ReplaceAll(clean, "\x00", "")
 	return clean
+}
+
+func (s *tuiSession) resetOutput() {
+	s.bufferMu.Lock()
+	defer s.bufferMu.Unlock()
+	s.buffer.Reset()
 }
 
 func (s *tuiSession) quit(t *testing.T) {

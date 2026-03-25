@@ -53,6 +53,10 @@ else
   echo "{\"type\":\"item.completed\",\"message\":\"running ${node_name} #${count}\"}"
 fi
 
+if [ "$flow" = "slow-happy" ]; then
+  sleep 0.3
+fi
+
 write_result() {
   artifact_name="$1"
   extra_json="$2"
