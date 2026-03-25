@@ -3,15 +3,27 @@ package taskdomain
 import "github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 
 const (
-	TriggerReasonManualRetry      = "manual_retry"
-	TriggerReasonManualRetryForce = "manual_retry_force"
+	TriggerReasonManualRetry         = "manual_retry"
+	TriggerReasonManualRetryForce    = "manual_retry_force"
+	TriggerReasonManualContinue      = "manual_continue"
+	TriggerReasonManualContinueForce = "manual_continue_force"
 
 	FailureReasonInterruptedByUser    = "interrupted_by_user"
 	FailureReasonOrphanedAfterRestart = "orphaned_after_restart"
 )
 
-type Retryability struct {
-	Run               NodeRun
+type RecoveryTargetKind string
+
+const (
+	RecoveryTargetFailedRun   RecoveryTargetKind = "failed_run"
+	RecoveryTargetBlockedStep RecoveryTargetKind = "blocked_step"
+)
+
+type RecoveryTarget struct {
+	Kind              RecoveryTargetKind
+	Run               *NodeRun
+	BlockedStep       *BlockedStep
+	NodeName          string
 	NextIteration     int
 	MaxIterations     int
 	RetryAllowed      bool
@@ -21,6 +33,18 @@ type Retryability struct {
 
 func IsManualRetryReason(reason string) bool {
 	return reason == TriggerReasonManualRetry || reason == TriggerReasonManualRetryForce
+}
+
+func IsManualContinueReason(reason string) bool {
+	return reason == TriggerReasonManualContinue || reason == TriggerReasonManualContinueForce
+}
+
+func LatestBlockedStep(steps []BlockedStep) *BlockedStep {
+	for i := len(steps) - 1; i >= 0; i-- {
+		step := steps[i]
+		return &step
+	}
+	return nil
 }
 
 func IterationCount(runs []NodeRun, nodeName string) int {
@@ -81,30 +105,114 @@ func LatestOpenFailedRun(runs []NodeRun) *NodeRun {
 	return nil
 }
 
-func RetryabilityForTask(cfg *taskconfig.Config, runs []NodeRun) *Retryability {
+func RecoveryTargetForTask(cfg *taskconfig.Config, runs []NodeRun, blockedSteps []BlockedStep) *RecoveryTarget {
+	var latestFailed *NodeRun
 	for i := len(runs) - 1; i >= 0; i-- {
 		run := runs[i]
 		if !IsOpenFailedRun(runs, run) {
 			continue
 		}
 		if cfg.NodeDefinitions[run.NodeName].Type != taskconfig.NodeTypeAgent {
+			break
+		}
+		candidate := run
+		latestFailed = &candidate
+		break
+	}
+	latestBlocked := LatestBlockedStep(blockedSteps)
+
+	switch {
+	case latestFailed == nil && latestBlocked == nil:
+		return nil
+	case latestFailed == nil:
+		limit := MaxIterationsForNode(cfg, latestBlocked.NodeName)
+		return &RecoveryTarget{
+			Kind:              RecoveryTargetBlockedStep,
+			BlockedStep:       latestBlocked,
+			NodeName:          latestBlocked.NodeName,
+			NextIteration:     latestBlocked.Iteration,
+			MaxIterations:     limit,
+			RetryAllowed:      false,
+			ForceRetryAllowed: true,
+			Reason:            latestBlocked.Reason,
+		}
+	case latestBlocked == nil:
+		return failedRunRecoveryTarget(cfg, runs, *latestFailed)
+	default:
+		failedAt := latestFailed.StartedAt
+		if latestFailed.CompletedAt != nil {
+			failedAt = latestFailed.CompletedAt.UTC()
+		}
+		if !latestBlocked.CreatedAt.After(failedAt) {
+			return failedRunRecoveryTarget(cfg, runs, *latestFailed)
+		}
+		limit := MaxIterationsForNode(cfg, latestBlocked.NodeName)
+		return &RecoveryTarget{
+			Kind:              RecoveryTargetBlockedStep,
+			BlockedStep:       latestBlocked,
+			NodeName:          latestBlocked.NodeName,
+			NextIteration:     latestBlocked.Iteration,
+			MaxIterations:     limit,
+			RetryAllowed:      false,
+			ForceRetryAllowed: true,
+			Reason:            latestBlocked.Reason,
+		}
+	}
+}
+
+func CurrentIssueForTask(cfg *taskconfig.Config, runs []NodeRun, blockedSteps []BlockedStep) *TaskIssue {
+	target := RecoveryTargetForTask(cfg, runs, blockedSteps)
+	if target == nil {
+		return nil
+	}
+	switch target.Kind {
+	case RecoveryTargetBlockedStep:
+		if target.BlockedStep == nil {
 			return nil
 		}
-		limit := MaxIterationsForNode(cfg, run.NodeName)
-		nextIteration := IterationCount(runs, run.NodeName) + 1
-		info := &Retryability{
-			Run:               run,
-			NextIteration:     nextIteration,
-			MaxIterations:     limit,
-			RetryAllowed:      nextIteration <= limit,
-			ForceRetryAllowed: true,
+		return &TaskIssue{
+			Kind:       TaskIssueBlockedStep,
+			NodeName:   target.NodeName,
+			Iteration:  target.NextIteration,
+			Reason:     target.Reason,
+			OccurredAt: target.BlockedStep.CreatedAt,
 		}
-		if !info.RetryAllowed {
-			info.Reason = "max_iterations reached"
+	case RecoveryTargetFailedRun:
+		if target.Run == nil {
+			return nil
 		}
-		return info
+		occurredAt := target.Run.StartedAt
+		if target.Run.CompletedAt != nil {
+			occurredAt = target.Run.CompletedAt.UTC()
+		}
+		return &TaskIssue{
+			Kind:       TaskIssueFailedRun,
+			NodeName:   target.NodeName,
+			Iteration:  target.NextIteration - 1,
+			Reason:     DisplayFailureReason(target.Run.FailureReason),
+			OccurredAt: occurredAt,
+		}
+	default:
+		return nil
 	}
-	return nil
+}
+
+func failedRunRecoveryTarget(cfg *taskconfig.Config, runs []NodeRun, run NodeRun) *RecoveryTarget {
+	limit := MaxIterationsForNode(cfg, run.NodeName)
+	nextIteration := IterationCount(runs, run.NodeName) + 1
+	info := &RecoveryTarget{
+		Kind:              RecoveryTargetFailedRun,
+		Run:               &run,
+		NodeName:          run.NodeName,
+		NextIteration:     nextIteration,
+		MaxIterations:     limit,
+		RetryAllowed:      nextIteration <= limit,
+		ForceRetryAllowed: true,
+	}
+	if !info.RetryAllowed {
+		info.Reason = "max_iterations reached"
+	}
+	return info
 }
 
 func DisplayFailureReason(reason string) string {

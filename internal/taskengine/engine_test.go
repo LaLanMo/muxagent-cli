@@ -210,6 +210,61 @@ func TestEngineReturnsAllBlockedTargetsWhenMultipleTriggeredEdgesOverflow(t *tes
 	assert.Equal(t, "beta", resolution.Blocked[1].To)
 }
 
+func TestDeriveBlockedStepsFromRunHistory(t *testing.T) {
+	cfg := loopFixture()
+	now := time.Now().UTC()
+	runs := []taskdomain.NodeRun{
+		{
+			ID:          "start-0",
+			TaskID:      "task-loop",
+			NodeName:    "start",
+			StartedAt:   now,
+			CompletedAt: timePtr(now),
+			Status:      taskdomain.NodeRunDone,
+			Result:      map[string]interface{}{"flag": "retry"},
+		},
+	}
+
+	steps, err := DeriveBlockedSteps(cfg, runs)
+	require.NoError(t, err)
+	require.Len(t, steps, 1)
+	assert.Equal(t, "start", steps[0].NodeName)
+	assert.Equal(t, 2, steps[0].Iteration)
+	require.NotNil(t, steps[0].TriggeredBy)
+	assert.Equal(t, "start-0", steps[0].TriggeredBy.NodeRunID)
+}
+
+func TestDeriveBlockedStepsDropsResolvedContinuation(t *testing.T) {
+	cfg := loopFixture()
+	now := time.Now().UTC()
+	runs := []taskdomain.NodeRun{
+		{
+			ID:          "start-0",
+			TaskID:      "task-loop",
+			NodeName:    "start",
+			StartedAt:   now,
+			CompletedAt: timePtr(now),
+			Status:      taskdomain.NodeRunDone,
+			Result:      map[string]interface{}{"flag": "retry"},
+		},
+		{
+			ID:        "start-1",
+			TaskID:    "task-loop",
+			NodeName:  "start",
+			StartedAt: now.Add(time.Second),
+			Status:    taskdomain.NodeRunRunning,
+			TriggeredBy: &taskdomain.TriggeredBy{
+				NodeRunID: "start-0",
+				Reason:    taskdomain.TriggerReasonManualContinueForce,
+			},
+		},
+	}
+
+	steps, err := DeriveBlockedSteps(cfg, runs)
+	require.NoError(t, err)
+	assert.Empty(t, steps)
+}
+
 func TestMatchesConditionIsTypeSafe(t *testing.T) {
 	assert.False(t, matchesCondition(map[string]interface{}{"flag": "false"}, taskconfig.EdgeCondition{
 		Field:  "flag",
@@ -349,4 +404,8 @@ func loopFixture() *taskconfig.Config {
 			"done":  simpleAgentNode(),
 		},
 	}
+}
+
+func timePtr(ts time.Time) *time.Time {
+	return &ts
 }

@@ -406,7 +406,7 @@ func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list
 	selected := index == m.Index()
 	rowWidth := width
 	contentWidth := max(12, rowWidth-2)
-	statusText, statusStyle := taskStatusLabel(entry.view.Status)
+	statusText, statusStyle := taskStatusLabel(entry.view)
 	marker := "  "
 	if selected {
 		marker = "❯ "
@@ -426,8 +426,11 @@ func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list
 	fmt.Fprint(w, rowStyle.Render(lipgloss.JoinVertical(lipgloss.Left, top, meta)))
 }
 
-func taskStatusLabel(status taskdomain.TaskStatus) (string, lipgloss.Style) {
-	switch status {
+func taskStatusLabel(view taskdomain.TaskView) (string, lipgloss.Style) {
+	if view.Status == taskdomain.TaskStatusFailed && view.CurrentIssue != nil && view.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep {
+		return "blocked", tuiTheme.awaitingText
+	}
+	switch view.Status {
 	case taskdomain.TaskStatusDone:
 		return "done", tuiTheme.doneText
 	case taskdomain.TaskStatusFailed:
@@ -448,7 +451,11 @@ func taskListMeta(view taskdomain.TaskView) string {
 		nodeLabel = "completed"
 	}
 	if view.Status == taskdomain.TaskStatusFailed {
-		nodeLabel = "failed at " + currentNodeListLabel(view)
+		if view.CurrentIssue != nil && view.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep {
+			nodeLabel = "blocked at " + currentNodeListLabel(view)
+		} else {
+			nodeLabel = "failed at " + currentNodeListLabel(view)
+		}
 	}
 	return nodeLabel + " · " + relativeTime(taskTimestamp(view))
 }
@@ -457,6 +464,12 @@ func currentNodeListLabel(view taskdomain.TaskView) string {
 	nodeName := firstNonEmpty(view.CurrentNodeName, "task")
 	if nodeName == "task" {
 		return nodeName
+	}
+	if view.CurrentIssue != nil && view.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep && view.CurrentIssue.NodeName == nodeName {
+		if view.CurrentIssue.Iteration <= 1 {
+			return nodeName
+		}
+		return fmt.Sprintf("%s (#%d)", nodeName, view.CurrentIssue.Iteration)
 	}
 	ordinal := 0
 	for _, run := range view.NodeRuns {
@@ -471,12 +484,18 @@ func currentNodeListLabel(view taskdomain.TaskView) string {
 }
 
 func taskTimestamp(view taskdomain.TaskView) time.Time {
+	if view.Status == taskdomain.TaskStatusFailed && view.CurrentIssue != nil {
+		return view.CurrentIssue.OccurredAt
+	}
+	latest := view.Task.UpdatedAt
 	if len(view.NodeRuns) == 0 {
-		return view.Task.UpdatedAt
+		return latest
 	}
-	latest := view.NodeRuns[len(view.NodeRuns)-1]
-	if latest.CompletedAt != nil {
-		return latest.CompletedAt.UTC()
+	latestRun := view.NodeRuns[len(view.NodeRuns)-1]
+	if latestRun.CompletedAt != nil {
+		latest = latestRun.CompletedAt.UTC()
+	} else {
+		latest = latestRun.StartedAt.UTC()
 	}
-	return latest.StartedAt.UTC()
+	return latest
 }

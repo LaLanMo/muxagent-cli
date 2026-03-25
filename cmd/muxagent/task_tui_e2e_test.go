@@ -18,11 +18,13 @@ import (
 	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestTaskTUIEndToEndScenarios(t *testing.T) {
@@ -37,6 +39,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 		flow              string
 		description       string
 		cliArgs           []string
+		configPath        func(t *testing.T, workDir string) string
 		drive             func(t *testing.T, session *tuiSession)
 		expectedArtifacts []string
 		verify            func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView)
@@ -220,6 +223,45 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			},
 		},
 		{
+			name:        "blocked loopback can be force-continued",
+			flow:        "review-reject-once",
+			description: "Blocked loopback",
+			configPath: func(t *testing.T, workDir string) string {
+				cfg, err := taskconfig.LoadDefault()
+				require.NoError(t, err)
+				for i := range cfg.Topology.Nodes {
+					if cfg.Topology.Nodes[i].Name == "upsert_plan" {
+						cfg.Topology.Nodes[i].MaxIterations = 1
+					}
+				}
+				return writeOverrideConfig(t, workDir, "blocked-taskflow.yaml", cfg)
+			},
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.send(t, "Blocked loopback\r")
+				session.waitForAll(t, 10*time.Second, "Task blocked", "R force continue")
+				session.send(t, "R")
+				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+				session.confirm(t)
+			},
+			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-upsert_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 8)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"upsert_plan":  2,
+					"review_plan":  2,
+					"approve_plan": 1,
+					"implement":    1,
+					"verify":       1,
+					"done":         1,
+				})
+				assert.Empty(t, view.BlockedSteps)
+			},
+		},
+		{
 			name:        "failed agent node can be retried from the footer",
 			flow:        "implement-fail-once",
 			description: "Retry failed implement",
@@ -317,7 +359,11 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			t.Setenv("FAKE_CLAUDE_STATE_DIR", filepath.Join(workDir, ".fake-claude-state"))
 			t.Setenv("TERM", "xterm-256color")
 
-			session := startTUISession(t, binaryPath, workDir, tt.cliArgs...)
+				args := append([]string(nil), tt.cliArgs...)
+				if tt.configPath != nil {
+					args = append(args, "-c", tt.configPath(t, workDir))
+				}
+				session := startTUISession(t, binaryPath, workDir, args...)
 			tt.drive(t, session)
 			task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
 
@@ -347,7 +393,8 @@ type tuiSession struct {
 func startTUISession(t *testing.T, binaryPath, workDir string, args ...string) *tuiSession {
 	t.Helper()
 
-	cmd := exec.Command(binaryPath, args...)
+	cmdArgs := append([]string(nil), args...)
+	cmd := exec.Command(binaryPath, cmdArgs...)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 
@@ -371,6 +418,29 @@ func startTUISession(t *testing.T, binaryPath, workDir string, args ...string) *
 		session.forceClose()
 	})
 	return session
+}
+
+func writeOverrideConfig(t *testing.T, workDir, fileName string, cfg *taskconfig.Config) string {
+	t.Helper()
+	configDir := filepath.Join(workDir, ".e2e-config")
+	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "prompts"), 0o755))
+	for name, def := range cfg.NodeDefinitions {
+		if def.Type == taskconfig.NodeTypeHuman || def.Type == taskconfig.NodeTypeTerminal {
+			continue
+		}
+		if def.SystemPrompt == "" {
+			def.SystemPrompt = "./prompts/" + name + ".md"
+			cfg.NodeDefinitions[name] = def
+		}
+		promptPath := filepath.Join(configDir, strings.TrimPrefix(def.SystemPrompt, "./"))
+		require.NoError(t, os.MkdirAll(filepath.Dir(promptPath), 0o755))
+		require.NoError(t, os.WriteFile(promptPath, []byte("# "+name), 0o644))
+	}
+	data, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+	configPath := filepath.Join(configDir, fileName)
+	require.NoError(t, os.WriteFile(configPath, data, 0o644))
+	return configPath
 }
 
 func (s *tuiSession) Write(p []byte) (int, error) {
@@ -551,7 +621,11 @@ func loadSingleTaskState(workDir string) (taskdomain.Task, []taskdomain.NodeRun,
 	if err != nil {
 		return taskdomain.Task{}, nil, taskdomain.TaskView{}, err
 	}
-	return task, runs, taskdomain.DeriveTaskView(task, cfg, runs), nil
+	blockedSteps, err := taskengine.DeriveBlockedSteps(cfg, runs)
+	if err != nil {
+		return taskdomain.Task{}, nil, taskdomain.TaskView{}, err
+	}
+	return task, runs, taskdomain.DeriveTaskView(task, cfg, runs, blockedSteps), nil
 }
 
 func assertNodeRunCounts(t *testing.T, runs []taskdomain.NodeRun, want map[string]int) {

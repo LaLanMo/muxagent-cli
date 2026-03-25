@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
@@ -311,4 +312,91 @@ func taskFinished(cfg *taskconfig.Config, runs []taskdomain.NodeRun) bool {
 		return false
 	}
 	return doneTerminal
+}
+
+func DeriveBlockedSteps(cfg *taskconfig.Config, runs []taskdomain.NodeRun) ([]taskdomain.BlockedStep, error) {
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	sorted := append([]taskdomain.NodeRun(nil), runs...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].StartedAt.Equal(sorted[j].StartedAt) {
+			return sorted[i].ID < sorted[j].ID
+		}
+		return sorted[i].StartedAt.Before(sorted[j].StartedAt)
+	})
+
+	taskID := sorted[0].TaskID
+	engine := New()
+	history := make([]taskdomain.NodeRun, 0, len(sorted))
+	open := map[string]taskdomain.BlockedStep{}
+	order := []string{}
+
+	for _, run := range sorted {
+		if run.TriggeredBy == nil {
+			engine.RegisterEntryRun(taskID, run)
+		} else {
+			if taskdomain.IsManualContinueReason(run.TriggeredBy.Reason) {
+				delete(open, blockedStepKey(run.TriggeredBy.NodeRunID, run.NodeName))
+			}
+			engine.RegisterTriggeredRun(taskID, run, run.TriggeredBy.NodeRunID)
+		}
+		history = append(history, run)
+		if run.Status != taskdomain.NodeRunDone {
+			continue
+		}
+
+		resolution, err := engine.ResolveCompletion(cfg, taskID, history, run)
+		if err != nil {
+			return nil, fmt.Errorf("derive blocked steps for task %s at run %s (%s): %w", taskID, run.ID, run.NodeName, err)
+		}
+		blockedIterations := map[string]int{}
+		for _, blocked := range resolution.Blocked {
+			nextIteration := blockedIterations[blocked.To]
+			if nextIteration == 0 {
+				nextIteration = taskdomain.IterationCount(history, blocked.To) + 1
+			}
+			key := blockedStepKey(blocked.Trigger.NodeRunID, blocked.To)
+			if _, exists := open[key]; !exists {
+				order = append(order, key)
+			}
+			open[key] = taskdomain.BlockedStep{
+				NodeName:    blocked.To,
+				Iteration:   nextIteration,
+				Reason:      blocked.FailureReason,
+				TriggeredBy: &blocked.Trigger,
+				CreatedAt:   completionTimestamp(run),
+			}
+			blockedIterations[blocked.To] = nextIteration + 1
+		}
+	}
+
+	steps := make([]taskdomain.BlockedStep, 0, len(open))
+	for _, key := range order {
+		step, ok := open[key]
+		if !ok {
+			continue
+		}
+		steps = append(steps, step)
+	}
+	sort.Slice(steps, func(i, j int) bool {
+		if steps[i].CreatedAt.Equal(steps[j].CreatedAt) {
+			left := blockedStepKey(steps[i].TriggeredBy.NodeRunID, steps[i].NodeName)
+			right := blockedStepKey(steps[j].TriggeredBy.NodeRunID, steps[j].NodeName)
+			return left < right
+		}
+		return steps[i].CreatedAt.Before(steps[j].CreatedAt)
+	})
+	return steps, nil
+}
+
+func completionTimestamp(run taskdomain.NodeRun) time.Time {
+	if run.CompletedAt != nil {
+		return run.CompletedAt.UTC()
+	}
+	return run.StartedAt.UTC()
+}
+
+func blockedStepKey(sourceRunID, nodeName string) string {
+	return sourceRunID + "->" + nodeName
 }

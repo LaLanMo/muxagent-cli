@@ -27,7 +27,7 @@ func TestDeriveTaskStatusIgnoresRetriedHistoricalFailure(t *testing.T) {
 		},
 	}
 
-	view := DeriveTaskView(Task{ID: "task-1"}, cfg, runs)
+	view := DeriveTaskView(Task{ID: "task-1"}, cfg, runs, nil)
 	assert.Equal(t, TaskStatusRunning, view.Status)
 	assert.Equal(t, "implement", view.CurrentNodeName)
 }
@@ -63,37 +63,96 @@ func TestDeriveTaskStatusReturnsDoneAfterSuccessfulRetry(t *testing.T) {
 		},
 	}
 
-	view := DeriveTaskView(Task{ID: "task-1"}, cfg, runs)
+	view := DeriveTaskView(Task{ID: "task-1"}, cfg, runs, nil)
 	assert.Equal(t, TaskStatusDone, view.Status)
 }
 
-func TestRetryabilityForTask(t *testing.T) {
+func TestRecoveryTargetForFailedRun(t *testing.T) {
 	cfg := retryTestConfig(2)
 	now := time.Now().UTC()
 	runs := []NodeRun{
 		{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: NodeRunFailed, StartedAt: now, CompletedAt: timePtr(now)},
 	}
 
-	info := RetryabilityForTask(cfg, runs)
+	info := RecoveryTargetForTask(cfg, runs, nil)
 	require.NotNil(t, info)
+	require.NotNil(t, info.Run)
+	assert.Equal(t, RecoveryTargetFailedRun, info.Kind)
 	assert.Equal(t, "run-1", info.Run.ID)
 	assert.Equal(t, 2, info.NextIteration)
 	assert.Equal(t, 2, info.MaxIterations)
 	assert.True(t, info.RetryAllowed)
 }
 
-func TestRetryabilityForTaskForceOnlyAfterMaxIterations(t *testing.T) {
+func TestRecoveryTargetForFailedRunForceOnlyAfterMaxIterations(t *testing.T) {
 	cfg := retryTestConfig(1)
 	now := time.Now().UTC()
 	runs := []NodeRun{
 		{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: NodeRunFailed, StartedAt: now, CompletedAt: timePtr(now)},
 	}
 
-	info := RetryabilityForTask(cfg, runs)
+	info := RecoveryTargetForTask(cfg, runs, nil)
 	require.NotNil(t, info)
 	assert.False(t, info.RetryAllowed)
 	assert.True(t, info.ForceRetryAllowed)
 	assert.Equal(t, "max_iterations reached", info.Reason)
+}
+
+func TestRecoveryTargetPrefersOpenBlockedStep(t *testing.T) {
+	cfg := retryTestConfig(1)
+	now := time.Now().UTC()
+	runs := []NodeRun{
+		{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: NodeRunDone, StartedAt: now, CompletedAt: timePtr(now)},
+	}
+	blocked := []BlockedStep{
+		{
+			NodeName:  "implement",
+			Iteration: 2,
+			Reason:    "node \"implement\" exceeded max_iterations",
+			TriggeredBy: &TriggeredBy{
+				NodeRunID: "run-1",
+				Reason:    "edge: implement -> implement",
+			},
+			CreatedAt: now.Add(time.Second),
+		},
+	}
+
+	info := RecoveryTargetForTask(cfg, runs, blocked)
+	require.NotNil(t, info)
+	assert.Equal(t, RecoveryTargetBlockedStep, info.Kind)
+	require.NotNil(t, info.BlockedStep)
+	assert.Equal(t, "implement", info.BlockedStep.NodeName)
+	assert.False(t, info.RetryAllowed)
+	assert.True(t, info.ForceRetryAllowed)
+	assert.Equal(t, 2, info.NextIteration)
+}
+
+func TestDeriveTaskViewUsesOpenBlockedStepAsCurrentNode(t *testing.T) {
+	cfg := retryTestConfig(1)
+	now := time.Now().UTC()
+	runs := []NodeRun{
+		{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: NodeRunDone, StartedAt: now, CompletedAt: timePtr(now)},
+	}
+	blocked := []BlockedStep{
+		{
+			NodeName:  "implement",
+			Iteration: 2,
+			Reason:    "node \"implement\" exceeded max_iterations",
+			TriggeredBy: &TriggeredBy{
+				NodeRunID: "run-1",
+				Reason:    "edge: implement -> implement",
+			},
+			CreatedAt: now.Add(time.Second),
+		},
+	}
+
+	view := DeriveTaskView(Task{ID: "task-1"}, cfg, runs, blocked)
+	assert.Equal(t, TaskStatusFailed, view.Status)
+	assert.Equal(t, "implement", view.CurrentNodeName)
+	require.NotNil(t, view.CurrentIssue)
+	assert.Equal(t, TaskIssueBlockedStep, view.CurrentIssue.Kind)
+	require.Len(t, view.BlockedSteps, 1)
+	assert.Equal(t, "implement", view.BlockedSteps[0].NodeName)
 }
 
 func retryTestConfig(maxIterations int) *taskconfig.Config {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 )
 
@@ -39,7 +40,11 @@ func (s *Service) LoadTaskView(ctx context.Context, taskID string) (taskdomain.T
 	if err != nil {
 		return taskdomain.TaskView{}, nil, err
 	}
-	return taskdomain.DeriveTaskView(task, cfg, runs), cfg, nil
+	blockedSteps, err := taskengine.DeriveBlockedSteps(cfg, runs)
+	if err != nil {
+		return taskdomain.TaskView{}, nil, err
+	}
+	return taskdomain.DeriveTaskView(task, cfg, runs, blockedSteps), cfg, nil
 }
 
 func (s *Service) BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*InputRequest, error) {

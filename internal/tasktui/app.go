@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -537,26 +538,40 @@ func (m Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) triggerRetry(force bool) (tea.Model, tea.Cmd) {
-	retryability := m.currentRetryability()
-	if retryability == nil || m.current == nil {
+	recovery := m.currentRecoveryTarget()
+	if recovery == nil || m.current == nil {
 		return m, nil
 	}
-	if !force && !retryability.RetryAllowed {
+	if !force && !recovery.RetryAllowed {
+		return m, nil
+	}
+	if recovery.Kind == taskdomain.RecoveryTargetBlockedStep && !force {
 		return m, nil
 	}
 	m.currentInput = nil
 	m.screen = ScreenRunning
-	m.startupText = "Retrying " + retryability.Run.NodeName + "…"
+	switch recovery.Kind {
+	case taskdomain.RecoveryTargetBlockedStep:
+		m.startupText = "Continuing " + recovery.NodeName + "…"
+	default:
+		m.startupText = "Retrying " + recovery.NodeName + "…"
+	}
 	m.errorText = ""
 	m.artifactCollapsed = false
 	m.autoScrollDetail = true
 	m.syncComponents()
-	return m, m.dispatchCmd(taskruntime.RunCommand{
-		Type:      taskruntime.CommandRetryNode,
-		TaskID:    m.current.Task.ID,
-		NodeRunID: retryability.Run.ID,
-		Force:     force,
-	})
+	cmd := taskruntime.RunCommand{
+		Type:   taskruntime.CommandRetryNode,
+		TaskID: m.current.Task.ID,
+		Force:  force,
+	}
+	if recovery.Kind == taskdomain.RecoveryTargetBlockedStep && recovery.BlockedStep != nil {
+		cmd.Type = taskruntime.CommandContinueBlocked
+		cmd.Force = false
+	} else if recovery.Run != nil {
+		cmd.NodeRunID = recovery.Run.ID
+	}
+	return m, m.dispatchCmd(cmd)
 }
 
 func (m *Model) handleEvent(event taskruntime.RunEvent) {
@@ -606,6 +621,13 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 		m.startupText = ""
 		m.setScreen(ScreenRunning)
 		m.autoScrollDetail = true
+	case taskruntime.EventNodeFailed:
+		m.clearRunProgress(event.NodeRunID)
+		m.startupText = ""
+		if m.current != nil {
+			m.applyViewScreen(*m.current, m.currentConfig, m.currentInput)
+		}
+		m.autoScrollDetail = true
 	case taskruntime.EventNodeProgress:
 		m.startupText = ""
 		m.setScreen(ScreenRunning)
@@ -618,8 +640,15 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 	case taskruntime.EventTaskFailed:
 		m.clearTaskProgress(event.TaskView)
 		m.startupText = ""
-		m.setScreen(ScreenFailed)
+		m.currentInput = nil
+		if m.current != nil {
+			m.applyViewScreen(*m.current, m.currentConfig, m.currentInput)
+		} else {
+			m.setScreen(ScreenFailed)
+		}
 		m.autoScrollDetail = true
+	case taskruntime.EventCommandError:
+		m.startupText = ""
 	}
 }
 
@@ -736,11 +765,11 @@ func (m Model) currentAwaitingRunID() string {
 	return ""
 }
 
-func (m Model) currentRetryability() *taskdomain.Retryability {
+func (m Model) currentRecoveryTarget() *taskdomain.RecoveryTarget {
 	if m.current == nil || m.currentConfig == nil {
 		return nil
 	}
-	return taskdomain.RetryabilityForTask(m.currentConfig, currentTaskRuns(*m.current))
+	return taskdomain.RecoveryTargetForTask(m.currentConfig, currentTaskRuns(*m.current), m.current.BlockedSteps)
 }
 
 func currentTaskRuns(view taskdomain.TaskView) []taskdomain.NodeRun {
@@ -1101,11 +1130,21 @@ func (m Model) renderDAG(width int) string {
 			states[run.NodeName] = "current"
 		}
 	}
+	for _, step := range m.current.BlockedSteps {
+		states[step.NodeName] = "blocked"
+	}
 	if m.current != nil && m.current.Status == taskdomain.TaskStatusDone {
 		states[m.current.CurrentNodeName] = "done"
 	}
-	if m.current != nil && (m.current.Status == taskdomain.TaskStatusRunning || m.current.Status == taskdomain.TaskStatusAwaitingUser || m.current.Status == taskdomain.TaskStatusFailed) {
+	if m.current != nil && (m.current.Status == taskdomain.TaskStatusRunning || m.current.Status == taskdomain.TaskStatusAwaitingUser) {
 		states[m.current.CurrentNodeName] = "current"
+	}
+	if m.current != nil && m.current.Status == taskdomain.TaskStatusFailed {
+		if m.current.CurrentIssue != nil && m.current.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep {
+			states[m.current.CurrentNodeName] = "blocked"
+		} else {
+			states[m.current.CurrentNodeName] = "failed"
+		}
 	}
 
 	parts := make([]string, 0, len(cfg.Topology.Nodes)*2)
@@ -1124,6 +1163,8 @@ func renderDAGNode(name, state string) string {
 		return renderNodeStatusLabel(tuiTheme.doneText, "✓", name, tuiTheme.body)
 	case "failed":
 		return renderNodeStatusLabel(tuiTheme.failedText, "×", name, tuiTheme.body)
+	case "blocked":
+		return renderNodeStatusLabel(tuiTheme.awaitingText, "!", name, tuiTheme.body)
 	case "current":
 		return renderNodeStatusLabel(tuiTheme.awaitingText, "●", name, tuiTheme.body)
 	default:
@@ -1153,15 +1194,20 @@ func (m Model) renderDetailBody(width int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	lines := make([]string, 0, len(m.current.NodeRuns)*3)
-	for _, run := range m.current.NodeRuns {
-		lines = append(lines, m.renderNodeRunBlock(run, width)...)
+	lines := make([]string, 0, (len(m.current.NodeRuns)+len(m.current.BlockedSteps))*3)
+	for _, entry := range detailTimelineEntries(*m.current) {
+		switch {
+		case entry.run != nil:
+			lines = append(lines, m.renderNodeRunBlock(*entry.run, width)...)
+		case entry.blocked != nil:
+			lines = append(lines, m.renderBlockedStepBlock(*entry.blocked, width)...)
+		}
 		lines = append(lines, "")
 	}
 	if m.screen == ScreenComplete {
 		lines = append(lines, tuiTheme.successLine.Render("✓ Task completed successfully"))
 	}
-	if m.screen == ScreenFailed && m.errorText != "" {
+	if m.screen == ScreenFailed && m.errorText != "" && (m.current.CurrentIssue == nil || m.current.CurrentIssue.Kind != taskdomain.TaskIssueBlockedStep) {
 		lines = append(lines, tuiTheme.failedText.Render("× "+m.errorText))
 	}
 	return strings.Join(trimTrailingBlank(lines), "\n")
@@ -1242,6 +1288,15 @@ func (m Model) renderNodeRunBlock(run taskdomain.NodeRunView, width int) []strin
 	default:
 		return []string{m.renderRunningStreamPanel(run, nodeLabel, width)}
 	}
+}
+
+func (m Model) renderBlockedStepBlock(step taskdomain.BlockedStep, width int) []string {
+	timeLabel := relativeTime(step.CreatedAt)
+	lines := []string{
+		renderTimelineHeadline(tuiTheme.awaitingText, "!", blockedStepLabel(step), "blocked", timeLabel),
+		tuiTheme.mutedText.Render("  ↳ " + step.Reason),
+	}
+	return lines
 }
 
 func (m Model) renderRunningStreamPanel(run taskdomain.NodeRunView, nodeLabel string, width int) string {
@@ -1431,6 +1486,50 @@ func (m Model) nodeRunLabel(run taskdomain.NodeRunView) string {
 	return fmt.Sprintf("%s (#%d)", run.NodeName, ordinal)
 }
 
+type detailTimelineEntry struct {
+	run     *taskdomain.NodeRunView
+	blocked *taskdomain.BlockedStep
+}
+
+func detailTimelineEntries(view taskdomain.TaskView) []detailTimelineEntry {
+	entries := make([]detailTimelineEntry, 0, len(view.NodeRuns)+len(view.BlockedSteps))
+	for i := range view.NodeRuns {
+		run := view.NodeRuns[i]
+		entries = append(entries, detailTimelineEntry{run: &run})
+	}
+	for i := range view.BlockedSteps {
+		step := view.BlockedSteps[i]
+		entries = append(entries, detailTimelineEntry{blocked: &step})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		leftAt, leftID := detailTimelineEntrySortKey(entries[i])
+		rightAt, rightID := detailTimelineEntrySortKey(entries[j])
+		if leftAt.Equal(rightAt) {
+			return leftID < rightID
+		}
+		return leftAt.Before(rightAt)
+	})
+	return entries
+}
+
+func detailTimelineEntrySortKey(entry detailTimelineEntry) (time.Time, string) {
+	if entry.run != nil {
+		return entry.run.StartedAt, entry.run.ID
+	}
+	source := ""
+	if entry.blocked.TriggeredBy != nil {
+		source = entry.blocked.TriggeredBy.NodeRunID
+	}
+	return entry.blocked.CreatedAt, source + ":" + entry.blocked.NodeName
+}
+
+func blockedStepLabel(step taskdomain.BlockedStep) string {
+	if step.Iteration <= 1 {
+		return step.NodeName
+	}
+	return fmt.Sprintf("%s (#%d)", step.NodeName, step.Iteration)
+}
+
 func renderNodeStatusLabel(iconStyle lipgloss.Style, icon, label string, labelStyle lipgloss.Style) string {
 	return lipgloss.JoinHorizontal(
 		lipgloss.Left,
@@ -1521,27 +1620,37 @@ func (m Model) renderClarificationFooter(width int) string {
 }
 
 func (m Model) renderFailureFooter(width int) string {
-	retryability := m.currentRetryability()
+	recovery := m.currentRecoveryTarget()
+	title := "Task failed"
+	panelStyle := tuiTheme.panelDanger
 	body := firstNonEmpty(m.errorText, m.currentFailureMessage(), "Review the failed node output and try again.")
-	if retryability != nil && !retryability.RetryAllowed {
-		body += fmt.Sprintf("\n\nRetry limit reached for %s (%d/%d). Press Shift+R to force retry.", retryability.Run.NodeName, retryability.NextIteration-1, retryability.MaxIterations)
+	if recovery != nil && recovery.Kind == taskdomain.RecoveryTargetBlockedStep {
+		title = "Task blocked"
+		panelStyle = tuiTheme.panelWarning
+		body = fmt.Sprintf("%s is blocked before execution.\n\n%s\n\nPress Shift+R to force continue.", recovery.NodeName, recovery.Reason)
+	} else if recovery != nil && !recovery.RetryAllowed {
+		body += fmt.Sprintf("\n\nRetry limit reached for %s (%d/%d). Press Shift+R to force retry.", recovery.NodeName, recovery.NextIteration-1, recovery.MaxIterations)
 	}
 	content := []string{
-		tuiTheme.panelTitle.Render("Task failed"),
+		tuiTheme.panelTitle.Render(title),
 		"",
 		tuiTheme.panelBody.Render(body),
 	}
-	panel := tuiTheme.panelDanger.Width(clamp(width, 42, width)).Render(strings.Join(content, "\n"))
+	panel := panelStyle.Width(clamp(width, 42, width)).Render(strings.Join(content, "\n"))
 	hints := joinHorizontal(tuiTheme.footerHint.Render(m.failureHint()), tuiTheme.footerHint.Render("Ctrl+C quit"), width)
 	return lipgloss.JoinVertical(lipgloss.Left, panel, hints)
 }
 
 func (m Model) failureHint() string {
 	parts := []string{"Esc back"}
-	if retryability := m.currentRetryability(); retryability != nil {
-		if retryability.RetryAllowed {
+	if recovery := m.currentRecoveryTarget(); recovery != nil {
+		if recovery.Kind == taskdomain.RecoveryTargetBlockedStep {
+			if recovery.ForceRetryAllowed {
+				parts = append(parts, "R force continue")
+			}
+		} else if recovery.RetryAllowed {
 			parts = append(parts, "r retry step")
-		} else if retryability.ForceRetryAllowed {
+		} else if recovery.ForceRetryAllowed {
 			parts = append(parts, "R force retry")
 		}
 	}
@@ -1553,8 +1662,8 @@ func (m Model) currentFailureMessage() string {
 	if m.current == nil {
 		return ""
 	}
-	if run := taskdomain.LatestOpenFailedRun(currentTaskRuns(*m.current)); run != nil {
-		return taskdomain.DisplayFailureReason(run.FailureReason)
+	if m.current.CurrentIssue != nil {
+		return m.current.CurrentIssue.Reason
 	}
 	return ""
 }

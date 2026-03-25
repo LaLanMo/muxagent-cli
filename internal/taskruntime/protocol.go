@@ -9,10 +9,11 @@ import (
 type CommandType string
 
 const (
-	CommandStartTask   CommandType = "task.start"
-	CommandSubmitInput CommandType = "task.submit_input"
-	CommandRetryNode   CommandType = "task.retry_node"
-	CommandShutdown    CommandType = "task.shutdown"
+	CommandStartTask       CommandType = "task.start"
+	CommandSubmitInput     CommandType = "task.submit_input"
+	CommandRetryNode       CommandType = "task.retry_node"
+	CommandContinueBlocked CommandType = "task.continue_blocked"
+	CommandShutdown        CommandType = "task.shutdown"
 )
 
 type RunCommand struct {
@@ -34,9 +35,11 @@ const (
 	EventNodeStarted    EventType = "node.started"
 	EventNodeProgress   EventType = "node.progress"
 	EventNodeCompleted  EventType = "node.completed"
+	EventNodeFailed     EventType = "node.failed"
 	EventInputRequested EventType = "node.input_requested"
 	EventTaskCompleted  EventType = "task.completed"
 	EventTaskFailed     EventType = "task.failed"
+	EventCommandError   EventType = "command.error"
 )
 
 type RunEvent struct {

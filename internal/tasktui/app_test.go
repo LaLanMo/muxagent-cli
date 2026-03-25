@@ -761,6 +761,98 @@ func TestFailureFooterShowsForceRetryWhenIterationLimitReached(t *testing.T) {
 	assert.True(t, service.dispatched[0].Force)
 }
 
+func TestFailureFooterShowsForceContinueForBlockedStep(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.currentConfig = retryTUIConfig(1)
+	model.current = &taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Blocked task"},
+		Status:          taskdomain.TaskStatusFailed,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+		},
+		BlockedSteps: []taskdomain.BlockedStep{
+			{
+				NodeName:  "implement",
+				Iteration: 2,
+				Reason:    "node \"implement\" exceeded max_iterations",
+				TriggeredBy: &taskdomain.TriggeredBy{
+					NodeRunID: "run-1",
+					Reason:    "edge: implement -> implement",
+				},
+				CreatedAt: time.Now().UTC().Add(time.Second),
+			},
+		},
+	}
+	model.screen = ScreenFailed
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Task blocked")
+	assert.Contains(t, view, "R force continue")
+
+	next, cmd := model.Update(tea.KeyPressMsg{Text: "R", Code: 'R'})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, taskruntime.CommandContinueBlocked, service.dispatched[0].Type)
+	assert.Equal(t, ScreenRunning, model.screen)
+}
+
+func TestNodeFailedEventKeepsRunningScreenWhenTaskStillRunning(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.currentConfig = retryTUIConfig(2)
+	model.current = &taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Parallel task"},
+		Status:          taskdomain.TaskStatusRunning,
+		CurrentNodeName: "implement",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunFailed, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.screen = ScreenRunning
+	model.syncComponents()
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeFailed,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "implement",
+		TaskView:  model.current,
+		Error:     &taskruntime.RunError{Message: "executor failed"},
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenRunning, model.screen)
+	assert.Equal(t, "executor failed", model.errorText)
+}
+
+func TestCommandErrorDoesNotForceFailedScreen(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.screen = ScreenRunning
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:  taskruntime.EventCommandError,
+		TaskID: "task-1",
+		Error: &taskruntime.RunError{Message: "cannot continue blocked step"},
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenRunning, model.screen)
+	assert.Equal(t, "cannot continue blocked step", model.errorText)
+}
+
 func retryTUIConfig(maxIterations int) *taskconfig.Config {
 	deny := false
 	return &taskconfig.Config{

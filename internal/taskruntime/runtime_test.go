@@ -14,6 +14,7 @@ import (
 	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/stretchr/testify/assert"
@@ -582,6 +583,34 @@ func TestServiceRetryNodeCreatesNewRunAndRecoversFailedTask(t *testing.T) {
 	assert.Equal(t, failed.NodeRunID, runs[1].TriggeredBy.NodeRunID)
 }
 
+func TestServiceDispatchesCommandErrorInsteadOfTaskFailureForInvalidRetry(t *testing.T) {
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "command error", WorkDir: service.workDir})
+	completed := waitForEvent(t, service.Events(), EventTaskCompleted)
+	require.NotNil(t, completed.TaskView)
+
+	service.Dispatch(RunCommand{
+		Type:      CommandRetryNode,
+		TaskID:    completed.TaskID,
+		NodeRunID: "missing-run",
+	})
+
+	commandErr := waitForEvent(t, service.Events(), EventCommandError)
+	require.NotNil(t, commandErr.Error)
+	assert.Contains(t, commandErr.Error.Message, "no retryable failed or blocked step")
+	assertNoEventTypeWithin(t, service.Events(), EventTaskFailed, 300*time.Millisecond)
+}
+
 func TestServiceRetryNodeRequiresForceAfterMaxIterations(t *testing.T) {
 	cfg := singleAgentTerminalFixture()
 	cfg.Topology.MaxIterations = 1
@@ -649,31 +678,30 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 
 	runs, err := service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
 	require.NoError(t, err)
+	cfg, err := taskconfig.Load(taskstore.ConfigPath(service.workDir, failed.TaskID))
+	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"upsert_plan": 2,
+		"upsert_plan": 1,
 		"review_plan": 1,
 	})
-	var blockedUpsert taskdomain.NodeRun
+	blockedSteps, err := taskengine.DeriveBlockedSteps(cfg, runs)
+	require.NoError(t, err)
+	require.Len(t, blockedSteps, 1)
+	blockedUpsert := blockedSteps[0]
 	var review taskdomain.NodeRun
 	for _, run := range runs {
-		switch run.ID {
-		case failed.NodeRunID:
-			blockedUpsert = run
-		}
 		if run.NodeName == "review_plan" {
 			review = run
 		}
 	}
-	require.Equal(t, taskdomain.NodeRunFailed, blockedUpsert.Status)
-	assert.Contains(t, blockedUpsert.FailureReason, "exceeded max_iterations")
+	assert.Equal(t, "upsert_plan", blockedUpsert.NodeName)
+	assert.Equal(t, 2, blockedUpsert.Iteration)
+	assert.Contains(t, blockedUpsert.Reason, "exceeded max_iterations")
 	require.NotNil(t, blockedUpsert.TriggeredBy)
 	assert.Equal(t, review.ID, blockedUpsert.TriggeredBy.NodeRunID)
+	assert.Equal(t, "upsert_plan", failed.TaskView.CurrentNodeName)
 
-	err = service.retryNode(context.Background(), failed.TaskID, failed.NodeRunID, false)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "retry unavailable")
-
-	err = service.retryNode(context.Background(), failed.TaskID, failed.NodeRunID, true)
+	err = service.continueBlockedStep(context.Background(), failed.TaskID)
 	require.NoError(t, err)
 
 	view, _, err := service.LoadTaskView(context.Background(), failed.TaskID)
@@ -683,7 +711,7 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	runs, err = service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"upsert_plan": 3,
+		"upsert_plan": 2,
 		"review_plan": 2,
 		"done":        1,
 	})
@@ -691,8 +719,68 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	require.Len(t, upsertRequests, 2)
 	lastUpsert := upsertRequests[len(upsertRequests)-1]
 	require.NotNil(t, lastUpsert.NodeRun.TriggeredBy)
-	assert.Equal(t, failed.NodeRunID, lastUpsert.NodeRun.TriggeredBy.NodeRunID)
-	assert.Equal(t, taskdomain.TriggerReasonManualRetryForce, lastUpsert.NodeRun.TriggeredBy.Reason)
+	assert.Equal(t, review.ID, lastUpsert.NodeRun.TriggeredBy.NodeRunID)
+	assert.Equal(t, taskdomain.TriggerReasonManualContinueForce, lastUpsert.NodeRun.TriggeredBy.Reason)
+
+	blockedSteps, err = taskengine.DeriveBlockedSteps(cfg, runs)
+	require.NoError(t, err)
+	assert.Empty(t, blockedSteps)
+}
+
+func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
+	cfg := reviewLoopLimitFixture()
+	workDir := t.TempDir()
+	configPath := writeOverrideConfig(t, cfg)
+
+	firstService, err := NewService(workDir, configPath, &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"upsert_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": false, "file_paths": []interface{}{"/tmp/review-1.md"}}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = firstService.Run(ctx) }()
+	firstService.Dispatch(RunCommand{Type: CommandStartTask, Description: "blocked restart", WorkDir: workDir})
+	failed := waitForEventWhere(t, firstService.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskFailed && event.NodeName == "upsert_plan"
+	})
+	taskID := failed.TaskID
+	cancel()
+	require.NoError(t, firstService.Close())
+
+	secondService, err := NewService(workDir, configPath, &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"upsert_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review-2.md"}}},
+			},
+		},
+	})
+	require.NoError(t, err)
+	defer secondService.Close()
+
+	view, _, err := secondService.LoadTaskView(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, view.CurrentIssue)
+	assert.Equal(t, taskdomain.TaskIssueBlockedStep, view.CurrentIssue.Kind)
+	require.Len(t, view.BlockedSteps, 1)
+	assert.Equal(t, "upsert_plan", view.BlockedSteps[0].NodeName)
+
+	err = secondService.continueBlockedStep(context.Background(), taskID)
+	require.NoError(t, err)
+
+	view, _, err = secondService.LoadTaskView(context.Background(), taskID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+	assert.Empty(t, view.BlockedSteps)
 }
 
 func TestNewServiceReconcilesStaleRunningRunsOnStartup(t *testing.T) {
@@ -896,6 +984,7 @@ func assertNodeRunCounts(t *testing.T, runs []taskdomain.NodeRun, want map[strin
 type blockingExecutor struct {
 	mu             sync.Mutex
 	steps          map[string][]taskexecutor.Result
+	errors         map[string][]error
 	progressByNode map[string][]taskexecutor.Progress
 	blockNode      string
 	blockRelease   <-chan struct{}
@@ -905,6 +994,18 @@ type blockingExecutor struct {
 func (b *blockingExecutor) Execute(ctx context.Context, req taskexecutor.Request, progress func(taskexecutor.Progress)) (taskexecutor.Result, error) {
 	b.mu.Lock()
 	progressItems := append([]taskexecutor.Progress(nil), b.progressByNode[req.NodeRun.NodeName]...)
+	errSequence := b.errors[req.NodeRun.NodeName]
+	if len(errSequence) > 0 {
+		execErr := errSequence[0]
+		b.errors[req.NodeRun.NodeName] = errSequence[1:]
+		b.mu.Unlock()
+		if progress != nil {
+			for _, item := range progressItems {
+				progress(item)
+			}
+		}
+		return taskexecutor.Result{}, execErr
+	}
 	sequence := b.steps[req.NodeRun.NodeName]
 	if len(sequence) == 0 {
 		b.mu.Unlock()

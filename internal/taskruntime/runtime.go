@@ -102,14 +102,14 @@ func (s *Service) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			s.cancelTasks()
 			return ctx.Err()
-		case cmd := <-s.bus.Commands:
-			if err := s.handleCommand(ctx, cmd); err != nil {
-				s.publish(RunEvent{
-					Type:   EventTaskFailed,
-					TaskID: cmd.TaskID,
-					Error:  &RunError{Message: err.Error()},
-				})
-			}
+			case cmd := <-s.bus.Commands:
+				if err := s.handleCommand(ctx, cmd); err != nil {
+					s.publish(RunEvent{
+						Type:   EventCommandError,
+						TaskID: cmd.TaskID,
+						Error:  &RunError{Message: err.Error()},
+					})
+				}
 			if cmd.Type == CommandShutdown {
 				return nil
 			}
@@ -125,6 +125,8 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
 	case CommandRetryNode:
 		return s.retryNode(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Force)
+	case CommandContinueBlocked:
+		return s.continueBlockedStep(ctx, cmd.TaskID)
 	case CommandShutdown:
 		return s.PrepareShutdown(ctx)
 	default:
@@ -150,7 +152,7 @@ func (s *Service) startTask(ctx context.Context, description, workDir, configOve
 	if err := s.store.CreateTask(ctx, task); err != nil {
 		return err
 	}
-	view := taskdomain.DeriveTaskView(task, materialized.Config, nil)
+	view := taskdomain.DeriveTaskView(task, materialized.Config, nil, nil)
 	s.publish(RunEvent{Type: EventTaskCreated, TaskID: taskID, TaskView: &view})
 
 	entry := materialized.Config.Topology.Entry

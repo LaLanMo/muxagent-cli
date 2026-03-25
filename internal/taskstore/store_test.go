@@ -80,7 +80,7 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 
 	cfg, err := taskconfig.LoadDefault()
 	require.NoError(t, err)
-	view := taskdomain.DeriveTaskView(task, cfg, runs)
+	view := taskdomain.DeriveTaskView(task, cfg, runs, nil)
 	assert.Equal(t, taskdomain.TaskStatusAwaitingUser, view.Status)
 	assert.NotEmpty(t, view.ArtifactPaths)
 }

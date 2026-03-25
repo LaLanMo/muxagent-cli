@@ -10,7 +10,6 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
-	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/google/uuid"
@@ -219,9 +218,19 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 		s.engine.RegisterTriggeredRun(task.ID, nextRun, next.Trigger.NodeRunID)
 		nextRuns = append(nextRuns, nextRun)
 	}
-	for _, blocked := range resolution.Blocked {
-		if err := s.materializeBlockedTargetRun(ctx, task, blocked); err != nil {
+	if len(resolution.Blocked) > 0 {
+		blockedView, err := s.refreshTaskView(ctx, task.ID)
+		if err != nil {
 			return err
+		}
+		if blockedView.Status == taskdomain.TaskStatusFailed && blockedView.CurrentIssue != nil && blockedView.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep {
+			s.publish(RunEvent{
+				Type:     EventTaskFailed,
+				TaskID:   task.ID,
+				NodeName: blockedView.CurrentIssue.NodeName,
+				TaskView: &blockedView,
+				Error:    &RunError{Message: blockedView.CurrentIssue.Reason},
+			})
 		}
 	}
 	for _, nextRun := range nextRuns {
@@ -247,38 +256,6 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 	return nil
 }
 
-func (s *Service) materializeBlockedTargetRun(ctx context.Context, task taskdomain.Task, blocked taskengine.BlockedTransition) error {
-	now := time.Now().UTC()
-	blockedRun := taskdomain.NodeRun{
-		ID:            uuid.NewString(),
-		TaskID:        task.ID,
-		NodeName:      blocked.To,
-		Status:        taskdomain.NodeRunFailed,
-		FailureReason: blocked.FailureReason,
-		TriggeredBy:   &blocked.Trigger,
-		StartedAt:     now,
-		CompletedAt:   &now,
-	}
-	if err := s.store.SaveNodeRun(ctx, blockedRun); err != nil {
-		return err
-	}
-	s.engine.RegisterTriggeredRun(task.ID, blockedRun, blocked.Trigger.NodeRunID)
-
-	view, err := s.refreshTaskView(ctx, task.ID)
-	if err != nil {
-		return err
-	}
-	s.publish(RunEvent{
-		Type:      EventTaskFailed,
-		TaskID:    task.ID,
-		NodeRunID: blockedRun.ID,
-		NodeName:  blockedRun.NodeName,
-		TaskView:  &view,
-		Error:     &RunError{Message: blocked.FailureReason},
-	})
-	return nil
-}
-
 func (s *Service) failRun(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun, runErr error) error {
 	now := time.Now().UTC()
 	run.Status = taskdomain.NodeRunFailed
@@ -291,8 +268,12 @@ func (s *Service) failRun(ctx context.Context, task taskdomain.Task, cfg *taskco
 	if err != nil {
 		return err
 	}
+	eventType := EventNodeFailed
+	if view.Status == taskdomain.TaskStatusFailed {
+		eventType = EventTaskFailed
+	}
 	s.publish(RunEvent{
-		Type:      EventTaskFailed,
+		Type:      eventType,
 		TaskID:    task.ID,
 		NodeRunID: run.ID,
 		NodeName:  run.NodeName,

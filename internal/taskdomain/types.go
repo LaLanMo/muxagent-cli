@@ -48,6 +48,14 @@ type NodeRun struct {
 	CompletedAt    *time.Time
 }
 
+type BlockedStep struct {
+	NodeName    string
+	Iteration   int
+	Reason      string
+	TriggeredBy *TriggeredBy
+	CreatedAt   time.Time
+}
+
 type TriggeredBy struct {
 	NodeRunID string `json:"nodeRunId"`
 	Reason    string `json:"reason"`
@@ -89,8 +97,10 @@ type TaskView struct {
 	Status          TaskStatus
 	CurrentNodeName string
 	CurrentNodeType taskconfig.NodeType
+	CurrentIssue    *TaskIssue
 	ArtifactPaths   []string
 	NodeRuns        []NodeRunView
+	BlockedSteps    []BlockedStep
 }
 
 type NodeRunView struct {
@@ -98,7 +108,22 @@ type NodeRunView struct {
 	ArtifactPaths []string
 }
 
-func DeriveTaskView(task Task, cfg *taskconfig.Config, runs []NodeRun) TaskView {
+type TaskIssueKind string
+
+const (
+	TaskIssueFailedRun   TaskIssueKind = "failed_run"
+	TaskIssueBlockedStep TaskIssueKind = "blocked_step"
+)
+
+type TaskIssue struct {
+	Kind       TaskIssueKind
+	NodeName   string
+	Iteration  int
+	Reason     string
+	OccurredAt time.Time
+}
+
+func DeriveTaskView(task Task, cfg *taskconfig.Config, runs []NodeRun, blockedSteps []BlockedStep) TaskView {
 	sorted := append([]NodeRun(nil), runs...)
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].StartedAt.Equal(sorted[j].StartedAt) {
@@ -106,18 +131,41 @@ func DeriveTaskView(task Task, cfg *taskconfig.Config, runs []NodeRun) TaskView 
 		}
 		return sorted[i].StartedAt.Before(sorted[j].StartedAt)
 	})
+	sortedBlocked := append([]BlockedStep(nil), blockedSteps...)
+	sort.Slice(sortedBlocked, func(i, j int) bool {
+		if sortedBlocked[i].CreatedAt.Equal(sortedBlocked[j].CreatedAt) {
+			left := sortedBlocked[i].NodeName
+			right := sortedBlocked[j].NodeName
+			if left == right {
+				leftSource := ""
+				rightSource := ""
+				if sortedBlocked[i].TriggeredBy != nil {
+					leftSource = sortedBlocked[i].TriggeredBy.NodeRunID
+				}
+				if sortedBlocked[j].TriggeredBy != nil {
+					rightSource = sortedBlocked[j].TriggeredBy.NodeRunID
+				}
+				return leftSource < rightSource
+			}
+			return left < right
+		}
+		return sortedBlocked[i].CreatedAt.Before(sortedBlocked[j].CreatedAt)
+	})
 
 	view := TaskView{
 		Task:          task,
 		Status:        TaskStatusDraft,
 		ArtifactPaths: []string{},
 		NodeRuns:      make([]NodeRunView, 0, len(sorted)),
+		BlockedSteps:  sortedBlocked,
 	}
-	if len(sorted) == 0 {
+	if len(sorted) == 0 && len(sortedBlocked) == 0 {
 		return view
 	}
 
-	var latest NodeRun
+	var latestNodeName string
+	var latestNodeType taskconfig.NodeType
+	var latestAt time.Time
 	for _, run := range sorted {
 		artifacts := ArtifactPaths(run.Result)
 		view.NodeRuns = append(view.NodeRuns, NodeRunView{
@@ -125,27 +173,42 @@ func DeriveTaskView(task Task, cfg *taskconfig.Config, runs []NodeRun) TaskView 
 			ArtifactPaths: artifacts,
 		})
 		view.ArtifactPaths = append(view.ArtifactPaths, artifacts...)
-		latest = run
+		if run.StartedAt.After(latestAt) || (run.StartedAt.Equal(latestAt) && latestNodeName == "") {
+			latestAt = run.StartedAt
+			latestNodeName = run.NodeName
+			latestNodeType = cfg.NodeDefinitions[run.NodeName].Type
+		}
+	}
+	for _, blocked := range sortedBlocked {
+		if blocked.CreatedAt.After(latestAt) || (blocked.CreatedAt.Equal(latestAt) && latestNodeName == "") {
+			latestAt = blocked.CreatedAt
+			latestNodeName = blocked.NodeName
+			latestNodeType = cfg.NodeDefinitions[blocked.NodeName].Type
+		}
 	}
 
-	view.CurrentNodeName = latest.NodeName
-	def := cfg.NodeDefinitions[latest.NodeName]
-	view.CurrentNodeType = def.Type
-	view.Status = deriveTaskStatus(cfg, sorted)
+	view.CurrentNodeName = latestNodeName
+	view.CurrentNodeType = latestNodeType
+	view.Status = deriveTaskStatus(cfg, sorted, sortedBlocked)
+	view.CurrentIssue = CurrentIssueForTask(cfg, sorted, sortedBlocked)
 
 	for i := len(sorted) - 1; i >= 0; i-- {
 		run := sorted[i]
 		if run.Status == NodeRunAwaitingUser || run.Status == NodeRunRunning {
 			view.CurrentNodeName = run.NodeName
 			view.CurrentNodeType = cfg.NodeDefinitions[run.NodeName].Type
-			break
+			return view
 		}
+	}
+	if view.Status == TaskStatusFailed && view.CurrentIssue != nil {
+		view.CurrentNodeName = view.CurrentIssue.NodeName
+		view.CurrentNodeType = cfg.NodeDefinitions[view.CurrentIssue.NodeName].Type
 	}
 
 	return view
 }
 
-func deriveTaskStatus(cfg *taskconfig.Config, runs []NodeRun) TaskStatus {
+func deriveTaskStatus(cfg *taskconfig.Config, runs []NodeRun, blockedSteps []BlockedStep) TaskStatus {
 	for _, run := range runs {
 		if run.Status == NodeRunAwaitingUser {
 			return TaskStatusAwaitingUser
@@ -155,6 +218,9 @@ func deriveTaskStatus(cfg *taskconfig.Config, runs []NodeRun) TaskStatus {
 		if run.Status == NodeRunRunning {
 			return TaskStatusRunning
 		}
+	}
+	if len(blockedSteps) > 0 {
+		return TaskStatusFailed
 	}
 	if HasOpenFailedRuns(runs) {
 		return TaskStatusFailed
