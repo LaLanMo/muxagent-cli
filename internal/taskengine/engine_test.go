@@ -265,6 +265,52 @@ func TestDeriveBlockedStepsDropsResolvedContinuation(t *testing.T) {
 	assert.Empty(t, steps)
 }
 
+func TestDeriveBlockedStepsDropsLegacyBlockedSurrogateAfterManualRetry(t *testing.T) {
+	cfg := loopFixture()
+	now := time.Now().UTC()
+	runs := []taskdomain.NodeRun{
+		{
+			ID:          "start-0",
+			TaskID:      "task-loop",
+			NodeName:    "start",
+			StartedAt:   now,
+			CompletedAt: timePtr(now),
+			Status:      taskdomain.NodeRunDone,
+			Result:      map[string]interface{}{"flag": "retry"},
+		},
+		{
+			ID:            "start-1",
+			TaskID:        "task-loop",
+			NodeName:      "start",
+			StartedAt:     now.Add(time.Second),
+			CompletedAt:   timePtr(now.Add(time.Second)),
+			Status:        taskdomain.NodeRunFailed,
+			FailureReason: `node "start" exceeded max_iterations`,
+			TriggeredBy: &taskdomain.TriggeredBy{
+				NodeRunID: "start-0",
+				Reason:    "edge: start -> start",
+			},
+		},
+		{
+			ID:          "start-2",
+			TaskID:      "task-loop",
+			NodeName:    "start",
+			StartedAt:   now.Add(2 * time.Second),
+			CompletedAt: timePtr(now.Add(2 * time.Second)),
+			Status:      taskdomain.NodeRunDone,
+			Result:      map[string]interface{}{"flag": "done"},
+			TriggeredBy: &taskdomain.TriggeredBy{
+				NodeRunID: "start-1",
+				Reason:    taskdomain.TriggerReasonManualRetryForce,
+			},
+		},
+	}
+
+	steps, err := DeriveBlockedSteps(cfg, runs)
+	require.NoError(t, err)
+	assert.Empty(t, steps)
+}
+
 func TestMatchesConditionIsTypeSafe(t *testing.T) {
 	assert.False(t, matchesCondition(map[string]interface{}{"flag": "false"}, taskconfig.EdgeCondition{
 		Field:  "flag",

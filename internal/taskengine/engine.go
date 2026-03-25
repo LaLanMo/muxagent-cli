@@ -3,6 +3,7 @@ package taskengine
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -329,6 +330,7 @@ func DeriveBlockedSteps(cfg *taskconfig.Config, runs []taskdomain.NodeRun) ([]ta
 	taskID := sorted[0].TaskID
 	engine := New()
 	history := make([]taskdomain.NodeRun, 0, len(sorted))
+	historyByID := make(map[string]taskdomain.NodeRun, len(sorted))
 	open := map[string]taskdomain.BlockedStep{}
 	order := []string{}
 
@@ -338,10 +340,15 @@ func DeriveBlockedSteps(cfg *taskconfig.Config, runs []taskdomain.NodeRun) ([]ta
 		} else {
 			if taskdomain.IsManualContinueReason(run.TriggeredBy.Reason) {
 				delete(open, blockedStepKey(run.TriggeredBy.NodeRunID, run.NodeName))
+			} else if taskdomain.IsManualRetryReason(run.TriggeredBy.Reason) {
+				if parent, ok := historyByID[run.TriggeredBy.NodeRunID]; ok && isLegacyBlockedSurrogate(parent, run.NodeName) {
+					delete(open, blockedStepKey(parent.TriggeredBy.NodeRunID, run.NodeName))
+				}
 			}
 			engine.RegisterTriggeredRun(taskID, run, run.TriggeredBy.NodeRunID)
 		}
 		history = append(history, run)
+		historyByID[run.ID] = run
 		if run.Status != taskdomain.NodeRunDone {
 			continue
 		}
@@ -399,4 +406,11 @@ func completionTimestamp(run taskdomain.NodeRun) time.Time {
 
 func blockedStepKey(sourceRunID, nodeName string) string {
 	return sourceRunID + "->" + nodeName
+}
+
+func isLegacyBlockedSurrogate(run taskdomain.NodeRun, expectedNodeName string) bool {
+	return run.NodeName == expectedNodeName &&
+		run.Status == taskdomain.NodeRunFailed &&
+		run.TriggeredBy != nil &&
+		strings.Contains(run.FailureReason, "exceeded max_iterations")
 }
