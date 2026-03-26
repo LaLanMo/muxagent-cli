@@ -411,7 +411,7 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	session.send(t, "\x1b")
 	session.resetOutput()
 	session.waitForAll(t, 5*time.Second, "new task", "running Stay on list")
-	session.waitForAll(t, 10*time.Second, "new task", "awaiting Stay on list")
+	session.waitForAll(t, 10*time.Second, "new task", "Stay on list", "awaiting approval")
 
 	output := session.output()
 	assert.NotContains(t, output, "Approve this plan?")

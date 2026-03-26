@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -81,14 +82,14 @@ func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list
 	selected := index == m.Index()
 	rowWidth := width
 	contentWidth := max(12, rowWidth-2)
+	rowStyle := taskListRowStyle(entry, selected, rowWidth)
 	if entry.action != taskListActionNone {
 		marker := "  "
 		if selected {
 			marker = "❯ "
 		}
-		title := fitLine(tuiTheme.Status.Awaiting.Render(marker+entry.title), contentWidth)
-		meta := fitLine("  "+tuiTheme.Text.Muted.Render(entry.meta), contentWidth)
-		rowStyle := lipgloss.NewStyle().Width(rowWidth).Padding(0, 1)
+		title := fitLine(marker+tuiTheme.TaskList.Title.Render(entry.title), contentWidth)
+		meta := fitLine("  "+tuiTheme.TaskList.Secondary.Render(entry.meta), contentWidth)
 		fmt.Fprint(w, rowStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, meta)))
 		return
 	}
@@ -103,13 +104,33 @@ func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list
 	}
 	title := ansi.Truncate(entry.view.Task.Description, max(8, contentWidth-len(statusText)-4), "…")
 	top := fitLine(statusStyle.Render(marker+statusText)+" "+titleStyle.Render(title), contentWidth)
-	meta := fitLine("  "+tuiTheme.Text.Muted.Render(taskListMeta(entry.view)), contentWidth)
-
-	rowStyle := lipgloss.NewStyle().Width(rowWidth).Padding(0, 1)
-	if entry.view.Status == taskdomain.TaskStatusAwaitingUser {
-		rowStyle = rowStyle.Background(tuiTheme.awaitingRowBg)
-	}
+	meta := fitLine("  "+tuiTheme.TaskList.Secondary.Render(taskListMeta(entry.view)), contentWidth)
 	fmt.Fprint(w, rowStyle.Render(lipgloss.JoinVertical(lipgloss.Left, top, meta)))
+}
+
+func taskListRowStyle(entry taskListItem, selected bool, rowWidth int) lipgloss.Style {
+	rowStyle := lipgloss.NewStyle().Width(rowWidth).Padding(0, 1)
+	switch {
+	case entry.action != taskListActionNone:
+		rowStyle = rowStyle.Background(tuiTheme.TaskList.ActionBg)
+		if selected {
+			rowStyle = rowStyle.Background(tuiTheme.TaskList.SelectedBg)
+		}
+	case entry.view.Status == taskdomain.TaskStatusAwaitingUser:
+		rowStyle = rowStyle.Background(tuiTheme.TaskList.AwaitingBg)
+	case selected:
+		rowStyle = rowStyle.Background(tuiTheme.TaskList.SelectedBg)
+	}
+	return rowStyle
+}
+
+func taskAwaitingLabel(view taskdomain.TaskView) string {
+	switch view.CurrentNodeType {
+	case taskconfig.NodeTypeHuman:
+		return "awaiting approval"
+	default:
+		return "awaiting clarification"
+	}
 }
 
 func taskStatusLabel(view taskdomain.TaskView) (string, lipgloss.Style) {
@@ -122,7 +143,7 @@ func taskStatusLabel(view taskdomain.TaskView) (string, lipgloss.Style) {
 	case taskdomain.TaskStatusFailed:
 		return "failed", tuiTheme.Status.Failed
 	case taskdomain.TaskStatusAwaitingUser:
-		return "awaiting", tuiTheme.Status.Awaiting
+		return taskAwaitingLabel(view), tuiTheme.Status.Awaiting
 	default:
 		return "running", tuiTheme.Status.Running
 	}

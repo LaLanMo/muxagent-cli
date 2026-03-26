@@ -42,6 +42,14 @@ type footerTheme struct {
 	Strong lipgloss.Style
 }
 
+type taskListTheme struct {
+	Title      lipgloss.Style
+	Secondary  lipgloss.Style
+	SelectedBg color.Color
+	AwaitingBg color.Color
+	ActionBg   color.Color
+}
+
 type formTheme struct {
 	InputFocused  lipgloss.Style
 	InputBlurred  lipgloss.Style
@@ -103,7 +111,6 @@ type theme struct {
 	done                 color.Color
 	failed               color.Color
 	awaiting             color.Color
-	awaitingRowBg        color.Color
 	successBg            color.Color
 	streamBg             color.Color
 	streamBorder         color.Color
@@ -153,6 +160,7 @@ type theme struct {
 	Text                 textTheme
 	Status               statusTheme
 	Footer               footerTheme
+	TaskList             taskListTheme
 	Form                 formTheme
 	Panel                panelTheme
 	Artifact             artifactTheme
@@ -176,7 +184,9 @@ func newTheme() theme {
 	doneHex := "#4EBA65"
 	failedHex := "#FF6B80"
 	awaitingHex := "#FFC107"
-	awaitingRowBgHex := "#2A2000"
+	taskListSelectedBgHex := "#141414"
+	taskListAwaitingBgHex := "#17130C"
+	taskListActionBgHex := "#101010"
 	streamBgHex := "#1A1A1A"
 	streamBorderHex := "#343C4C"
 
@@ -195,7 +205,9 @@ func newTheme() theme {
 	done := lipgloss.Color(doneHex)
 	failed := lipgloss.Color(failedHex)
 	awaiting := lipgloss.Color(awaitingHex)
-	awaitingRowBg := lipgloss.Color(awaitingRowBgHex)
+	taskListSelectedBg := lipgloss.Color(taskListSelectedBgHex)
+	taskListAwaitingBg := lipgloss.Color(taskListAwaitingBgHex)
+	taskListActionBg := lipgloss.Color(taskListActionBgHex)
 	streamBg := lipgloss.Color(streamBgHex)
 	streamBorder := lipgloss.Color(streamBorderHex)
 	artifactPane := lipgloss.NewStyle().
@@ -316,6 +328,16 @@ func newTheme() theme {
 		Hint:   footerHint,
 		Strong: footerStrong,
 	}
+	taskListStyles := taskListTheme{
+		Title: lipgloss.NewStyle().
+			Foreground(text).
+			Bold(true),
+		Secondary: lipgloss.NewStyle().
+			Foreground(halfMuted),
+		SelectedBg: taskListSelectedBg,
+		AwaitingBg: taskListAwaitingBg,
+		ActionBg:   taskListActionBg,
+	}
 	formStyles := formTheme{
 		InputFocused: inputChromeFocused,
 		InputBlurred: inputChromeBlurred,
@@ -403,7 +425,6 @@ func newTheme() theme {
 		done:                 done,
 		failed:               failed,
 		awaiting:             awaiting,
-		awaitingRowBg:        awaitingRowBg,
 		successBg:            lipgloss.Color("#102113"),
 		streamBg:             streamBg,
 		streamBorder:         streamBorder,
@@ -478,6 +499,7 @@ func newTheme() theme {
 		Text:           textStyles,
 		Status:         statusStyles,
 		Footer:         footerStyles,
+		TaskList:       taskListStyles,
 		Form:           formStyles,
 		Panel:          panelStyles,
 		Artifact:       artifactStyles,

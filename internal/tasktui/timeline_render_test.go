@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/stretchr/testify/assert"
@@ -156,32 +157,41 @@ func TestTaskListDelegateRendersSelectedRowAsFullWidthBlock(t *testing.T) {
 	assert.Equal(t, model.Width(), ansi.StringWidth(lines[1]))
 }
 
-func TestTaskListDelegateUsesAwaitingBackgroundOnlyForAwaitingRows(t *testing.T) {
+func TestTaskListDelegateRendersAwaitingChipAndActionCopy(t *testing.T) {
 	delegate := taskListDelegate{}
 
 	render := func(view taskdomain.TaskView) string {
 		model := newTaskListModel()
-		model.SetSize(48, 8)
+		model.SetSize(96, 8)
 		model.SetItems([]list.Item{taskListItem{view: view}})
 		model.Select(0)
 		var buf bytes.Buffer
 		delegate.Render(&buf, model, 0, model.Items()[0])
-		return buf.String()
+		return ansi.Strip(buf.String())
 	}
 
-	doneRaw := render(taskdomain.TaskView{
-		Task:   taskdomain.Task{ID: "task-1", Description: "done task"},
-		Status: taskdomain.TaskStatusDone,
+	approval := render(taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "approve task"},
+		Status:          taskdomain.TaskStatusAwaitingUser,
+		CurrentNodeType: taskconfig.NodeTypeHuman,
+		CurrentNodeName: "approve_plan",
 	})
-	awaitingRaw := render(taskdomain.TaskView{
-		Task:   taskdomain.Task{ID: "task-2", Description: "awaiting task"},
-		Status: taskdomain.TaskStatusAwaitingUser,
+	input := render(taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-2", Description: "clarify task"},
+		Status:          taskdomain.TaskStatusAwaitingUser,
+		CurrentNodeType: taskconfig.NodeTypeAgent,
+		CurrentNodeName: "upsert_plan",
 	})
 
-	assert.NotContains(t, doneRaw, "48;2;42;32;0")
-	assert.Contains(t, awaitingRaw, "48;2;42;32;0")
-	assert.Contains(t, ansi.Strip(doneRaw), "❯ done")
-	assert.Contains(t, ansi.Strip(awaitingRaw), "❯ awaiting")
+	assert.Contains(t, approval, "awaiting approval")
+	assert.Contains(t, approval, "approve task")
+	assert.Contains(t, approval, "approve_plan")
+	assert.NotContains(t, approval, "awaiting clarification")
+
+	assert.Contains(t, input, "awaiting clarification")
+	assert.Contains(t, input, "clarify task")
+	assert.Contains(t, input, "upsert_plan")
+	assert.NotContains(t, input, "awaiting approval")
 }
 
 func TestTaskListDelegateUsesRunningAccentForRunningTitle(t *testing.T) {

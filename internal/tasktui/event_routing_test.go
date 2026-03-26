@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/stretchr/testify/assert"
@@ -25,12 +26,22 @@ func TestBackgroundEventsDoNotLeaveTaskList(t *testing.T) {
 			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
 		},
 	}
-	awaitingView := taskdomain.TaskView{
+	awaitingApprovalView := taskdomain.TaskView{
 		Task:            baseTask,
 		Status:          taskdomain.TaskStatusAwaitingUser,
+		CurrentNodeType: taskconfig.NodeTypeHuman,
 		CurrentNodeName: "approve_plan",
 		NodeRuns: []taskdomain.NodeRunView{
 			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
+		},
+	}
+	awaitingInputView := taskdomain.TaskView{
+		Task:            baseTask,
+		Status:          taskdomain.TaskStatusAwaitingUser,
+		CurrentNodeType: taskconfig.NodeTypeAgent,
+		CurrentNodeName: "upsert_plan",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
 		},
 	}
 	doneView := taskdomain.TaskView{
@@ -99,7 +110,7 @@ func TestBackgroundEventsDoNotLeaveTaskList(t *testing.T) {
 		{
 			name: "human input requested",
 			event: func() taskruntime.RunEvent {
-				view := awaitingView
+				view := awaitingApprovalView
 				return taskruntime.RunEvent{
 					Type:      taskruntime.EventInputRequested,
 					TaskID:    "task-1",
@@ -114,27 +125,27 @@ func TestBackgroundEventsDoNotLeaveTaskList(t *testing.T) {
 					},
 				}
 			},
-			wantSnips: []string{"awaiting Implement login"},
+			wantSnips: []string{"Implement login", "awaiting approval", "approve_plan"},
 		},
 		{
 			name: "clarification requested",
 			event: func() taskruntime.RunEvent {
-				view := awaitingView
+				view := awaitingInputView
 				return taskruntime.RunEvent{
 					Type:      taskruntime.EventInputRequested,
 					TaskID:    "task-1",
-					NodeRunID: "run-1",
+					NodeRunID: "run-2",
 					NodeName:  "upsert_plan",
 					TaskView:  &view,
 					InputRequest: &taskruntime.InputRequest{
 						Kind:      taskruntime.InputKindClarification,
 						TaskID:    "task-1",
-						NodeRunID: "run-1",
+						NodeRunID: "run-2",
 						NodeName:  "upsert_plan",
 					},
 				}
 			},
-			wantSnips: []string{"awaiting Implement login"},
+			wantSnips: []string{"Implement login", "awaiting clarification", "upsert_plan"},
 		},
 		{
 			name: "task completed",
