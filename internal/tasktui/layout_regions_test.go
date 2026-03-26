@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -63,18 +64,27 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	assert.Equal(t, editorFieldInnerWidth(max(18, newTaskLayout.modalInnerWidth)), model.editor.input.Width())
 	assert.Equal(t, newTaskLayout.editorRows, model.editor.Height())
 
-	contentWidth := detailContentWidth(metrics.innerWidth)
-	detailHeader := model.renderDetailHeader(contentWidth)
-	detailFooter := model.renderDetailFooter(surfaceRect{Width: contentWidth})
-	frame := model.computeDetailFrameLayout(contentWidth, detailHeader, detailFooter)
-	panel := model.renderDetailPanel(model.computeDetailPanelSurface(frame))
-	bodyLayout := model.computeDetailBodyLayout(frame, panel)
-	fileLines := model.renderArtifactFileLines(max(18, bodyLayout.previewWidth-6), artifactVisibleCapacity(len(model.artifactItems)))
-	_, previewBlockHeight := artifactPaneLayout(bodyLayout.topBodyHeight, len(fileLines))
+	model.screen = ScreenRunning
+	model.syncComponents()
 
-	assert.Equal(t, bodyLayout.detailWidth, model.detailViewport.Width())
-	assert.Equal(t, bodyLayout.detailHeight, model.detailViewport.Height())
-	assert.Equal(t, max(12, bodyLayout.previewWidth-6), model.artifactPreview.Width())
-	assert.Equal(t, max(3, previewBlockHeight-2), model.artifactPreview.Height())
-	assert.Equal(t, model.renderDetailTimeline(surfaceRect{Width: bodyLayout.detailWidth, Height: bodyLayout.detailHeight}), model.detailViewport.GetContent())
+	contentWidth := detailContentWidth(metrics.innerWidth)
+	snapshot := model.computeDetailLayoutSnapshot()
+
+	assert.Equal(t, contentWidth, snapshot.ContentWidth)
+	assert.Equal(t, snapshot.Surfaces.Timeline.Width, model.detailViewport.Width())
+	assert.Equal(t, snapshot.Surfaces.Timeline.Height, model.detailViewport.Height())
+	assert.Equal(t, snapshot.Surfaces.Preview.Width, model.artifactPreview.Width())
+	assert.Equal(t, snapshot.Surfaces.Preview.Height, model.artifactPreview.Height())
+	assert.Equal(t, lipgloss.Height(snapshot.Footer), snapshot.Surfaces.Footer.Height)
+	assert.Equal(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.Rect.Height)
+
+	occupied := snapshot.Surfaces.Timeline.Height
+	if snapshot.Surfaces.Launcher.Height > 0 {
+		occupied += snapshot.Surfaces.Launcher.Height + 1
+	}
+	if snapshot.Surfaces.Panel.Rect.Height > 0 {
+		occupied += snapshot.Surfaces.Panel.Rect.Height + 1
+	}
+	assert.Equal(t, snapshot.Frame.bodyHeight, occupied)
+	assert.Equal(t, model.renderDetailTimeline(snapshot.Surfaces.Timeline), model.detailViewport.GetContent())
 }

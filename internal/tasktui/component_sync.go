@@ -98,12 +98,8 @@ func (m *Model) syncInputWidths() {
 
 func (m *Model) syncDetailViewport() {
 	metrics := m.computeScreenMetrics()
-	contentWidth := detailContentWidth(metrics.innerWidth)
-	header := m.renderDetailHeader(contentWidth)
-	footer := m.renderDetailFooter(surfaceRect{Width: contentWidth})
-	frame := m.computeDetailFrameLayout(contentWidth, header, footer)
-	panel := m.renderDetailPanel(m.computeDetailPanelSurface(frame))
-	surfaces := m.computeDetailScreenSurfaces(frame, panel)
+	snapshot := m.computeDetailLayoutSnapshot()
+	surfaces := snapshot.Surfaces
 
 	m.detailViewport.SetWidth(surfaces.Timeline.Width)
 	m.detailViewport.SetHeight(surfaces.Timeline.Height)
@@ -112,7 +108,7 @@ func (m *Model) syncDetailViewport() {
 		m.detailViewport.GotoBottom()
 		m.autoScrollDetail = false
 	}
-	m.syncArtifactPreview(surfaces.Body.previewWidth, surfaces.Body.topBodyHeight)
+	m.syncArtifactPreview(surfaces.Preview)
 
 	taskListHeader := m.renderTaskListHeader(metrics.innerWidth)
 	taskListFooter := m.renderTaskListFooter(surfaceRect{Width: metrics.innerWidth})

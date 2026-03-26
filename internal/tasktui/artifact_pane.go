@@ -8,11 +8,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func (m *Model) syncArtifactPreview(paneWidth, bodyHeight int) {
-	fileLines := m.renderArtifactFileLines(max(18, paneWidth-6), artifactVisibleCapacity(len(m.artifactItems)))
-	_, previewBlockHeight := artifactPaneLayout(bodyHeight, len(fileLines))
-	contentWidth := max(12, paneWidth-6)
-	previewHeight := max(3, previewBlockHeight-2)
+func (m *Model) syncArtifactPreview(surface surfaceRect) {
+	contentWidth := max(12, surface.Width)
+	previewHeight := max(1, surface.Height)
 	m.artifactPreview.SetWidth(contentWidth)
 	m.artifactPreview.SetHeight(previewHeight)
 	if len(m.artifactItems) == 0 || m.artifactIndex >= len(m.artifactItems) {
@@ -52,12 +50,22 @@ func (m Model) renderArtifactsPane(surface artifactSurface) string {
 	return tuiTheme.Artifact.Pane.Width(width).Height(height).Render(inner)
 }
 
-func artifactLauncherSurfaceHeight(surface surfaceRect) int {
-	return 5
+func artifactLauncherSurfaceHeight(topBodyHeight int) int {
+	switch {
+	case topBodyHeight >= 12:
+		return 5
+	case topBodyHeight >= 10:
+		return 4
+	case topBodyHeight >= 8:
+		return 3
+	default:
+		return 0
+	}
 }
 
 func (m Model) renderArtifactLauncher(surface surfaceRect) string {
 	width := surface.Width
+	height := max(1, surface.Height)
 	title := joinHorizontal(
 		tuiTheme.Artifact.Header.Render(fmt.Sprintf("Artifacts (%d)", len(m.artifactItems))),
 		tuiTheme.Artifact.Hint.Render("Enter open"),
@@ -72,20 +80,41 @@ func (m Model) renderArtifactLauncher(surface surfaceRect) string {
 	if m.focusRegion == FocusRegionArtifactLauncher {
 		hint = renderFooterHintText("Enter open  Tab next focus  Esc detail")
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body, "", hint)
-	return tuiTheme.Artifact.Block.Width(width).Render(content)
+	lines := []string{title, body, hint}
+	if height >= 5 {
+		lines = []string{title, "", body, "", hint}
+	} else if height == 4 {
+		lines = []string{title, "", body, hint}
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiTheme.Artifact.Block.Width(width).Height(height).Render(content)
 }
 
 func (m Model) renderDetailWithArtifactLauncher(timeline, launcher surfaceRect) string {
-	launcherView := m.renderArtifactLauncher(launcher)
 	detail := lipgloss.Place(timeline.Width, timeline.Height, lipgloss.Left, lipgloss.Top, m.detailViewport.View())
+	if launcher.Height <= 0 {
+		return detail
+	}
+	launcherView := m.renderArtifactLauncher(launcher)
 	return lipgloss.JoinVertical(lipgloss.Left, detail, "", launcherView)
 }
 
 func artifactPaneLayout(bodyHeight int, fileLineCount int) (fileBlockHeight, previewBlockHeight int) {
-	innerHeight := max(10, bodyHeight)
-	fileBlockHeight = clamp(fileLineCount+1, 3, 6)
-	previewBlockHeight = max(8, innerHeight-fileBlockHeight-1)
+	available := max(0, bodyHeight-1)
+	if available == 0 {
+		return 0, 0
+	}
+	if available < 7 {
+		if available == 1 {
+			return 1, 0
+		}
+		fileBlockHeight = max(1, available/2)
+		previewBlockHeight = max(1, available-fileBlockHeight)
+		return
+	}
+	maxFileHeight := min(6, available-4)
+	fileBlockHeight = clamp(fileLineCount+1, 3, maxFileHeight)
+	previewBlockHeight = max(4, available-fileBlockHeight)
 	return
 }
 
@@ -149,7 +178,7 @@ func (m Model) renderArtifactPreviewBlock(width, height int) string {
 		tuiTheme.Artifact.Hint.Render(hintText),
 		width,
 	)
-	contentHeight := max(3, height-2)
+	contentHeight := max(1, height-2)
 	innerWidth := max(10, width-4)
 	bodyContent := lipgloss.Place(innerWidth, contentHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
 	body := lipgloss.NewStyle().Width(width - 2).PaddingLeft(1).Render(bodyContent)

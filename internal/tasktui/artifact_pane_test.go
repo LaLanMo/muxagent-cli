@@ -130,6 +130,8 @@ func TestCompletedTaskOpenedFromListShowsArtifactsPaneImmediately(t *testing.T) 
 	assert.Contains(t, screen, "Files")
 	assert.Contains(t, screen, "Preview · summary.md")
 	assert.Contains(t, screen, "Summary")
+	assert.Contains(t, screen, "Esc back")
+	assert.Contains(t, screen, "Ctrl+C quit")
 	assert.NotContains(t, screen, "Enter open")
 }
 
@@ -211,6 +213,56 @@ func TestSmallTerminalArtifactLauncherOpensDrillInView(t *testing.T) {
 	assert.Contains(t, view, "Files")
 	assert.Contains(t, view, "Preview · summary.md")
 	assert.Contains(t, view, "Ship it")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = next.(Model)
+	assert.False(t, model.artifactDrillIn)
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+}
+
+func TestSmallTerminalCompletedScreenKeepsFooterVisibleAcrossArtifactDrillIn(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 96, Height: 24})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusDone,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.screen = ScreenComplete
+	model.syncComponents()
+
+	assert.Equal(t, artifactLayoutLauncher, model.currentArtifactLayoutMode())
+	assert.False(t, model.artifactDrillIn)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Task completed successfully")
+	assert.Contains(t, view, "Artifacts (1)")
+	assert.Contains(t, view, "Enter open")
+	assert.Contains(t, view, "Esc back")
+	assert.Contains(t, view, "Ctrl+C quit")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = next.(Model)
+	assert.Equal(t, FocusRegionArtifactLauncher, model.focusRegion)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	assert.True(t, model.artifactDrillIn)
+	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+
+	view = strippedView(model.View().Content)
+	assert.Contains(t, view, "Files")
+	assert.Contains(t, view, "Preview · summary.md")
+	assert.Contains(t, view, "Esc detail")
+	assert.Contains(t, view, "Ctrl+C quit")
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = next.(Model)

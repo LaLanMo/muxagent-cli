@@ -396,6 +396,8 @@ func TestTaskCompletedEventShowsArtifactsPaneImmediately(t *testing.T) {
 	assert.Contains(t, view, "Files")
 	assert.Contains(t, view, "Preview · summary.md")
 	assert.Contains(t, view, "Ship it")
+	assert.Contains(t, view, "Esc back")
+	assert.Contains(t, view, "Ctrl+C quit")
 	assert.NotContains(t, view, "Enter open")
 }
 

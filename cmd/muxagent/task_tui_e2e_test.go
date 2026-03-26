@@ -503,7 +503,7 @@ func TestTaskTUIWideTerminalCompletedArtifactsStayVisibleOnCompleteAndReopen(t *
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	output := session.waitForAll(t, 15*time.Second, "Task completed successfully", "Artifacts (", "Files", "Preview ·")
+	output := session.waitForAll(t, 15*time.Second, "Task completed successfully", "Artifacts (", "Files", "Preview ·", "Esc back")
 	assert.NotContains(t, output, "Enter open")
 
 	session.resetOutput()
@@ -517,8 +517,59 @@ func TestTaskTUIWideTerminalCompletedArtifactsStayVisibleOnCompleteAndReopen(t *
 	session.pause(150 * time.Millisecond)
 	session.send(t, "\r")
 
-	output = session.waitForAll(t, 5*time.Second, "Task completed successfully", "Artifacts (", "Files", "Preview ·")
+	output = session.waitForAll(t, 5*time.Second, "Task completed successfully", "Artifacts (", "Files", "Preview ·", "Esc back")
 	assert.NotContains(t, output, "Enter open")
+
+	session.quit(t)
+}
+
+func TestTaskTUISmallTerminalCompletedArtifactsKeepFooterVisibleOnCompleteAndReopen(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 96, 24)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Small completed artifacts")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.confirm(t)
+
+	output := session.waitForAll(t, 15*time.Second, "Task completed successfully", "Artifacts (", "Enter open", "Esc back")
+	assert.NotContains(t, output, "Files · focused")
+
+	session.resetOutput()
+	session.send(t, "\t")
+	session.pause(150 * time.Millisecond)
+	session.send(t, "\r")
+	output = session.waitForAll(t, 5*time.Second, "Files", "Preview ·", "Esc detail")
+
+	session.resetOutput()
+	session.send(t, "\x1b")
+	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open", "Esc back")
+
+	session.resetOutput()
+	session.send(t, "\x1b")
+	session.waitForAll(t, 5*time.Second, "new task", "done Small completed artifacts")
+
+	session.resetOutput()
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open", "Esc back")
 
 	session.quit(t)
 }
@@ -563,6 +614,91 @@ func TestTaskTUIClarificationWithArtifactsKeepsArtifactPaneReachable(t *testing.
 	}
 	output = session.waitForAll(t, 5*time.Second, "↑↓ browse")
 	assert.NotContains(t, output, "Tab next pane")
+
+	session.quit(t)
+}
+
+func TestTaskTUILongTaskDescriptionsKeepAwaitingFootersVisible(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "clarify-late")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	longDescription := strings.TrimSpace(strings.Repeat(
+		"Keep the task detail footer visible even when the title is very long and artifacts are present. ",
+		3,
+	))
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 149, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, longDescription)
+
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter confirm")
+
+	session.resetOutput()
+	session.confirm(t)
+
+	session.waitForAll(t, 10*time.Second, "awaiting input", "Question 1/1", "Ctrl+C quit", "Write your own answer")
+
+	session.quit(t)
+}
+
+func TestTaskTUILongTaskDescriptionsKeepFailedAndRunningFootersVisible(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "implement-fail-once")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	longDescription := strings.TrimSpace(strings.Repeat(
+		"Keep the task detail footer visible even when the title is very long and artifacts are present. ",
+		3,
+	))
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 149, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, longDescription)
+
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter confirm")
+
+	session.resetOutput()
+	session.confirm(t)
+
+	session.waitForAll(t, 10*time.Second, "Task failed", "Retry step", "Ctrl+C quit")
+
+	session.resetOutput()
+	session.send(t, "\r")
+
+	session.waitForAll(t, 5*time.Second, "implement", "elapsed:", "Ctrl+C quit")
 
 	session.quit(t)
 }

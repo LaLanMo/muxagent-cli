@@ -573,6 +573,7 @@ func TestClarificationTabReachesVisibleArtifactPane(t *testing.T) {
 	assert.Contains(t, view, "Artifacts (1)")
 	assert.Contains(t, view, "Files · focused")
 	assert.Contains(t, view, "Preview · upsert_plan (#1) · plan.md")
+	assert.Contains(t, view, "Ctrl+C quit")
 }
 
 func TestClarificationCommandErrorKeepsInputVisibleAndShowsError(t *testing.T) {

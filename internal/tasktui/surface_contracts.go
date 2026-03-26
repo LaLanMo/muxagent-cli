@@ -1,5 +1,7 @@
 package tasktui
 
+import "charm.land/lipgloss/v2"
+
 type surfaceRect struct {
 	Width  int
 	Height int
@@ -14,6 +16,17 @@ type artifactSurface struct {
 	Rect surfaceRect
 }
 
+type detailLayoutSnapshot struct {
+	Header       string
+	Footer       string
+	Frame        detailFrameLayout
+	Body         detailBodyLayout
+	Surfaces     detailScreenSurfaces
+	PanelView    builtPanel
+	Editor       editorSurfaceSpec
+	ContentWidth int
+}
+
 type detailScreenSurfaces struct {
 	Frame    detailFrameLayout
 	Body     detailBodyLayout
@@ -21,6 +34,7 @@ type detailScreenSurfaces struct {
 	Panel    panelSurface
 	Artifact artifactSurface
 	Launcher surfaceRect
+	Preview  surfaceRect
 	Footer   surfaceRect
 }
 
@@ -33,10 +47,14 @@ func (m Model) computeNewTaskModalSurface(layout newTaskScreenLayout) surfaceRec
 }
 
 func (m Model) computeDetailPanelSurface(frame detailFrameLayout) panelSurface {
+	return m.computeDetailPanelSurfaceForMode(frame, frame.layoutMode)
+}
+
+func (m Model) computeDetailPanelSurfaceForMode(frame detailFrameLayout, mode artifactLayoutMode) panelSurface {
 	bodyHeight := frame.bodyHeight
-	minTopBodyHeight := 6
-	if m.currentArtifactLayoutMode() != artifactLayoutHidden {
-		minTopBodyHeight = 8
+	minTopBodyHeight := detailMinTopBodyHeight(mode, m.artifactDrillIn)
+	if minTopBodyHeight >= bodyHeight {
+		minTopBodyHeight = max(1, bodyHeight-1)
 	}
 	preferred := bodyHeight - minTopBodyHeight - 1
 	maxPanelHeight := max(1, bodyHeight-1)
@@ -50,20 +68,37 @@ func (m Model) computeDetailPanelSurface(frame detailFrameLayout) panelSurface {
 }
 
 func (m Model) computeDetailScreenSurfaces(frame detailFrameLayout, panel string) detailScreenSurfaces {
-	body := m.computeDetailBodyLayout(frame, panel)
+	panelSurface := m.computeDetailPanelSurface(frame)
+	panelSurface.Rect.Height = 0
+	if panel != "" {
+		panelSurface.Rect.Height = lipgloss.Height(panel)
+	}
+	return m.computeDetailScreenSurfacesWithPanel(frame, m.computeDetailBodyLayout(frame, panel), panelSurface)
+}
+
+func (m Model) computeDetailScreenSurfacesWithPanel(frame detailFrameLayout, body detailBodyLayout, panel panelSurface) detailScreenSurfaces {
 	surfaces := detailScreenSurfaces{
 		Frame:    frame,
 		Body:     body,
 		Timeline: surfaceRect{Width: body.detailWidth, Height: body.detailHeight},
-		Panel:    m.computeDetailPanelSurface(frame),
+		Panel:    panel,
 		Artifact: artifactSurface{
 			Rect: surfaceRect{Width: body.artifactWidth, Height: body.topBodyHeight},
 		},
 		Launcher: surfaceRect{Width: frame.contentWidth, Height: body.launcherHeight},
+		Preview:  surfaceRect{Width: body.previewWidth, Height: 0},
 		Footer:   surfaceRect{Width: frame.contentWidth, Height: frame.footerHeight},
 	}
-	if m.artifactDrillInVisible() {
+	if fileLines := m.renderArtifactFileLines(max(18, body.previewWidth-6), artifactVisibleCapacity(len(m.artifactItems))); body.previewWidth > 0 && body.topBodyHeight > 0 {
+		_, previewBlockHeight := artifactPaneLayout(body.topBodyHeight, len(fileLines))
+		surfaces.Preview = surfaceRect{
+			Width:  max(12, body.previewWidth-6),
+			Height: max(1, previewBlockHeight-2),
+		}
+	}
+	if artifactDrillInVisibleForLayout(frame.layoutMode, m.artifactDrillIn) {
 		surfaces.Artifact.Rect = surfaceRect{Width: frame.contentWidth, Height: body.topBodyHeight}
+		surfaces.Preview.Width = max(12, frame.contentWidth-6)
 	}
 	return surfaces
 }

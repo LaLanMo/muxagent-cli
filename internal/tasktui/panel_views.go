@@ -126,12 +126,25 @@ func (m Model) newTaskSubtitle() string {
 }
 
 func (m Model) renderApprovalPanel(surface panelSurface) string {
-	return m.buildApprovalPanel(surface).View
+	return m.buildApprovalPanel(surface, m.detailEditorSurfaceSpec(surface)).View
 }
 
-func (m Model) buildApprovalPanel(surface panelSurface) builtPanel {
+func (m Model) buildDetailPanelForSurface(surface panelSurface, editorSpec editorSurfaceSpec) builtPanel {
+	switch m.screen {
+	case ScreenApproval:
+		return m.buildApprovalPanel(surface, editorSpec)
+	case ScreenClarification:
+		return m.buildClarificationPanel(surface, editorSpec)
+	case ScreenFailed:
+		return builtPanel{View: m.renderFailurePanel(surface)}
+	default:
+		return builtPanel{}
+	}
+}
+
+func (m Model) buildApprovalPanel(surface panelSurface, editorSpec editorSurfaceSpec) builtPanel {
 	width := surface.Rect.Width
-	panelStyle := tuiTheme.Panel.Warning.Width(width)
+	panelStyle := tuiTheme.Panel.Warning.Width(width).MaxHeight(max(1, surface.MaxHeight))
 	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
 	title := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render("Approve this plan?"))
 	options := renderChoiceItems(innerWidth, m.approval.choice, m.focusRegion == FocusRegionActionPanel, []choiceItem{
@@ -145,7 +158,7 @@ func (m Model) buildApprovalPanel(surface panelSurface) builtPanel {
 	content = append(content, options...)
 	build := builtPanel{}
 	if m.approval.choice == 1 {
-		spec := m.currentEditorSurfaceSpec()
+		spec := editorSpec
 		if !spec.Visible {
 			spec = editorSurfaceSpec{
 				editorBindingSpec: editorBindingSpec{
@@ -163,23 +176,26 @@ func (m Model) buildApprovalPanel(surface panelSurface) builtPanel {
 		build.HasEditor = true
 	}
 	if m.errorText != "" {
-		content = append(content, "", renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
+		candidate := append(append([]string{}, content...), "", renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
+		if lipgloss.Height(strings.Join(candidate, "\n")) <= surface.MaxHeight {
+			content = candidate
+		}
 	}
 	build.View = panelStyle.Render(strings.Join(content, "\n"))
 	return build
 }
 
 func (m Model) renderClarificationPanel(surface panelSurface) string {
-	return m.buildClarificationPanel(surface).View
+	return m.buildClarificationPanel(surface, m.detailEditorSurfaceSpec(surface)).View
 }
 
-func (m Model) buildClarificationPanel(surface panelSurface) builtPanel {
+func (m Model) buildClarificationPanel(surface panelSurface, editorSpec editorSurfaceSpec) builtPanel {
 	if m.currentInput == nil || len(m.currentInput.Questions) == 0 {
 		return builtPanel{}
 	}
 	width := surface.Rect.Width
 	question := m.currentInput.Questions[m.clarification.question]
-	panelStyle := tuiTheme.Panel.Warning.Width(width)
+	panelStyle := tuiTheme.Panel.Warning.Width(width).MaxHeight(max(1, surface.MaxHeight))
 	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
 	title := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render(fmt.Sprintf("Question %d/%d", m.clarification.question+1, len(m.currentInput.Questions))))
 	body := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Body.Render(question.Question))
@@ -205,7 +221,7 @@ func (m Model) buildClarificationPanel(surface panelSurface) builtPanel {
 	if m.clarification.question == len(m.currentInput.Questions)-1 {
 		actionLabel = "Submit answers"
 	}
-	spec := m.currentEditorSurfaceSpec()
+	spec := editorSpec
 	if !spec.Visible {
 		spec = editorSurfaceSpec{
 			editorBindingSpec: editorBindingSpec{
@@ -225,7 +241,10 @@ func (m Model) buildClarificationPanel(surface panelSurface) builtPanel {
 	extra := make([]string, 0, len(otherBlock)+2)
 	extra = append(extra, otherBlock...)
 	if m.errorText != "" {
-		extra = append(extra, "", renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
+		candidate := append(append([]string{}, extra...), "", renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
+		if lipgloss.Height(strings.Join(append(append([]string{}, header...), optionLines...), "\n"))+lipgloss.Height(strings.Join(candidate, "\n")) <= surface.MaxHeight {
+			extra = candidate
+		}
 	}
 	headerHeight := lipgloss.Height(strings.Join(header, "\n"))
 	extraHeight := lipgloss.Height(strings.Join(extra, "\n"))

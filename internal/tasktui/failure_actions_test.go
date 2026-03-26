@@ -33,6 +33,7 @@ func TestFailureFooterShowsRetryActionAndDispatchesRetry(t *testing.T) {
 
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Retry step")
+	assert.Contains(t, view, "Ctrl+C quit")
 	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -68,6 +69,7 @@ func TestFailureFooterShowsForceRetryWhenIterationLimitReached(t *testing.T) {
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Force retry")
 	assert.Contains(t, view, "Retry limit reached")
+	assert.Contains(t, view, "Ctrl+C quit")
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
@@ -111,6 +113,7 @@ func TestFailureFooterShowsForceContinueForBlockedStep(t *testing.T) {
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Task blocked")
 	assert.Contains(t, view, "Force continue")
+	assert.Contains(t, view, "Ctrl+C quit")
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)

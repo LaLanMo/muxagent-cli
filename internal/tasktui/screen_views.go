@@ -55,18 +55,15 @@ func (m Model) renderNewTaskScreen(width, height int) string {
 }
 
 func (m Model) renderDetailScreen(width, height int) string {
-	metrics := m.computeScreenMetrics()
-	contentWidth := detailContentWidth(metrics.innerWidth)
-	header := m.renderDetailHeader(contentWidth)
-	footerSurface := surfaceRect{Width: contentWidth}
-	footer := m.renderDetailFooter(footerSurface)
-	frame := m.computeDetailFrameLayout(contentWidth, header, footer)
-	panelSurface := m.computeDetailPanelSurface(frame)
-	panel := m.renderDetailPanel(panelSurface)
-	surfaces := m.computeDetailScreenSurfaces(frame, panel)
+	snapshot := m.computeDetailLayoutSnapshot()
+	frame := snapshot.Frame
+	surfaces := snapshot.Surfaces
+	header := snapshot.Header
+	footer := snapshot.Footer
+	panel := snapshot.PanelView.View
 	bodyContent := ""
 	switch {
-	case m.artifactDrillInVisible():
+	case artifactDrillInVisibleForLayout(frame.layoutMode, m.artifactDrillIn):
 		bodyContent = lipgloss.Place(frame.contentWidth, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.renderArtifactsPane(surfaces.Artifact))
 	case surfaces.Frame.layoutMode == artifactLayoutSplit:
 		leftBody := lipgloss.Place(surfaces.Timeline.Width, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.detailViewport.View())

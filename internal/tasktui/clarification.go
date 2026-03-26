@@ -65,6 +65,10 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m Model) renderClarificationFooter(surface surfaceRect) string {
+	return m.renderClarificationFooterForLayout(surface, m.currentArtifactLayoutMode())
+}
+
+func (m Model) renderClarificationFooterForLayout(surface surfaceRect, mode artifactLayoutMode) string {
 	width := surface.Width
 	if m.currentInput == nil || len(m.currentInput.Questions) == 0 {
 		return m.renderStatsFooter(surface, "", "", "Esc back")
@@ -76,13 +80,13 @@ func (m Model) renderClarificationFooter(surface surfaceRect) string {
 		if question.MultiSelect {
 			action = "Enter toggle"
 		}
-		return renderFooterHintBar(width, m.detailHint(joinHintParts("↑↓ select", action, "Esc back")))
+		return renderFooterHintBar(width, m.detailHintForLayout(joinHintParts("↑↓ select", action, "Esc back"), mode))
 	case FocusRegionComposer:
-		return renderFooterHintBar(width, m.detailHint("Esc choices"))
+		return renderFooterHintBar(width, m.detailHintForLayout("Esc choices", mode))
 	case FocusRegionActionPanel:
-		return renderFooterHintBar(width, m.detailHint(joinHintParts("Enter continue", "Esc back")))
+		return renderFooterHintBar(width, m.detailHintForLayout(joinHintParts("Enter continue", "Esc back"), mode))
 	default:
-		return renderFooterHintBar(width, m.detailHint("Esc back"))
+		return renderFooterHintBar(width, m.detailHintForLayout("Esc back", mode))
 	}
 }
 

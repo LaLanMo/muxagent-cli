@@ -19,10 +19,23 @@ func (m Model) renderDetailHeader(width int) string {
 	if m.current == nil {
 		return fitLine(tuiTheme.taskLabel.Render("Task"), width)
 	}
-	title := tuiTheme.taskLabel.Render("Task: " + m.current.Task.Description)
+	title := tuiTheme.taskLabel.Render(clampWrappedText("Task: "+m.current.Task.Description, width, 2))
 	dag := m.renderDAG(width)
 	divider := tuiTheme.divider.Render(strings.Repeat("─", max(8, width)))
 	return lipgloss.JoinVertical(lipgloss.Left, title, dag, divider)
+}
+
+func clampWrappedText(text string, width, maxLines int) string {
+	width = max(1, width)
+	maxLines = max(1, maxLines)
+	lines := strings.Split(ansi.Wrap(text, width, ""), "\n")
+	lines = trimTrailingBlank(lines)
+	if len(lines) <= maxLines {
+		return strings.Join(lines, "\n")
+	}
+	lines = append([]string(nil), lines[:maxLines]...)
+	lines[maxLines-1] = ansi.Truncate(lines[maxLines-1], width, "…")
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderDAG(width int) string {

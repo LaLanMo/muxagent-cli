@@ -59,21 +59,13 @@ func (m Model) newTaskEditorCursorOffset() (int, int, bool) {
 }
 
 func (m Model) approvalEditorCursorOffset() (int, int, bool) {
-	spec := m.currentEditorSurfaceSpec()
-	if !spec.Visible {
+	snapshot := m.computeDetailLayoutSnapshot()
+	if !snapshot.PanelView.HasEditor {
 		return 0, 0, false
 	}
-	metrics := m.computeScreenMetrics()
-	contentWidth := detailContentWidth(metrics.innerWidth)
-	header := m.renderDetailHeader(contentWidth)
-	footer := m.renderDetailFooter(surfaceRect{Width: contentWidth})
-	frame := m.computeDetailFrameLayout(contentWidth, header, footer)
-	panelSurface := m.computeDetailPanelSurface(frame)
-	panel := m.buildApprovalPanel(panelSurface)
-	if !panel.HasEditor {
-		return 0, 0, false
-	}
-	surfaces := m.computeDetailScreenSurfaces(frame, panel.View)
+	frame := snapshot.Frame
+	panel := snapshot.PanelView
+	surfaces := snapshot.Surfaces
 
 	panelX := tuiTheme.canvas.GetPaddingLeft() + max(0, (frame.innerWidth-frame.contentWidth)/2)
 	panelY := tuiTheme.canvas.GetPaddingTop() + frame.headerHeight + surfaces.Body.topBodyHeight + 1
@@ -81,22 +73,13 @@ func (m Model) approvalEditorCursorOffset() (int, int, bool) {
 }
 
 func (m Model) clarificationEditorCursorOffset() (int, int, bool) {
-	spec := m.currentEditorSurfaceSpec()
-	if !spec.Visible {
+	snapshot := m.computeDetailLayoutSnapshot()
+	if !snapshot.PanelView.HasEditor {
 		return 0, 0, false
 	}
-
-	metrics := m.computeScreenMetrics()
-	contentWidth := detailContentWidth(metrics.innerWidth)
-	header := m.renderDetailHeader(contentWidth)
-	footer := m.renderDetailFooter(surfaceRect{Width: contentWidth})
-	frame := m.computeDetailFrameLayout(contentWidth, header, footer)
-	panelSurface := m.computeDetailPanelSurface(frame)
-	panel := m.buildClarificationPanel(panelSurface)
-	if !panel.HasEditor {
-		return 0, 0, false
-	}
-	surfaces := m.computeDetailScreenSurfaces(frame, panel.View)
+	frame := snapshot.Frame
+	panel := snapshot.PanelView
+	surfaces := snapshot.Surfaces
 
 	panelX := tuiTheme.canvas.GetPaddingLeft() + max(0, (frame.innerWidth-frame.contentWidth)/2)
 	panelY := tuiTheme.canvas.GetPaddingTop() + frame.headerHeight + surfaces.Body.topBodyHeight + 1

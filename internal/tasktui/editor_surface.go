@@ -14,6 +14,34 @@ type editorSurfaceSpec struct {
 	Rows       int
 }
 
+func (m Model) detailEditorSurfaceSpec(surface panelSurface) editorSurfaceSpec {
+	spec := editorSurfaceSpec{
+		editorBindingSpec: m.currentEditorBindingSpec(),
+		Rows:              1,
+	}
+	if !spec.Visible {
+		return spec
+	}
+
+	spec.FieldWidth = max(18, surface.Rect.Width-tuiTheme.Panel.Warning.GetHorizontalFrameSize())
+	switch m.screen {
+	case ScreenClarification:
+		spec.Rows = 1
+	case ScreenApproval:
+		switch {
+		case surface.MaxHeight >= 12:
+			spec.Rows = 4
+		case surface.MaxHeight >= 10:
+			spec.Rows = 3
+		case surface.MaxHeight >= 8:
+			spec.Rows = 2
+		default:
+			spec.Rows = 1
+		}
+	}
+	return spec
+}
+
 func (m Model) currentEditorBindingSpec() editorBindingSpec {
 	switch m.screen {
 	case ScreenNewTask:
@@ -63,22 +91,8 @@ func (m Model) currentEditorSurfaceSpec() editorSurfaceSpec {
 		spec.FieldWidth = max(18, layout.modalInnerWidth)
 		spec.Rows = layout.editorRows
 	case ScreenApproval, ScreenClarification:
-		metrics := m.computeScreenMetrics()
-		contentWidth := detailContentWidth(metrics.innerWidth)
-		header := m.renderDetailHeader(contentWidth)
-		footer := m.renderDetailFooter(surfaceRect{Width: contentWidth})
-		frame := m.computeDetailFrameLayout(contentWidth, header, footer)
-		panelSurface := m.computeDetailPanelSurface(frame)
-		spec.FieldWidth = max(18, panelSurface.Rect.Width-tuiTheme.Panel.Warning.GetHorizontalFrameSize())
-		switch m.screen {
-		case ScreenClarification:
-			spec.Rows = 1
-		case ScreenApproval:
-			spec.Rows = 4
-			if frame.bodyHeight < 18 {
-				spec.Rows = 3
-			}
-		}
+		snapshot := m.computeDetailLayoutSnapshot()
+		spec = snapshot.Editor
 	}
 
 	return spec
