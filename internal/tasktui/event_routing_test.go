@@ -492,6 +492,56 @@ func TestBackToTaskListStopsFollowingTask(t *testing.T) {
 	assert.NotContains(t, view, "Task completed successfully")
 }
 
+func TestEscReloadDoesNotDiscardTaskCreatedEvent(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model.editor.SetValue("Implement login")
+
+	cmd := model.submitNewTask()
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	assert.Equal(t, ScreenRunning, model.screen)
+
+	next, reloadCmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = next.(Model)
+	require.NotNil(t, reloadCmd)
+
+	staleReloadMsg := reloadCmd()
+	require.IsType(t, tasksLoadedMsg{}, staleReloadMsg)
+	assert.Equal(t, ScreenTaskList, model.screen)
+
+	createdAt := time.Now().UTC()
+	createdView := taskdomain.TaskView{
+		Task: taskdomain.Task{
+			ID:          "task-1",
+			Description: "Implement login",
+			WorkDir:     "/tmp/project",
+			CreatedAt:   createdAt,
+			UpdatedAt:   createdAt,
+		},
+		Status:          taskdomain.TaskStatusRunning,
+		CurrentNodeName: "implement",
+	}
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:     taskruntime.EventTaskCreated,
+		TaskID:   "task-1",
+		TaskView: &createdView,
+	})
+	model = next.(Model)
+	require.Len(t, model.tasks, 1)
+	assert.Equal(t, "task-1", model.tasks[0].Task.ID)
+
+	next, _ = model.Update(staleReloadMsg)
+	model = next.(Model)
+
+	require.Len(t, model.tasks, 1)
+	assert.Equal(t, "task-1", model.tasks[0].Task.ID)
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Implement login")
+}
+
 func TestNodeFailedEventKeepsRunningScreenWhenTaskStillRunning(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")

@@ -178,10 +178,12 @@ func (m *Model) upsertTask(view taskdomain.TaskView) {
 	for i := range m.tasks {
 		if m.tasks[i].Task.ID == view.Task.ID {
 			m.tasks[i] = view
+			m.taskEventVersion++
 			return
 		}
 	}
 	m.tasks = append([]taskdomain.TaskView{view}, m.tasks...)
+	m.taskEventVersion++
 }
 
 func (m Model) currentRecoveryTarget() *taskdomain.RecoveryTarget {
