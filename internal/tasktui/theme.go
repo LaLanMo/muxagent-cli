@@ -43,9 +43,13 @@ type footerTheme struct {
 }
 
 type formTheme struct {
-	Input        lipgloss.Style
-	OptionActive lipgloss.Style
-	OptionMuted  lipgloss.Style
+	InputFocused  lipgloss.Style
+	InputBlurred  lipgloss.Style
+	InputLabel    lipgloss.Style
+	InputLabelHot lipgloss.Style
+	InputCaption  lipgloss.Style
+	OptionActive  lipgloss.Style
+	OptionMuted   lipgloss.Style
 }
 
 type panelTheme struct {
@@ -93,6 +97,8 @@ type theme struct {
 	artifactPaneBg       color.Color
 	artifactBlock        color.Color
 	artifactRailBg       color.Color
+	inputBgBlurred       color.Color
+	inputBgFocused       color.Color
 	borderMuted          color.Color
 	text                 color.Color
 	halfMuted            color.Color
@@ -169,6 +175,8 @@ func newTheme() theme {
 	artifactPaneBgHex := "#151D2A"
 	artifactBlockHex := "#0B111B"
 	artifactRailBgHex := "#17202C"
+	inputBgBlurredHex := "#121212"
+	inputBgFocusedHex := "#141311"
 	borderMutedHex := "#303030"
 	textHex := "#ECE7DF"
 	halfMutedHex := "#BEB7AF"
@@ -187,6 +195,8 @@ func newTheme() theme {
 	artifactPaneBg := lipgloss.Color(artifactPaneBgHex)
 	artifactBlock := lipgloss.Color(artifactBlockHex)
 	artifactRailBg := lipgloss.Color(artifactRailBgHex)
+	inputBgBlurred := lipgloss.Color(inputBgBlurredHex)
+	inputBgFocused := lipgloss.Color(inputBgFocusedHex)
 	borderMuted := lipgloss.Color(borderMutedHex)
 	text := lipgloss.Color(textHex)
 	halfMuted := lipgloss.Color(halfMutedHex)
@@ -248,9 +258,15 @@ func newTheme() theme {
 	awaitingText := lipgloss.NewStyle().Foreground(awaiting)
 	footerHint := lipgloss.NewStyle().Foreground(muted)
 	footerStrong := lipgloss.NewStyle().Foreground(muted)
-	inputChrome := lipgloss.NewStyle().
+	inputChromeBlurred := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#77716B")).
+		BorderForeground(lipgloss.Color("#5A554F")).
+		Background(inputBgBlurred).
+		Padding(0, 1)
+	inputChromeFocused := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(awaiting).
+		Background(inputBgFocused).
 		Padding(0, 1)
 	panelBase := lipgloss.NewStyle().
 		Background(panelBg).
@@ -326,7 +342,16 @@ func newTheme() theme {
 		Strong: footerStrong,
 	}
 	formStyles := formTheme{
-		Input:        inputChrome,
+		InputFocused: inputChromeFocused,
+		InputBlurred: inputChromeBlurred,
+		InputLabel: lipgloss.NewStyle().
+			Foreground(halfMuted).
+			Bold(true),
+		InputLabelHot: lipgloss.NewStyle().
+			Foreground(awaiting).
+			Bold(true),
+		InputCaption: lipgloss.NewStyle().
+			Foreground(subtle),
 		OptionActive: optionActive,
 		OptionMuted:  optionInactive,
 	}
@@ -397,6 +422,8 @@ func newTheme() theme {
 		artifactPaneBg:       artifactPaneBg,
 		artifactBlock:        artifactBlock,
 		artifactRailBg:       artifactRailBg,
+		inputBgBlurred:       inputBgBlurred,
+		inputBgFocused:       inputBgFocused,
 		borderMuted:          borderMuted,
 		text:                 text,
 		halfMuted:            halfMuted,
@@ -455,7 +482,7 @@ func newTheme() theme {
 			Bold(true),
 		modalSubtitle: lipgloss.NewStyle().
 			Foreground(muted),
-		inputChrome:  formStyles.Input,
+		inputChrome:  formStyles.InputBlurred,
 		panel:        panelStyles.Base,
 		panelWarning: panelStyles.Warning,
 		panelDanger:  panelStyles.Danger,

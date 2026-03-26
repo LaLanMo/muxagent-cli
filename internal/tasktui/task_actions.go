@@ -12,10 +12,11 @@ import (
 )
 
 func (m *Model) submitNewTask() tea.Cmd {
-	desc := strings.TrimSpace(m.newTaskInput.Value())
+	desc := strings.TrimSpace(m.editor.Value())
 	if desc == "" {
 		return nil
 	}
+	m.editor.ClearSlot(editorSlotNewTask)
 	m.clearActiveTask()
 	m.pendingRuntimeCmd = &pendingRuntimeCommand{
 		kind: pendingRuntimeCommandStartTask,

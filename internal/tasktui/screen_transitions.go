@@ -18,13 +18,13 @@ func (m *Model) openNewTask() tea.Cmd {
 		m.returnScreen = m.screen
 	}
 	m.setScreen(ScreenNewTask)
-	m.newTaskInput.Reset()
+	m.editor.ClearSlot(editorSlotNewTask)
 	m.syncComponents()
 	return m.syncInputFocus()
 }
 
 func (m *Model) closeNewTask() {
-	m.newTaskInput.SetValue("")
+	m.editor.ClearSlot(editorSlotNewTask)
 	if m.current != nil && (m.activeTaskID != "" || m.hasPendingStartTask()) {
 		m.setDetailScreen(detailScreenForActiveTask(m.current, m.currentInput), true)
 		return

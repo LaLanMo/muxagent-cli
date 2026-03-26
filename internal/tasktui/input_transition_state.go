@@ -1,8 +1,6 @@
 package tasktui
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
@@ -17,19 +15,12 @@ func (m *Model) resetInputState() {
 	m.clarification.other = false
 	m.submittingInput = false
 	m.focusRegion = FocusRegionNone
-	m.detailInput.Reset()
-	m.detailInput.SetPlaceholder("Type feedback...")
+	m.editor.ClearAll()
 }
 
 func (m *Model) activateClarificationOtherInput(question taskdomain.ClarificationQuestion) tea.Cmd {
+	_ = question
 	m.focusRegion = FocusRegionComposer
-	if strings.TrimSpace(m.detailInput.Value()) == "" {
-		m.detailInput.Reset()
-	}
-	if existing := clarificationCustomAnswer(question, clarificationAnswerAt(m.clarification.answers, m.clarification.question)); existing != "" && strings.TrimSpace(m.detailInput.Value()) == "" {
-		m.detailInput.SetValue(existing)
-	}
-	m.detailInput.SetPlaceholder("Write your own answer…")
 	m.syncComponents()
 	return m.syncInputFocus()
 }

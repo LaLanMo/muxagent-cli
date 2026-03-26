@@ -42,32 +42,15 @@ func (m Model) handleScreenKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // forwardToActiveInput routes non-key messages (e.g. clipboard paste results)
 // to whichever textarea is currently active.
 func (m Model) forwardToActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if composer := m.activeComposer(); composer != nil {
-		cmd := composer.Update(msg)
+	if m.dialog != nil {
+		return m, nil
+	}
+	if m.focusRegion == FocusRegionComposer && m.activeEditorSlot() != "" {
+		cmd := m.editor.Update(msg)
 		m.syncComponents()
 		return m, cmd
 	}
 	return m, nil
-}
-
-func (m *Model) activeComposer() *ComposerModel {
-	if m.dialog != nil {
-		return nil
-	}
-	if m.focusRegion != FocusRegionComposer {
-		return nil
-	}
-	switch m.screen {
-	case ScreenNewTask:
-		return &m.newTaskInput
-	case ScreenApproval:
-		if m.approval.choice == 1 {
-			return &m.detailInput
-		}
-	case ScreenClarification:
-		return &m.detailInput
-	}
-	return nil
 }
 
 func (m Model) handleDialogKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

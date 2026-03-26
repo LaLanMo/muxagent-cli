@@ -80,8 +80,7 @@ type Model struct {
 
 	keys            appKeyMap
 	taskList        list.Model
-	newTaskInput    ComposerModel
-	detailInput     ComposerModel
+	editor          EditorController
 	detailViewport  viewport.Model
 	artifactPreview viewport.Model
 }
@@ -96,17 +95,10 @@ func NewModel(service RuntimeService, workDir, configOverride string, launchConf
 		returnScreen:   ScreenTaskList,
 		keys:           newAppKeyMap(),
 		taskList:       newTaskListModel(),
-		newTaskInput: newComposerModel(ComposerSpec{
+		editor: newEditorController(EditorSpec{
 			Placeholder: "Describe your task...",
 			CharLimit:   512,
-			MinRows:     1,
-			MaxRows:     10,
-		}),
-		detailInput: newComposerModel(ComposerSpec{
-			Placeholder: "Type feedback...",
-			CharLimit:   512,
-			MinRows:     1,
-			MaxRows:     10,
+			Rows:        6,
 		}),
 		detailViewport:   newDetailViewport(),
 		artifactPreview:  newArtifactPreviewViewport(),
@@ -166,5 +158,6 @@ func (m Model) View() tea.View {
 	view.AltScreen = true
 	view.WindowTitle = "muxagent"
 	view.BackgroundColor = color.Black
+	view.Cursor = m.editorCursor()
 	return view
 }

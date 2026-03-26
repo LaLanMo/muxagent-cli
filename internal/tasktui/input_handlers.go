@@ -1,6 +1,11 @@
 package tasktui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	"strings"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+)
 
 func (m Model) handleTaskListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if keyMatches(msg, m.keys.open) {
@@ -23,26 +28,18 @@ func (m Model) handleTaskListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleNewTaskKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.focusRegion == FocusRegionActionPanel {
-		switch {
-		case keyMatches(msg, m.keys.back):
-			m.closeNewTask()
-			m.syncComponents()
-			return m, m.syncInputFocus()
-		case keyMatches(msg, m.keys.confirm):
-			cmd := m.submitNewTask()
-			return m, cmd
-		default:
-			return m, nil
-		}
-	}
 	switch {
 	case keyMatches(msg, m.keys.back):
 		m.closeNewTask()
 		m.syncComponents()
 		return m, m.syncInputFocus()
+	case keyMatches(msg, m.keys.nextFocus):
+		if strings.TrimSpace(m.editor.Value()) == "" {
+			return m, nil
+		}
+		return m, m.submitNewTask()
 	default:
-		cmd := m.newTaskInput.Update(msg)
+		cmd := m.editor.Update(msg)
 		m.syncComponents()
 		return m, cmd
 	}
@@ -58,11 +55,6 @@ func (m Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func keyMatches(msg tea.KeyPressMsg, binding interface{ Keys() []string }) bool {
-	for _, candidate := range binding.Keys() {
-		if msg.String() == candidate {
-			return true
-		}
-	}
-	return false
+func keyMatches(msg tea.KeyPressMsg, binding key.Binding) bool {
+	return key.Matches(msg, binding)
 }

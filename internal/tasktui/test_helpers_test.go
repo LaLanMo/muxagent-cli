@@ -70,10 +70,7 @@ func openNewTaskModal(t *testing.T, model Model) Model {
 
 func submitNewTaskModal(t *testing.T, model Model) (Model, tea.Cmd) {
 	t.Helper()
-	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = next.(Model)
-	require.Equal(t, FocusRegionActionPanel, model.focusRegion)
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
 	return model, cmd
 }

@@ -49,9 +49,6 @@ func (m Model) taskListHint() string {
 }
 
 func (m Model) newTaskModalHint() string {
-	if m.focusRegion == FocusRegionActionPanel {
-		return joinHintParts("Enter start", "Tab editor", "Esc cancel")
-	}
 	return joinHintParts("Enter newline", "Tab start", "Esc cancel")
 }
 

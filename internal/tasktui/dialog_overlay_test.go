@@ -25,7 +25,7 @@ func TestCtrlCOpensQuitDialogAndBlocksUnderlyingInput(t *testing.T) {
 
 	model = openNewTaskModal(t, model)
 	model = typeText(t, model, "stay")
-	require.Equal(t, "stay", model.newTaskInput.Value())
+	require.Equal(t, "stay", model.editor.Value())
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = next.(Model)
@@ -42,7 +42,7 @@ func TestCtrlCOpensQuitDialogAndBlocksUnderlyingInput(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyPressMsg{Text: "x", Code: 'x'})
 	model = next.(Model)
-	assert.Equal(t, "stay", model.newTaskInput.Value(), "dialog must swallow underlying composer input")
+	assert.Equal(t, "stay", model.editor.Value(), "dialog must swallow underlying composer input")
 
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = next.(Model)
@@ -53,7 +53,7 @@ func TestCtrlCOpensQuitDialogAndBlocksUnderlyingInput(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyPressMsg{Text: "!", Code: '!'})
 	model = next.(Model)
-	assert.Equal(t, "stay!", model.newTaskInput.Value(), "composer focus should be restored after dialog closes")
+	assert.Equal(t, "stay!", model.editor.Value(), "composer focus should be restored after dialog closes")
 }
 
 func TestQuitDialogConfirmQuits(t *testing.T) {

@@ -3,6 +3,7 @@ package tasktui
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -14,6 +15,13 @@ type quitDialog struct {
 	selectedIndex int
 }
 
+var (
+	quitDialogQuitKey    = key.NewBinding(key.WithKeys("ctrl+c"))
+	quitDialogCloseKey   = key.NewBinding(key.WithKeys("esc"))
+	quitDialogCycleKey   = key.NewBinding(key.WithKeys("tab", "left", "right"))
+	quitDialogConfirmKey = key.NewBinding(key.WithKeys("enter"))
+)
+
 func newQuitDialog() *quitDialog {
 	return &quitDialog{}
 }
@@ -23,15 +31,15 @@ func (*quitDialog) ID() string {
 }
 
 func (q *quitDialog) HandleKey(msg tea.KeyPressMsg) dialogAction {
-	switch msg.String() {
-	case "ctrl+c":
+	switch {
+	case key.Matches(msg, quitDialogQuitKey):
 		return dialogActionQuit
-	case "esc":
+	case key.Matches(msg, quitDialogCloseKey):
 		return dialogActionClose
-	case "tab", "left", "right":
+	case key.Matches(msg, quitDialogCycleKey):
 		q.selectedIndex = 1 - q.selectedIndex
 		return dialogActionNone
-	case "enter":
+	case key.Matches(msg, quitDialogConfirmKey):
 		if q.selectedIndex == 1 {
 			return dialogActionQuit
 		}

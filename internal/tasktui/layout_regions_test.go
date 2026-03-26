@@ -56,10 +56,13 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	assert.Equal(t, taskListLayout.innerWidth, model.taskList.Width())
 	assert.Equal(t, taskListLayout.bodyHeight, model.taskList.Height())
 
+	model.screen = ScreenNewTask
+	model.syncComponents()
 	newTaskHeader := model.renderAppHeader(metrics.innerWidth)
 	newTaskFooter := renderFooterHintBar(metrics.innerWidth, model.newTaskModalHint())
 	newTaskLayout := model.computeNewTaskScreenLayout(newTaskHeader, newTaskFooter)
-	assert.Equal(t, max(18, newTaskLayout.modalInnerWidth-2), model.newTaskInput.input.Width())
+	assert.Equal(t, editorFieldInnerWidth(max(18, newTaskLayout.modalInnerWidth)), model.editor.input.Width())
+	assert.Equal(t, newTaskLayout.editorRows, model.editor.Height())
 
 	contentWidth := detailContentWidth(metrics.innerWidth)
 	detailHeader := model.renderDetailHeader(contentWidth)

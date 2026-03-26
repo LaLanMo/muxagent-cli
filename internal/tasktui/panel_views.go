@@ -10,31 +10,84 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 )
 
+type builtEditorField struct {
+	View           string
+	ContentOffsetX int
+	ContentOffsetY int
+}
+
+type builtPanel struct {
+	View          string
+	EditorOffsetX int
+	EditorOffsetY int
+	HasEditor     bool
+}
+
+func renderOpaquePanelSurface(width int, content string) string {
+	return lipgloss.NewStyle().
+		Width(width).
+		Background(tuiTheme.panelBg).
+		Render(content)
+}
+
+func (m Model) buildEditorField(width int, label, caption string) builtEditorField {
+	width = max(18, width)
+	focused := m.focusRegion == FocusRegionComposer && m.activeEditorSlot() != ""
+	labelStyle := tuiTheme.Form.InputLabel
+	frameStyle := tuiTheme.Form.InputBlurred
+	if focused {
+		labelStyle = tuiTheme.Form.InputLabelHot
+		frameStyle = tuiTheme.Form.InputFocused
+	}
+	labelView := renderOpaquePanelSurface(width, labelStyle.Render(label))
+	frameView := frameStyle.Width(width).Render(m.editor.View())
+	lines := []string{labelView, frameView}
+	if strings.TrimSpace(caption) != "" {
+		lines = append(lines, renderOpaquePanelSurface(width, tuiTheme.Form.InputCaption.Render(caption)))
+	}
+	return builtEditorField{
+		View:           lipgloss.JoinVertical(lipgloss.Left, lines...),
+		ContentOffsetX: frameStyle.GetBorderLeftSize() + frameStyle.GetPaddingLeft(),
+		ContentOffsetY: lipgloss.Height(labelView) + frameStyle.GetBorderTopSize() + frameStyle.GetPaddingTop(),
+	}
+}
+
+func (m Model) renderEditorField(width int, label, caption string) string {
+	return m.buildEditorField(width, label, caption).View
+}
+
 func (m Model) renderNewTaskModal(layout newTaskScreenLayout) string {
 	modalStyle := tuiTheme.modal.Width(layout.modalWidth)
-	innerWidth := layout.modalInnerWidth
-	return modalStyle.Render(m.renderNewTaskPanelBody(innerWidth))
+	return modalStyle.Render(m.buildNewTaskPanel(layout.modalInnerWidth).View)
 }
 
 func (m Model) renderNewTaskPanelBody(innerWidth int) string {
-	inputWidth := max(18, innerWidth-2)
-	input := tuiTheme.Form.Input.Width(inputWidth).Render(m.newTaskInput.View())
-	actionLabel := "Start task"
-	if strings.TrimSpace(m.newTaskInput.Value()) == "" {
-		actionLabel = "Start task (add a description first)"
-	}
-	action := renderChoiceLine(m.focusRegion == FocusRegionActionPanel, actionLabel)
-	return lipgloss.JoinVertical(
+	return m.buildNewTaskPanel(innerWidth).View
+}
+
+func (m Model) buildNewTaskPanel(innerWidth int) builtPanel {
+	inputWidth := max(18, innerWidth)
+	input := m.buildEditorField(inputWidth, "Task description", "")
+	title := renderOpaquePanelSurface(innerWidth, tuiTheme.modalTitle.Render("New Task"))
+	subtitle := renderOpaquePanelSurface(innerWidth, tuiTheme.modalSubtitle.Render(m.newTaskSubtitle()))
+	hint := renderOpaquePanelSurface(innerWidth, renderFooterHintText(m.newTaskModalHint()))
+	blank := renderOpaquePanelSurface(innerWidth, "")
+	view := lipgloss.JoinVertical(
 		lipgloss.Left,
-		tuiTheme.modalTitle.Render("New Task"),
-		tuiTheme.modalSubtitle.Render(m.newTaskSubtitle()),
-		"",
-		input,
-		"",
-		action,
-		"",
-		renderFooterHintText(m.newTaskModalHint()),
+		title,
+		subtitle,
+		blank,
+		input.View,
+		blank,
+		hint,
 	)
+	prefixHeight := lipgloss.Height(strings.Join([]string{title, subtitle, ""}, "\n"))
+	return builtPanel{
+		View:          view,
+		EditorOffsetX: tuiTheme.modal.GetPaddingLeft() + input.ContentOffsetX,
+		EditorOffsetY: tuiTheme.modal.GetPaddingTop() + prefixHeight + input.ContentOffsetY,
+		HasEditor:     true,
+	}
 }
 
 func (m Model) newTaskSubtitle() string {
@@ -57,36 +110,54 @@ func (m Model) newTaskSubtitle() string {
 }
 
 func (m Model) renderApprovalPanel(surface panelSurface) string {
+	return m.buildApprovalPanel(surface).View
+}
+
+func (m Model) buildApprovalPanel(surface panelSurface) builtPanel {
 	width := surface.Rect.Width
-	options := renderChoiceItems(width, m.approval.choice, m.focusRegion == FocusRegionActionPanel, []choiceItem{
+	panelStyle := tuiTheme.Panel.Warning.Width(width)
+	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
+	title := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render("Approve this plan?"))
+	options := renderChoiceItems(innerWidth, m.approval.choice, m.focusRegion == FocusRegionActionPanel, []choiceItem{
 		{Label: "Yes, approve", Indicator: choiceIndicatorPlain},
 		{Label: "No, reject with feedback", Indicator: choiceIndicatorPlain},
 	})
 	content := []string{
-		tuiTheme.Panel.Title.Render("Approve this plan?"),
+		title,
 		"",
 	}
 	content = append(content, options...)
+	build := builtPanel{}
 	if m.approval.choice == 1 {
-		content = append(content, "", tuiTheme.Form.Input.Render(m.detailInput.View()))
+		input := m.buildEditorField(innerWidth, "Feedback", "")
+		prefixHeight := lipgloss.Height(strings.Join(append(append([]string{}, content...), ""), "\n"))
+		content = append(content, "", input.View)
+		build.EditorOffsetX = panelFrameLeft(tuiTheme.Panel.Warning) + input.ContentOffsetX
+		build.EditorOffsetY = panelFrameTop(tuiTheme.Panel.Warning) + prefixHeight + input.ContentOffsetY
+		build.HasEditor = true
 	}
 	if m.errorText != "" {
-		content = append(content, "", tuiTheme.Status.Failed.Render("× "+m.errorText))
+		content = append(content, "", renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
 	}
-	return tuiTheme.Panel.Warning.Width(width).Render(strings.Join(content, "\n"))
+	build.View = panelStyle.Render(strings.Join(content, "\n"))
+	return build
 }
 
 func (m Model) renderClarificationPanel(surface panelSurface) string {
+	return m.buildClarificationPanel(surface).View
+}
+
+func (m Model) buildClarificationPanel(surface panelSurface) builtPanel {
 	if m.currentInput == nil || len(m.currentInput.Questions) == 0 {
-		return ""
+		return builtPanel{}
 	}
 	width := surface.Rect.Width
 	question := m.currentInput.Questions[m.clarification.question]
 	panelStyle := tuiTheme.Panel.Warning.Width(width)
 	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
-	title := tuiTheme.Panel.Title.Width(innerWidth).Render(fmt.Sprintf("Question %d/%d", m.clarification.question+1, len(m.currentInput.Questions)))
-	body := tuiTheme.Panel.Body.Width(innerWidth).Render(question.Question)
-	why := tuiTheme.Text.Muted.Width(innerWidth).Render(question.WhyItMatters)
+	title := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render(fmt.Sprintf("Question %d/%d", m.clarification.question+1, len(m.currentInput.Questions))))
+	body := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Body.Render(question.Question))
+	why := renderOpaquePanelSurface(innerWidth, tuiTheme.Text.Muted.Render(question.WhyItMatters))
 	header := []string{title, body, why, ""}
 
 	items := make([]choiceItem, 0, len(question.Options))
@@ -108,17 +179,16 @@ func (m Model) renderClarificationPanel(surface panelSurface) string {
 	if m.clarification.question == len(m.currentInput.Questions)-1 {
 		actionLabel = "Submit answers"
 	}
+	input := m.buildEditorField(innerWidth, "Other", "")
 	otherBlock := []string{
 		"",
-		tuiTheme.Text.Muted.Render("Other"),
-		tuiTheme.Form.Input.Width(innerWidth).Render(m.detailInput.View()),
-		"",
+		input.View,
 		renderActionLine(m.focusRegion == FocusRegionActionPanel, m.canAdvanceClarification(question), actionLabel),
 	}
 	extra := make([]string, 0, len(otherBlock)+2)
 	extra = append(extra, otherBlock...)
 	if m.errorText != "" {
-		extra = append(extra, "", tuiTheme.Status.Failed.Render("× "+m.errorText))
+		extra = append(extra, "", renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
 	}
 	headerHeight := lipgloss.Height(strings.Join(header, "\n"))
 	extraHeight := lipgloss.Height(strings.Join(extra, "\n"))
@@ -131,7 +201,13 @@ func (m Model) renderClarificationPanel(surface panelSurface) string {
 	content := append([]string{}, header...)
 	content = append(content, optionLines[start:end]...)
 	content = append(content, extra...)
-	return panelStyle.Render(strings.Join(content, "\n"))
+	prefixHeight := lipgloss.Height(strings.Join(append(append([]string{}, header...), optionLines[start:end]...), "\n")) + 1
+	return builtPanel{
+		View:          panelStyle.Render(strings.Join(content, "\n")),
+		EditorOffsetX: panelFrameLeft(tuiTheme.Panel.Warning) + input.ContentOffsetX,
+		EditorOffsetY: panelFrameTop(tuiTheme.Panel.Warning) + prefixHeight + input.ContentOffsetY,
+		HasEditor:     true,
+	}
 }
 
 func clarificationVisibleWindowByHeight(heights []int, selected, budget int) (int, int) {

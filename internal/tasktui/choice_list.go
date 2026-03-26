@@ -1,7 +1,5 @@
 package tasktui
 
-import "charm.land/lipgloss/v2"
-
 type choiceIndicator int
 
 const (
@@ -40,7 +38,7 @@ func selectionWindow(total, selected, rows int) (start, end int) {
 func renderChoiceItems(width int, focusedIndex int, focused bool, items []choiceItem) []string {
 	lines := make([]string, 0, len(items))
 	for i, item := range items {
-		lines = append(lines, lipgloss.NewStyle().Width(width).Render(renderChoiceItemLine(focused && i == focusedIndex, item)))
+		lines = append(lines, renderOpaquePanelSurface(width, renderChoiceItemLine(focused && i == focusedIndex, item)))
 	}
 	return lines
 }

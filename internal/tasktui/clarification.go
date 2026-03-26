@@ -21,7 +21,7 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			m.syncComponents()
 			return m, m.syncInputFocus()
 		default:
-			cmd := m.detailInput.Update(msg)
+			cmd := m.editor.Update(msg)
 			m.syncComponents()
 			return m, cmd
 		}
@@ -38,7 +38,7 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		m.syncComponents()
 		return m, m.syncInputFocus()
 	case m.focusRegion == FocusRegionComposer && keyMatches(msg, m.keys.confirm):
-		cmd := m.detailInput.Update(msg)
+		cmd := m.editor.Update(msg)
 		m.syncComponents()
 		return m, cmd
 	case m.focusRegion == FocusRegionChoices && keyMatches(msg, m.keys.confirm):
@@ -50,8 +50,6 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		}
 		answer := question.Options[m.clarification.option].Label
 		m.clarification.answers = appendOrReplaceAnswer(m.clarification.answers, m.clarification.question, answer)
-		m.detailInput.Reset()
-		m.detailInput.SetPlaceholder("Write your own answer…")
 		m.focusRegion = FocusRegionActionPanel
 		m.syncComponents()
 		return m, m.syncInputFocus()
@@ -93,7 +91,7 @@ func (m Model) advanceClarificationOrSubmit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	question := m.currentInput.Questions[m.clarification.question]
-	resolved, ok := resolveClarificationAnswer(question, clarificationAnswerAt(m.clarification.answers, m.clarification.question), m.detailInput.Value())
+	resolved, ok := resolveClarificationAnswer(question, clarificationAnswerAt(m.clarification.answers, m.clarification.question), m.editor.Value())
 	if !ok {
 		return m, nil
 	}
@@ -101,8 +99,6 @@ func (m Model) advanceClarificationOrSubmit() (tea.Model, tea.Cmd) {
 	m.clarification.other = false
 	m.clarification.option = 0
 	m.focusRegion = FocusRegionChoices
-	m.detailInput.Reset()
-	m.detailInput.SetPlaceholder("Write your own answer…")
 	if m.clarification.question < len(m.currentInput.Questions)-1 {
 		m.clarification.question++
 		m.syncComponents()
@@ -112,6 +108,6 @@ func (m Model) advanceClarificationOrSubmit() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) canAdvanceClarification(question taskdomain.ClarificationQuestion) bool {
-	_, ok := resolveClarificationAnswer(question, clarificationAnswerAt(m.clarification.answers, m.clarification.question), m.detailInput.Value())
+	_, ok := resolveClarificationAnswer(question, clarificationAnswerAt(m.clarification.answers, m.clarification.question), m.editor.Value())
 	return ok
 }

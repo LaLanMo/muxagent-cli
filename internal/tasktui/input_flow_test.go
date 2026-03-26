@@ -254,6 +254,7 @@ func TestClarificationMultiSelectOtherSubmitsCustomAnswer(t *testing.T) {
 	model.screen = ScreenClarification
 	model.focusRegion = FocusRegionComposer
 	model.syncComponents()
+	_ = model.syncInputFocus()
 
 	model = typeText(t, model, "Docs only")
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -358,7 +359,7 @@ func TestClarificationOtherInputIsAlwaysVisible(t *testing.T) {
 
 			assert.Equal(t, FocusRegionComposer, model.focusRegion)
 			assert.Empty(t, service.dispatched)
-			assert.Equal(t, "Write your own answer…", model.detailInput.Placeholder())
+			assert.Equal(t, "Write your own answer…", model.editor.Placeholder())
 		})
 	}
 }
@@ -746,14 +747,15 @@ func TestFocusedComposerTakesPriorityOverArtifactPaneKeys(t *testing.T) {
 	}
 	model.artifactCollapsed = false
 	model.focusRegion = FocusRegionComposer
-	model.detailInput.SetValue("Need more detail")
 	model.activeTaskID = "task-1"
 	model.syncComponents()
+	_ = model.syncInputFocus()
+	model.editor.SetValue("Need more detail")
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	model = next.(Model)
 
-	assert.Equal(t, "", model.detailInput.Value(), "ctrl+u should reach the focused composer instead of the artifact pane")
+	assert.Equal(t, "", model.editor.Value(), "ctrl+u should reach the focused composer instead of the artifact pane")
 	assert.NotContains(t, strippedView(model.View().Content), "Ctrl+U/Ctrl+D preview")
 }
 
@@ -780,6 +782,10 @@ func TestApprovalComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) 
 	model.approval.choice = 1
 	model.focusRegion = FocusRegionComposer
 	model.syncComponents()
+	_ = model.syncInputFocus()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Feedback")
 
 	model = typeText(t, model, "Need more")
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -788,7 +794,7 @@ func TestApprovalComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) 
 		_ = cmd()
 	}
 	model = typeText(t, model, "detail")
-	assert.Equal(t, "Need more\ndetail", model.detailInput.Value())
+	assert.Equal(t, "Need more\ndetail", model.editor.Value())
 	assert.Empty(t, service.dispatched)
 
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -832,12 +838,12 @@ func TestApprovalActionPanelTypingDoesNotMutateRejectComposer(t *testing.T) {
 	model.screen = ScreenApproval
 	model.approval.choice = 1
 	model.focusRegion = FocusRegionActionPanel
-	model.detailInput.SetValue("Need more detail")
 	model.syncComponents()
+	model.editor.SetValue("Need more detail")
 
 	next, _ = model.Update(tea.KeyPressMsg{Text: "x", Code: 'x'})
 	model = next.(Model)
-	assert.Equal(t, "Need more detail", model.detailInput.Value())
+	assert.Equal(t, "Need more detail", model.editor.Value())
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
@@ -845,7 +851,7 @@ func TestApprovalActionPanelTypingDoesNotMutateRejectComposer(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyPressMsg{Text: "x", Code: 'x'})
 	model = next.(Model)
-	assert.Equal(t, "Need more detailx", model.detailInput.Value())
+	assert.Equal(t, "Need more detailx", model.editor.Value())
 }
 
 func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) {
@@ -878,8 +884,8 @@ func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *t
 	}
 	model.screen = ScreenClarification
 	model.focusRegion = FocusRegionComposer
-	model.detailInput.SetPlaceholder("Write your own answer…")
 	model.syncComponents()
+	_ = model.syncInputFocus()
 
 	model = typeText(t, model, "Custom")
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -888,7 +894,7 @@ func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *t
 		_ = cmd()
 	}
 	model = typeText(t, model, "answer")
-	assert.Equal(t, "Custom\nanswer", model.detailInput.Value())
+	assert.Equal(t, "Custom\nanswer", model.editor.Value())
 	assert.Empty(t, service.dispatched)
 
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})

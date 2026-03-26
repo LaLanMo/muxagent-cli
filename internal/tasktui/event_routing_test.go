@@ -495,7 +495,7 @@ func TestStartTaskCommandErrorStillFollowsAfterTaskCreated(t *testing.T) {
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	model = next.(Model)
-	model.newTaskInput.SetValue("Implement login")
+	model.editor.SetValue("Implement login")
 
 	cmd := model.submitNewTask()
 	require.NotNil(t, cmd)

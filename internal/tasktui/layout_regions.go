@@ -23,6 +23,7 @@ type newTaskScreenLayout struct {
 	bodyHeight      int
 	modalWidth      int
 	modalInnerWidth int
+	editorRows      int
 }
 
 type detailFrameLayout struct {
@@ -81,6 +82,7 @@ func (m Model) computeNewTaskScreenLayout(header, footer string) newTaskScreenLa
 		bodyHeight:      max(1, metrics.innerHeight-headerHeight-footerHeight),
 		modalWidth:      modalWidth,
 		modalInnerWidth: max(1, modalWidth-tuiTheme.modal.GetHorizontalPadding()),
+		editorRows:      clamp(max(4, (max(1, metrics.innerHeight-headerHeight-footerHeight))/3), 4, 8),
 	}
 }
 

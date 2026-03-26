@@ -98,7 +98,7 @@ func (m Model) availableFocusRegions() []FocusRegion {
 	}
 	switch m.screen {
 	case ScreenNewTask:
-		return []FocusRegion{FocusRegionComposer, FocusRegionActionPanel}
+		return []FocusRegion{FocusRegionComposer}
 	case ScreenApproval:
 		regions := []FocusRegion{FocusRegionActionPanel}
 		if m.composerRegionVisible() {

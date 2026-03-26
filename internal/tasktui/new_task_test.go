@@ -1,6 +1,7 @@
 package tasktui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -38,8 +39,8 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	model = openNewTaskModal(t, model)
 	view = model.View()
 	assert.Contains(t, strippedView(view.Content), "New Task")
+	assert.Contains(t, strippedView(view.Content), "Task description")
 	assert.Contains(t, strippedView(view.Content), "runtime codex")
-	assert.Contains(t, strippedView(view.Content), "Start task")
 	assert.Contains(t, strippedView(view.Content), "Enter newline")
 	assert.Contains(t, strippedView(view.Content), "Tab start")
 	assert.NotContains(t, strippedView(view.Content), "Enter select")
@@ -96,21 +97,22 @@ func TestNewTaskTextAreaGrowsOnEnterAndPreservesFirstLine(t *testing.T) {
 	model = next.(Model)
 
 	model = openNewTaskModal(t, model)
-	require.True(t, model.newTaskInput.Focused(), "textarea must be focused")
+	require.True(t, model.editor.Focused(), "textarea must be focused")
+	initialHeight := model.editor.Height()
 
 	model = typeText(t, model, "first line")
-	assert.Equal(t, "first line", model.newTaskInput.Value())
+	assert.Equal(t, "first line", model.editor.Value())
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
-	assert.Equal(t, 2, model.newTaskInput.LineCount(), "should have 2 lines after enter")
+	assert.Equal(t, 2, model.editor.LineCount(), "should have 2 lines after enter")
 
 	model = typeText(t, model, "second line")
 
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "first line", "first line must remain visible after enter")
 	assert.Contains(t, view, "second line", "second line must be visible")
-	assert.GreaterOrEqual(t, model.newTaskInput.Height(), 2)
+	assert.Equal(t, initialHeight, model.editor.Height(), "editor height should stay fixed")
 
 	model, cmd := submitNewTaskModal(t, model)
 	require.NotNil(t, cmd)
@@ -136,10 +138,10 @@ func TestNewTaskEscFromComposerCancelsAndResetsInput(t *testing.T) {
 	}
 
 	assert.Equal(t, ScreenTaskList, model.screen)
-	assert.Equal(t, "", model.newTaskInput.Value())
+	assert.Equal(t, "", model.editor.Value())
 }
 
-func TestNewTaskEscFromActionPanelCancelsAndResetsInput(t *testing.T) {
+func TestNewTaskTabStartsTask(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -148,50 +150,64 @@ func TestNewTaskEscFromActionPanelCancelsAndResetsInput(t *testing.T) {
 	model = openNewTaskModal(t, model)
 	model = typeText(t, model, "Implement login")
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
-	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
-
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = next.(Model)
-	if cmd != nil {
-		_ = cmd()
-	}
-
-	assert.Equal(t, ScreenTaskList, model.screen)
-	assert.Equal(t, "", model.newTaskInput.Value())
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	assert.Equal(t, ScreenRunning, model.screen)
+	assert.Len(t, service.dispatched, 1)
+	assert.Equal(t, taskruntime.CommandStartTask, service.dispatched[0].Type)
 }
 
-func TestNewTaskTextAreaShrinksOnLineDeletion(t *testing.T) {
+func TestNewTaskTabDoesNothingWhenDescriptionEmpty(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
 
 	model = openNewTaskModal(t, model)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = next.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	assert.Equal(t, ScreenNewTask, model.screen)
+	assert.Equal(t, FocusRegionComposer, model.focusRegion)
+	assert.Empty(t, service.dispatched)
+}
+
+func TestNewTaskEditorKeepsFixedHeightWhileDeleting(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+	initialHeight := model.editor.Height()
 
 	model = typeText(t, model, "line one")
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	model = typeText(t, model, "line two")
-	assert.GreaterOrEqual(t, model.newTaskInput.Height(), 2)
+	assert.Equal(t, initialHeight, model.editor.Height())
 
 	for range len("line two") + 1 {
 		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 		model = next.(Model)
 	}
 
-	assert.Equal(t, 1, model.newTaskInput.Height())
+	assert.Equal(t, initialHeight, model.editor.Height())
 }
 
-func TestNewTaskTextAreaAllowsUnlimitedLinesWithMaxVisual10(t *testing.T) {
+func TestNewTaskEditorScrollsInternallyForLongContent(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
 	model = next.(Model)
 
 	model = openNewTaskModal(t, model)
-	require.True(t, model.newTaskInput.Focused())
+	require.True(t, model.editor.Focused())
+	initialHeight := model.editor.Height()
 
 	for i := range 15 {
 		if i > 0 {
@@ -201,57 +217,106 @@ func TestNewTaskTextAreaAllowsUnlimitedLinesWithMaxVisual10(t *testing.T) {
 		model = typeText(t, model, "line")
 	}
 
-	assert.Equal(t, 15, model.newTaskInput.LineCount(), "should allow >10 lines")
-	assert.Equal(t, 10, model.newTaskInput.Height(), "visual height capped at 10")
-
-	for model.newTaskInput.LineCount() > 10 {
-		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
-		model = next.(Model)
-	}
-	assert.Equal(t, 10, model.newTaskInput.LineCount())
-	assert.Equal(t, 10, model.newTaskInput.Height())
-	assert.Equal(t, 0, model.newTaskInput.ScrollYOffset(), "scroll offset must reset when lines <= height")
-
-	for model.newTaskInput.LineCount() > 5 {
-		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
-		model = next.(Model)
-	}
-	assert.Equal(t, 5, model.newTaskInput.LineCount())
-	assert.Equal(t, 5, model.newTaskInput.Height())
+	assert.Equal(t, 15, model.editor.LineCount(), "should allow >10 lines")
+	assert.Equal(t, initialHeight, model.editor.Height(), "editor height should stay fixed")
+	assert.Greater(t, model.editor.ScrollYOffset(), 0, "long drafts should scroll inside the fixed-height editor")
 }
 
-func TestNewTaskTextAreaGrowsForSoftWrappedSingleLine(t *testing.T) {
+func TestNewTaskEditorKeepsFixedHeightForSoftWrappedSingleLine(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
 	model = next.(Model)
 
 	model = openNewTaskModal(t, model)
+	initialHeight := model.editor.Height()
 	model = typeText(t, model, strings.Repeat("x", 80))
 
-	assert.Equal(t, 1, model.newTaskInput.LineCount(), "logical line count should stay at one")
-	assert.GreaterOrEqual(t, model.newTaskInput.Height(), 2, "soft-wrapped single line should grow visually")
+	assert.Equal(t, 1, model.editor.LineCount(), "logical line count should stay at one")
+	assert.Equal(t, initialHeight, model.editor.Height(), "soft-wrapped input should scroll, not resize")
 }
 
-func TestNewTaskTextAreaSoftWrappedSingleLineShrinksAndResetsScroll(t *testing.T) {
+func TestNewTaskEditorWidthMatchesFieldInnerWidth(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+
+	metrics := model.computeScreenMetrics()
+	header := model.renderAppHeader(metrics.innerWidth)
+	footer := renderFooterHintBar(metrics.innerWidth, model.newTaskModalHint())
+	layout := model.computeNewTaskScreenLayout(header, footer)
+	fieldWidth := max(18, layout.modalInnerWidth)
+
+	assert.Equal(t, editorFieldInnerWidth(fieldWidth), model.editor.Width(), "textarea width must match the field shell's inner width")
+}
+
+func TestNewTaskFocusedEditorUsesRealCursor(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+	model = typeText(t, model, "你好")
+
+	view := model.View()
+	require.NotNil(t, view.Cursor, "focused shared editor should expose a real terminal cursor")
+	lines := strings.Split(strippedView(view.Content), "\n")
+	require.Less(t, view.Cursor.Position.Y, len(lines))
+	assert.Contains(t, lines[view.Cursor.Position.Y], "│", "cursor should land on an editor content row, not on labels or chrome")
+	assert.NotContains(t, lines[view.Cursor.Position.Y], "Task description")
+}
+
+func TestNewTaskLongSingleLineWrapsWithoutTinyContinuationRows(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+	innerWidth := model.editor.Width()
+	long := strings.Repeat("x", innerWidth*2+12)
+	model = typeText(t, model, long)
+
+	re := regexp.MustCompile(`x+`)
+	field := strippedView(model.renderEditorField(innerWidth+editorFieldFrameWidth(), "Task description", ""))
+	lines := strings.Split(field, "\n")
+	chunkLengths := make([]int, 0, 4)
+	for _, line := range lines {
+		if !strings.Contains(line, "│") {
+			continue
+		}
+		if match := re.FindString(line); match != "" {
+			chunkLengths = append(chunkLengths, len(match))
+		}
+	}
+
+	assert.Equal(t, []int{innerWidth, innerWidth, 12}, chunkLengths, "single-line soft wrap should consume the field width evenly instead of producing tiny orphan rows")
+}
+
+func TestNewTaskEditorSoftWrappedSingleLineScrollsAndResets(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
 	model = next.(Model)
 
 	model = openNewTaskModal(t, model)
+	initialHeight := model.editor.Height()
 	model = typeText(t, model, strings.Repeat("x", 400))
 
-	assert.Equal(t, 1, model.newTaskInput.LineCount(), "logical line count should stay at one")
-	assert.Equal(t, 10, model.newTaskInput.Height(), "visual height should still cap at 10")
-	assert.Greater(t, model.newTaskInput.ScrollYOffset(), 0, "wrapped overflow should scroll once height cap is reached")
+	assert.Equal(t, 1, model.editor.LineCount(), "logical line count should stay at one")
+	assert.Equal(t, initialHeight, model.editor.Height(), "visual height should stay fixed")
+	assert.Greater(t, model.editor.ScrollYOffset(), 0, "wrapped overflow should scroll once height cap is reached")
 
 	for range 395 {
 		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 		model = next.(Model)
 	}
 
-	assert.Equal(t, 1, model.newTaskInput.LineCount())
-	assert.Equal(t, 1, model.newTaskInput.Height(), "shrinking wrapped content should shrink the composer")
-	assert.Equal(t, 0, model.newTaskInput.ScrollYOffset(), "scroll offset should reset once wrapped content fits again")
+	assert.Equal(t, 1, model.editor.LineCount())
+	assert.Equal(t, initialHeight, model.editor.Height(), "shrinking wrapped content should keep the fixed editor height")
+	assert.Equal(t, 0, model.editor.ScrollYOffset(), "scroll offset should reset once wrapped content fits again")
 }

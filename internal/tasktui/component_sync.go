@@ -7,24 +7,9 @@ func (m *Model) syncComponents() {
 	m.syncArtifactPane()
 	m.normalizeFailureAction()
 	m.normalizeFocusRegion()
-	m.syncDetailInputState()
+	m.syncEditorState()
 	m.syncInputWidths()
 	m.syncDetailViewport()
-}
-
-func (m *Model) syncDetailInputState() {
-	switch m.screen {
-	case ScreenApproval:
-		if m.approval.choice == 1 {
-			m.detailInput.SetPlaceholder("Explain what needs to change…")
-		} else {
-			m.detailInput.SetPlaceholder("Type feedback...")
-		}
-	case ScreenClarification:
-		m.detailInput.SetPlaceholder("Write your own answer…")
-	default:
-		m.detailInput.SetPlaceholder("Type feedback...")
-	}
 }
 
 func (m *Model) syncTaskList() {
@@ -107,13 +92,27 @@ func (m *Model) syncInputWidths() {
 	newTaskHeader := m.renderAppHeader(metrics.innerWidth)
 	newTaskFooter := renderFooterHintBar(metrics.innerWidth, m.newTaskModalHint())
 	newTaskLayout := m.computeNewTaskScreenLayout(newTaskHeader, newTaskFooter)
-	m.newTaskInput.SetWidth(max(18, newTaskLayout.modalInnerWidth-2))
+	if m.screen == ScreenNewTask {
+		m.editor.SetWidth(editorFieldInnerWidth(max(18, newTaskLayout.modalInnerWidth)))
+		m.editor.SetRows(newTaskLayout.editorRows)
+	}
 
 	detailWidth := detailContentWidth(metrics.innerWidth)
 	detailHeader := m.renderDetailHeader(detailWidth)
 	detailFooter := m.renderDetailFooter(surfaceRect{Width: detailWidth})
 	detailFrame := m.computeDetailFrameLayout(detailWidth, detailHeader, detailFooter)
-	m.detailInput.SetWidth(clamp(detailFrame.contentWidth-16, 24, 96))
+	if m.screen == ScreenApproval || m.screen == ScreenClarification {
+		panelSurface := m.computeDetailPanelSurface(detailFrame)
+		fieldWidth := max(18, panelSurface.Rect.Width-tuiTheme.Panel.Warning.GetHorizontalFrameSize())
+		m.editor.SetWidth(editorFieldInnerWidth(fieldWidth))
+		rows := 4
+		if m.screen == ScreenClarification {
+			rows = 1
+		} else if detailFrame.bodyHeight < 18 {
+			rows = 3
+		}
+		m.editor.SetRows(rows)
+	}
 }
 
 func (m *Model) syncDetailViewport() {

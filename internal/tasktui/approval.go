@@ -17,7 +17,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.syncComponents()
 			return m, m.syncInputFocus()
 		default:
-			cmd := m.detailInput.Update(msg)
+			cmd := m.editor.Update(msg)
 			m.syncComponents()
 			return m, cmd
 		}
@@ -27,14 +27,10 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.returnToTaskList()
 	case keyMatches(msg, m.keys.up):
 		m.approval.choice = moveSelection(m.approval.choice, -1, 2)
-		if m.detailInput.Value() == "" {
-			m.detailInput.SetPlaceholder("Type feedback...")
-		}
 		m.syncComponents()
 		return m, m.syncInputFocus()
 	case keyMatches(msg, m.keys.down):
 		m.approval.choice = moveSelection(m.approval.choice, 1, 2)
-		m.detailInput.SetPlaceholder("Explain what needs to change…")
 		m.syncComponents()
 		return m, m.syncInputFocus()
 	case keyMatches(msg, m.keys.confirm):
@@ -45,7 +41,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			"approved": m.approval.choice == 0,
 		}
 		if m.approval.choice == 1 {
-			feedback := strings.TrimSpace(m.detailInput.Value())
+			feedback := strings.TrimSpace(m.editor.Value())
 			if feedback != "" {
 				payload["feedback"] = feedback
 			}
