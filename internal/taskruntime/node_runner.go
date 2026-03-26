@@ -15,6 +15,25 @@ import (
 	"github.com/google/uuid"
 )
 
+func (s *Service) runAgentNodeAsync(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.nodeWG.Add(1)
+	go func() {
+		defer s.nodeWG.Done()
+		if err := s.executeAgentNode(ctx, task, cfg, run); err != nil && shouldPublishCommandError(err) {
+			s.publish(RunEvent{
+				Type:      EventCommandError,
+				TaskID:    task.ID,
+				NodeRunID: run.ID,
+				NodeName:  run.NodeName,
+				Error:     &RunError{Message: err.Error()},
+			})
+		}
+	}()
+}
+
 func (s *Service) startNode(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun) error {
 	view, err := s.refreshTaskView(context.Background(), task.ID)
 	if err != nil {
@@ -48,7 +67,8 @@ func (s *Service) startNode(ctx context.Context, task taskdomain.Task, cfg *task
 			NodeName:  run.NodeName,
 			TaskView:  &view,
 		})
-		return s.executeAgentNode(ctx, task, cfg, run)
+		s.runAgentNodeAsync(ctx, task, cfg, run)
+		return nil
 	}
 }
 
@@ -280,7 +300,7 @@ func (s *Service) failRun(ctx context.Context, task taskdomain.Task, cfg *taskco
 		TaskView:  &view,
 		Error:     &RunError{Message: runErr.Error()},
 	})
-	return runErr
+	return markTaskFailureReported(runErr)
 }
 
 func (s *Service) failureReasonForError(runErr error) string {

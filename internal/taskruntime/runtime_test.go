@@ -408,6 +408,77 @@ func TestServiceRejectsCrossTaskNodeRunInput(t *testing.T) {
 	assert.Equal(t, taskdomain.NodeRunAwaitingUser, run.Status)
 }
 
+func TestServiceStartsSecondTaskWhileFirstAgentRunIsStillExecuting(t *testing.T) {
+	blockRelease := make(chan struct{})
+	blockStarted := make(chan struct{}, 2)
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), &blockingExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl-1.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl-2.md")},
+			},
+		},
+		blockNode:    "implement",
+		blockRelease: blockRelease,
+		blockStarted: blockStarted,
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "task one", WorkDir: service.workDir})
+	firstCreated := waitForEvent(t, service.Events(), EventTaskCreated)
+	waitForEventWhere(t, service.Events(), time.Second, func(event RunEvent) bool {
+		return event.Type == EventNodeStarted && event.TaskID == firstCreated.TaskID
+	})
+	<-blockStarted
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "task two", WorkDir: service.workDir})
+	secondCreated := waitForEventWhere(t, service.Events(), time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCreated && event.TaskID != firstCreated.TaskID
+	})
+	require.NotNil(t, secondCreated.TaskView)
+	assert.Equal(t, "task two", secondCreated.TaskView.Task.Description)
+	waitForEventWhere(t, service.Events(), time.Second, func(event RunEvent) bool {
+		return event.Type == EventNodeStarted && event.TaskID == secondCreated.TaskID
+	})
+
+	close(blockRelease)
+
+	completed := map[string]struct{}{}
+	for len(completed) < 2 {
+		event := waitForEvent(t, service.Events(), EventTaskCompleted)
+		completed[event.TaskID] = struct{}{}
+	}
+	_, sawFirst := completed[firstCreated.TaskID]
+	_, sawSecond := completed[secondCreated.TaskID]
+	assert.True(t, sawFirst)
+	assert.True(t, sawSecond)
+}
+
+func TestServiceTaskFailureDoesNotAlsoPublishCommandError(t *testing.T) {
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), &fakeExecutor{
+		errors: map[string][]error{
+			"implement": {fmt.Errorf("executor bootstrap failed")},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "fail once", WorkDir: service.workDir})
+	failed := waitForEvent(t, service.Events(), EventTaskFailed)
+	require.NotNil(t, failed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusFailed, failed.TaskView.Status)
+	require.NotNil(t, failed.Error)
+	assert.Equal(t, "executor bootstrap failed", failed.Error.Message)
+	assertNoEventTypeWithin(t, service.Events(), EventCommandError, 300*time.Millisecond)
+}
+
 func TestServiceRejectsInvalidClarificationPayload(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -711,6 +782,12 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	err = service.continueBlockedStep(context.Background(), failed.TaskID)
 	require.NoError(t, err)
 
+	completed := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID == failed.TaskID
+	})
+	require.NotNil(t, completed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
+
 	view, _, err := service.LoadTaskView(context.Background(), failed.TaskID)
 	require.NoError(t, err)
 	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -783,6 +860,10 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 
 	err = secondService.continueBlockedStep(context.Background(), taskID)
 	require.NoError(t, err)
+
+	waitForEventWhere(t, secondService.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID == taskID
+	})
 
 	view, _, err = secondService.LoadTaskView(context.Background(), taskID)
 	require.NoError(t, err)

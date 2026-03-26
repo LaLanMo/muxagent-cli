@@ -27,6 +27,7 @@ type Service struct {
 	engine         *taskengine.Engine
 	executor       taskexecutor.Executor
 	bus            *LocalBus
+	nodeWG         sync.WaitGroup
 
 	mu             sync.Mutex
 	rootCtx        context.Context
@@ -73,6 +74,7 @@ func (s *Service) Close() error {
 	s.taskCancels = map[string]context.CancelFunc{}
 	s.taskCtxs = map[string]context.Context{}
 	s.mu.Unlock()
+	s.nodeWG.Wait()
 	storeErr := s.store.Close()
 	lockErr := s.lock.Release()
 	if storeErr != nil {
@@ -104,6 +106,9 @@ func (s *Service) Run(ctx context.Context) error {
 			return ctx.Err()
 		case cmd := <-s.bus.Commands:
 			if err := s.handleCommand(ctx, cmd); err != nil {
+				if !shouldPublishCommandError(err) {
+					continue
+				}
 				s.publish(RunEvent{
 					Type:   EventCommandError,
 					TaskID: cmd.TaskID,
@@ -251,7 +256,8 @@ func (s *Service) submitInput(ctx context.Context, taskID, nodeRunID string, pay
 	if taskCtx == nil {
 		taskCtx = ctx
 	}
-	return s.executeAgentNode(taskCtx, task, cfg, run)
+	s.runAgentNodeAsync(taskCtx, task, cfg, run)
+	return nil
 }
 
 func (s *Service) rebuildEngineState(taskID string, runs []taskdomain.NodeRun) {
@@ -319,4 +325,31 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+type reportedTaskFailureError struct {
+	cause error
+}
+
+func (e reportedTaskFailureError) Error() string {
+	return e.cause.Error()
+}
+
+func (e reportedTaskFailureError) Unwrap() error {
+	return e.cause
+}
+
+func markTaskFailureReported(err error) error {
+	if err == nil {
+		return nil
+	}
+	return reportedTaskFailureError{cause: err}
+}
+
+func shouldPublishCommandError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var reported reportedTaskFailureError
+	return !errors.As(err, &reported)
 }

@@ -25,8 +25,9 @@ const (
 )
 
 type tasksLoadedMsg struct {
-	tasks []taskdomain.TaskView
-	err   error
+	tasks        []taskdomain.TaskView
+	err          error
+	eventVersion uint64
 }
 
 type taskOpenedMsg struct {
@@ -53,6 +54,7 @@ type Model struct {
 	returnScreen        Screen
 	activeTaskID        string
 	tasks               []taskdomain.TaskView
+	taskEventVersion    uint64
 	current             *taskdomain.TaskView
 	currentConfig       *taskconfig.Config
 	launchConfig        *taskconfig.Config
@@ -117,6 +119,9 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tasksLoadedMsg:
+		if msg.eventVersion < m.taskEventVersion {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.errorText = msg.err.Error()
 			m.syncComponents()

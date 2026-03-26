@@ -20,9 +20,10 @@ func (m Model) waitForEvent() tea.Cmd {
 }
 
 func (m Model) loadTasksCmd() tea.Cmd {
+	eventVersion := m.taskEventVersion
 	return func() tea.Msg {
 		tasks, err := m.service.ListTaskViews(context.Background(), m.workDir)
-		return tasksLoadedMsg{tasks: tasks, err: err}
+		return tasksLoadedMsg{tasks: tasks, err: err, eventVersion: eventVersion}
 	}
 }
 
