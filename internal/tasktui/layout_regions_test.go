@@ -88,3 +88,43 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	assert.Equal(t, snapshot.Frame.bodyHeight, occupied)
 	assert.Equal(t, model.renderDetailTimeline(snapshot.Surfaces.Timeline), model.detailViewport.GetContent())
 }
+
+func TestFailedDetailPanelUsesContentDrivenHeight(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "failure.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Failure\n\n- retry implement\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.currentConfig = retryTUIConfig(2)
+	model.current = &taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Retry failed implement", WorkDir: tempDir},
+		Status:          taskdomain.TaskStatusFailed,
+		CurrentNodeName: "implement",
+		ArtifactPaths:   []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{
+				NodeRun: taskdomain.NodeRun{
+					ID:          "run-1",
+					TaskID:      "task-1",
+					NodeName:    "implement",
+					Status:      taskdomain.NodeRunFailed,
+					StartedAt:   time.Now().UTC(),
+					CompletedAt: timePtr(time.Now().UTC()),
+				},
+				ArtifactPaths: []string{artifactPath},
+			},
+		},
+	}
+	model.errorText = "executor failed"
+	model.screen = ScreenFailed
+	model.syncComponents()
+
+	snapshot := model.computeDetailLayoutSnapshot()
+
+	assert.Equal(t, artifactLayoutSplit, snapshot.Frame.layoutMode)
+	assert.Equal(t, snapshot.Surfaces.Panel.MaxHeight, model.computeDetailPanelSurface(snapshot.Frame).MaxHeight)
+	assert.Less(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.MaxHeight)
+	assert.Equal(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.Rect.Height)
+}

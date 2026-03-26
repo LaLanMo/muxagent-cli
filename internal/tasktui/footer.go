@@ -118,6 +118,7 @@ func (m Model) renderFailurePanel(surface panelSurface) string {
 	}
 	panelStyle := panelBase.Width(width).MaxHeight(maxHeight)
 	innerWidth := max(1, width-panelBase.GetHorizontalFrameSize())
+	innerHeight := max(1, maxHeight-panelStyle.GetVerticalFrameSize())
 	content := []string{tuiTheme.Panel.Title.Render(title), ""}
 	actionBlock := []string{}
 	if actions := m.availableFailureActions(); len(actions) > 0 {
@@ -137,12 +138,12 @@ func (m Model) renderFailurePanel(surface panelSurface) string {
 		actionBlock = append(actionBlock, renderChoiceItems(innerWidth, focusedIndex, m.focusRegion == FocusRegionActionPanel, items)...)
 	}
 	fixedHeight := lipgloss.Height(strings.Join(append([]string{}, content...), "\n")) + lipgloss.Height(strings.Join(actionBlock, "\n"))
-	bodyBudget := max(1, maxHeight-fixedHeight)
+	bodyBudget := max(1, innerHeight-fixedHeight)
 	bodyLines := wrapPanelBody(body, innerWidth)
 	bodyLines = truncateWrappedPanelLines(bodyLines, bodyBudget, innerWidth)
 	content = append(content, tuiTheme.Panel.Body.Render(strings.Join(bodyLines, "\n")))
 	content = append(content, actionBlock...)
-	panel := panelStyle.Width(width).Height(maxHeight).Render(strings.Join(content, "\n"))
+	panel := panelStyle.Render(strings.Join(content, "\n"))
 	return panel
 }
 
