@@ -1,0 +1,55 @@
+package tasktui
+
+import (
+	"context"
+	"errors"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
+	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
+)
+
+type RuntimeService interface {
+	Run(ctx context.Context) error
+	Events() <-chan taskruntime.RunEvent
+	Dispatch(cmd taskruntime.RunCommand)
+	ListTaskViews(ctx context.Context, workDir string) ([]taskdomain.TaskView, error)
+	LoadTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, *taskconfig.Config, error)
+	BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*taskruntime.InputRequest, error)
+	PrepareShutdown(ctx context.Context) error
+	Close() error
+}
+
+type App struct {
+	Service        RuntimeService
+	WorkDir        string
+	ConfigOverride string
+	LaunchConfig   *taskconfig.Config
+	Version        string
+}
+
+func (a App) Run(ctx context.Context) error {
+	runtimeCtx, cancel := context.WithCancel(ctx)
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- a.Service.Run(runtimeCtx)
+	}()
+
+	model := NewModel(a.Service, a.WorkDir, a.ConfigOverride, a.LaunchConfig, a.Version)
+	_, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	shutdownErr := a.Service.PrepareShutdown(context.Background())
+	cancel()
+	runErr := <-runDone
+	if err != nil {
+		return err
+	}
+	if shutdownErr != nil {
+		return shutdownErr
+	}
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		return runErr
+	}
+	return nil
+}

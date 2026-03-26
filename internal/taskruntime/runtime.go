@@ -102,14 +102,14 @@ func (s *Service) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			s.cancelTasks()
 			return ctx.Err()
-			case cmd := <-s.bus.Commands:
-				if err := s.handleCommand(ctx, cmd); err != nil {
-					s.publish(RunEvent{
-						Type:   EventCommandError,
-						TaskID: cmd.TaskID,
-						Error:  &RunError{Message: err.Error()},
-					})
-				}
+		case cmd := <-s.bus.Commands:
+			if err := s.handleCommand(ctx, cmd); err != nil {
+				s.publish(RunEvent{
+					Type:   EventCommandError,
+					TaskID: cmd.TaskID,
+					Error:  &RunError{Message: err.Error()},
+				})
+			}
 			if cmd.Type == CommandShutdown {
 				return nil
 			}
@@ -235,6 +235,17 @@ func (s *Service) submitInput(ctx context.Context, taskID, nodeRunID string, pay
 	if err := s.store.SaveNodeRun(ctx, run); err != nil {
 		return err
 	}
+	view, err := s.refreshTaskView(context.Background(), task.ID)
+	if err != nil {
+		return err
+	}
+	s.publish(RunEvent{
+		Type:      EventNodeStarted,
+		TaskID:    task.ID,
+		NodeRunID: run.ID,
+		NodeName:  run.NodeName,
+		TaskView:  &view,
+	})
 
 	taskCtx := s.lookupTaskContext(taskID)
 	if taskCtx == nil {

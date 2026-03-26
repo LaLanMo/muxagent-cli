@@ -87,6 +87,12 @@ JSON
     write_result "review-${count}.md" "\"passed\":${passed}"
     ;;
   implement)
+    if [ "$flow" = "clarify-late" ] && [ "$count" -eq 1 ] && [ "$resume_mode" -eq 0 ]; then
+      cat > "$output" <<'JSON'
+{"kind":"clarification","result":null,"clarification":{"questions":[{"question":"进入 chat_screen 时，屏幕上显示的具体状态是什么？","why_it_matters":"区分 history.complete 超时、消息事件丢失、还是 RPC 本身卡住，会直接决定后续排查方向。这段说明故意写得比较长，用来验证 clarification 表单在有 artifacts 的 detail 屏里也不会把 footer 或 artifact pane 挤没。","options":[{"label":"显示 'This session cannot be restored on this device yet.'","description":"说明 session.load 超时，history.complete 事件没到达前端，大概率是 activeSession 竞态或 WS 断连。"},{"label":"显示 'Send a message to get started' 或正常 UI 但没有消息","description":"说明 session.load 已经返回，但消息事件在处理链路中被丢弃，或 chatState 没被正确填充。"},{"label":"一直停留在 loading spinner","description":"说明 session.load RPC 自身就卡住了，可能是 Go daemon 无响应、relayws 没连上，或者 runtime 本身卡死。"},{"label":"其他表现","description":"以上都不符合，需要补充更多具体症状。"}],"multi_select":true}]}}
+JSON
+      exit 0
+    fi
     if [ "$flow" = "implement-fail-once" ] && [ "$count" -eq 1 ]; then
       echo "simulated implement failure" >&2
       exit 1

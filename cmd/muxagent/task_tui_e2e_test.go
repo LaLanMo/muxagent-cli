@@ -49,10 +49,10 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			flow:        "happy",
 			description: "Implement login",
 			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-				session.send(t, "\x0e")
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
-				session.send(t, "Implement login\r")
+				session.submitNewTask(t, "Implement login")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
@@ -90,15 +90,19 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			flow:        "happy",
 			description: "Reject once",
 			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-				session.send(t, "\x0e")
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
-				session.send(t, "Reject once\r")
+				session.submitNewTask(t, "Reject once")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.send(t, "\x1b[B")
 				session.pause(300 * time.Millisecond)
+				session.send(t, "\t")
+				session.pause(300 * time.Millisecond)
 				session.send(t, "Need more detail")
 				session.pause(750 * time.Millisecond)
+				session.send(t, "\x1b")
+				session.pause(300 * time.Millisecond)
 				session.confirm(t)
 				waitForNodeRunCounts(t, session.cmd.Dir, map[string]int{
 					"upsert_plan":  2,
@@ -143,10 +147,10 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			flow:        "clarify-once",
 			description: "Need clarification",
 			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-				session.send(t, "\x0e")
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
-				session.send(t, "Need clarification\r")
+				session.submitNewTask(t, "Need clarification")
 				session.waitForAll(t, 10*time.Second, "upsert_plan", "awaiting input")
 				session.confirm(t)
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
@@ -183,10 +187,10 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			flow:        "review-reject-once",
 			description: "Review rejects once",
 			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-				session.send(t, "\x0e")
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
-				session.send(t, "Review rejects once\r")
+				session.submitNewTask(t, "Review rejects once")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
@@ -237,12 +241,12 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				return writeOverrideConfig(t, workDir, "blocked-taskflow.yaml", cfg)
 			},
 			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-				session.send(t, "\x0e")
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
-				session.send(t, "Blocked loopback\r")
-				session.waitForAll(t, 10*time.Second, "Task blocked", "R force continue")
-				session.send(t, "R")
+				session.submitNewTask(t, "Blocked loopback")
+				session.waitForAll(t, 10*time.Second, "Task blocked", "Force continue")
+				session.send(t, "\r")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
@@ -266,14 +270,14 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			flow:        "implement-fail-once",
 			description: "Retry failed implement",
 			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-				session.send(t, "\x0e")
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
-				session.send(t, "Retry failed implement\r")
+				session.submitNewTask(t, "Retry failed implement")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
-				session.waitForAll(t, 10*time.Second, "Task failed", "r retry step")
-				session.send(t, "r")
+				session.waitForAll(t, 10*time.Second, "Task failed", "Retry step")
+				session.send(t, "\r")
 			},
 			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-implement", "06-verify"},
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
@@ -314,10 +318,10 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			description: "Need clarification with Claude",
 			cliArgs:     []string{"--runtime", "claude-code"},
 			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-				session.send(t, "\x0e")
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "runtime claude-code")
-				session.send(t, "Need clarification with Claude\r")
+				session.submitNewTask(t, "Need clarification with Claude")
 				session.waitForAll(t, 10*time.Second, "upsert_plan", "awaiting input")
 				session.confirm(t)
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
@@ -399,15 +403,15 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 
 	session := startTUISession(t, binaryPath, workDir)
-	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "Ctrl+N new task")
-	session.send(t, "\x0e")
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
-	session.send(t, "Stay on list\r")
+	session.submitNewTask(t, "Stay on list")
 	session.waitForAll(t, 10*time.Second, "Task: Stay on list", "upsert_plan")
 	session.send(t, "\x1b")
 	session.resetOutput()
-	session.waitForAll(t, 5*time.Second, "Ctrl+N new task", "running Stay on list")
-	session.waitForAll(t, 10*time.Second, "Ctrl+N new task", "awaiting Stay on list")
+	session.waitForAll(t, 5*time.Second, "new task", "running Stay on list")
+	session.waitForAll(t, 10*time.Second, "new task", "awaiting Stay on list")
 
 	output := session.output()
 	assert.NotContains(t, output, "Approve this plan?")
@@ -421,6 +425,97 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 		"review_plan":  1,
 		"approve_plan": 1,
 	})
+
+	session.quit(t)
+}
+
+func TestTaskTUISmallTerminalArtifactDrillInFlow(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 96, 24)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Inspect artifacts on small terminal")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open")
+	session.resetOutput()
+
+	session.send(t, "\t")
+	session.pause(150 * time.Millisecond)
+	session.send(t, "\t")
+	session.pause(150 * time.Millisecond)
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+	session.resetOutput()
+
+	session.send(t, "\r")
+	session.pause(200 * time.Millisecond)
+	session.send(t, "\x1b")
+	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open")
+
+	output := session.output()
+	assert.NotContains(t, output, "Tab next pane")
+
+	session.quit(t)
+}
+
+func TestTaskTUIClarificationWithArtifactsKeepsArtifactPaneReachable(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "clarify-late")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 149, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Clarification with artifacts")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.confirm(t)
+
+	output := session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "Artifacts (")
+	assert.Contains(t, output, "Write your own answer")
+	assert.Contains(t, output, "Submit answers")
+	assert.NotContains(t, output, "[ ] Other")
+	assert.Contains(t, output, "Preview ·")
+
+	session.resetOutput()
+	for i := 0; i < 4; i++ {
+		session.send(t, "\t")
+		session.pause(150 * time.Millisecond)
+	}
+	output = session.waitForAll(t, 5*time.Second, "↑↓ browse")
+	assert.NotContains(t, output, "Tab next pane")
 
 	session.quit(t)
 }
@@ -504,10 +599,25 @@ func (s *tuiSession) pause(delay time.Duration) {
 	time.Sleep(delay)
 }
 
+func (s *tuiSession) resize(t *testing.T, cols, rows uint16) {
+	t.Helper()
+	require.NoError(t, pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}))
+	time.Sleep(150 * time.Millisecond)
+}
+
 func (s *tuiSession) confirm(t *testing.T) {
 	t.Helper()
 	s.send(t, "\r")
 	time.Sleep(250 * time.Millisecond)
+	s.send(t, "\r")
+}
+
+func (s *tuiSession) submitNewTask(t *testing.T, description string) {
+	t.Helper()
+	s.send(t, description)
+	time.Sleep(100 * time.Millisecond)
+	s.send(t, "\t")
+	time.Sleep(100 * time.Millisecond)
 	s.send(t, "\r")
 }
 
@@ -558,6 +668,23 @@ func (s *tuiSession) quit(t *testing.T) {
 		return
 	}
 	s.send(t, "\x03")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-s.exitCh:
+			require.NoError(t, err)
+			require.NoError(t, s.ptmx.Close())
+			return
+		default:
+		}
+		if strings.Contains(s.output(), "Quit muxagent?") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if s.cmd.ProcessState == nil || !s.cmd.ProcessState.Exited() {
+		s.send(t, "\x03")
+	}
 	select {
 	case err := <-s.exitCh:
 		require.NoError(t, err)

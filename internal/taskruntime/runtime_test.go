@@ -107,6 +107,13 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 			},
 		},
 	})
+	resumed := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventNodeStarted && event.NodeRunID == requested.NodeRunID
+	})
+	require.NotNil(t, resumed.TaskView)
+	assert.Equal(t, requested.TaskID, resumed.TaskID)
+	assert.Equal(t, "upsert_plan", resumed.NodeName)
+	assert.Equal(t, taskdomain.TaskStatusRunning, resumed.TaskView.Status)
 	waitForEvent(t, service.Events(), EventInputRequested)
 
 	afterRuns, err := service.store.ListNodeRunsByTask(context.Background(), requested.TaskID)
