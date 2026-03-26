@@ -11,7 +11,7 @@ import (
 func (m *Model) syncArtifactPreview(paneWidth, bodyHeight int, collapsed bool) {
 	fileLines := m.renderArtifactFileLines(max(18, paneWidth-6), artifactVisibleCapacity(len(m.artifactItems)))
 	_, previewBlockHeight := artifactPaneLayout(bodyHeight, collapsed, len(fileLines))
-	contentWidth := max(12, paneWidth-4)
+	contentWidth := max(12, paneWidth-6)
 	previewHeight := max(3, previewBlockHeight-2)
 	m.artifactPreview.SetWidth(contentWidth)
 	m.artifactPreview.SetHeight(previewHeight)
@@ -157,7 +157,9 @@ func (m Model) renderArtifactPreviewBlock(width, height int) string {
 		width,
 	)
 	contentHeight := max(3, height-2)
-	body := lipgloss.Place(width-2, contentHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
+	innerWidth := max(10, width-4)
+	bodyContent := lipgloss.Place(innerWidth, contentHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
+	body := lipgloss.NewStyle().Width(width - 2).PaddingLeft(1).Render(bodyContent)
 	return tuiTheme.Artifact.Block.Width(width).Height(height).Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
 }
 

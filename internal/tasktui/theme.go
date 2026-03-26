@@ -160,26 +160,45 @@ type theme struct {
 	Panel                panelTheme
 	Artifact             artifactTheme
 	Dialog               dialogTheme
+	Markdown             markdownTheme
 }
 
 func newTheme() theme {
-	bg := lipgloss.Color("#090909")
-	panelBg := lipgloss.Color("#1A1A1A")
-	artifactPaneBg := lipgloss.Color("#151D2A")
-	artifactBlock := lipgloss.Color("#0B111B")
-	artifactRailBg := lipgloss.Color("#17202C")
-	borderMuted := lipgloss.Color("#303030")
-	text := lipgloss.Color("#ECE7DF")
-	halfMuted := lipgloss.Color("#BEB7AF")
-	muted := lipgloss.Color("#8A857F")
-	subtle := lipgloss.Color("#5F5A54")
-	running := lipgloss.Color("#D77757")
-	done := lipgloss.Color("#4EBA65")
-	failed := lipgloss.Color("#FF6B80")
-	awaiting := lipgloss.Color("#FFC107")
-	awaitingRowBg := lipgloss.Color("#2A2000")
-	streamBg := lipgloss.Color("#1A1A1A")
-	streamBorder := lipgloss.Color("#343C4C")
+	bgHex := "#090909"
+	panelBgHex := "#1A1A1A"
+	artifactPaneBgHex := "#151D2A"
+	artifactBlockHex := "#0B111B"
+	artifactRailBgHex := "#17202C"
+	borderMutedHex := "#303030"
+	textHex := "#ECE7DF"
+	halfMutedHex := "#BEB7AF"
+	mutedHex := "#8A857F"
+	subtleHex := "#5F5A54"
+	runningHex := "#D77757"
+	doneHex := "#4EBA65"
+	failedHex := "#FF6B80"
+	awaitingHex := "#FFC107"
+	awaitingRowBgHex := "#2A2000"
+	streamBgHex := "#1A1A1A"
+	streamBorderHex := "#343C4C"
+
+	bg := lipgloss.Color(bgHex)
+	panelBg := lipgloss.Color(panelBgHex)
+	artifactPaneBg := lipgloss.Color(artifactPaneBgHex)
+	artifactBlock := lipgloss.Color(artifactBlockHex)
+	artifactRailBg := lipgloss.Color(artifactRailBgHex)
+	borderMuted := lipgloss.Color(borderMutedHex)
+	text := lipgloss.Color(textHex)
+	halfMuted := lipgloss.Color(halfMutedHex)
+	muted := lipgloss.Color(mutedHex)
+	subtle := lipgloss.Color(subtleHex)
+	running := lipgloss.Color(runningHex)
+	done := lipgloss.Color(doneHex)
+	failed := lipgloss.Color(failedHex)
+	awaiting := lipgloss.Color(awaitingHex)
+	awaitingRowBg := lipgloss.Color(awaitingRowBgHex)
+	streamBg := lipgloss.Color(streamBgHex)
+	streamBorder := lipgloss.Color(streamBorderHex)
 	artifactPane := lipgloss.NewStyle().
 		Background(artifactPaneBg).
 		Padding(0, 1)
@@ -370,6 +389,7 @@ func newTheme() theme {
 			Foreground(failed).
 			Bold(true),
 	}
+	markdownStyles := buildMarkdownTheme()
 
 	return theme{
 		bg:                   bg,
@@ -469,5 +489,6 @@ func newTheme() theme {
 		Panel:          panelStyles,
 		Artifact:       artifactStyles,
 		Dialog:         dialogStyles,
+		Markdown:       markdownStyles,
 	}
 }

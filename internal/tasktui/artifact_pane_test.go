@@ -3,6 +3,7 @@ package tasktui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -300,4 +301,72 @@ func TestMarkdownArtifactPreviewRendersMarkdownInsteadOfRawSource(t *testing.T) 
 	assert.Contains(t, view, "Summary")
 	assert.Contains(t, view, "Ship it")
 	assert.NotContains(t, view, "# Summary")
+}
+
+func TestMarkdownArtifactPreviewFormatsDocumentStructure(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "notes.md")
+	content := "# Release Notes\n\n## Highlights\n\n- Faster startup\n- Better preview\n\n> Review before shipping.\n\n```go\nfmt.Println(\"ok\")\n```\n"
+	require.NoError(t, os.WriteFile(artifactPath, []byte(content), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusRunning,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.screen = ScreenRunning
+	model.artifactCollapsed = false
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Release Notes")
+	assert.Contains(t, view, "Highlights")
+	assert.Contains(t, view, "Faster startup")
+	assert.Contains(t, view, "Review before shipping.")
+	assert.Contains(t, view, "fmt.Println(\"ok\")")
+	assert.NotContains(t, view, "# Release Notes")
+	assert.NotContains(t, view, "```go")
+}
+
+func TestArtifactMarkdownPreviewCapsReadableWidth(t *testing.T) {
+	rendered, err := renderArtifactMarkdown(
+		"# Artifact Preview\n\nThis paragraph should stay within a readable column width even when the viewport is much wider than the markdown surface needs for comfortable reading.",
+		140,
+	)
+	require.NoError(t, err)
+
+	maxLineWidth := 0
+	for _, line := range strings.Split(rendered, "\n") {
+		maxLineWidth = max(maxLineWidth, ansi.StringWidth(line))
+	}
+	assert.LessOrEqual(t, maxLineWidth, artifactMarkdownWidth(140))
+}
+
+func TestArtifactMarkdownThemeUsesPrimaryReaderEmphasis(t *testing.T) {
+	cfg := buildMarkdownTheme().Artifact
+
+	require.NotNil(t, cfg.BlockQuote.StylePrimitive.BackgroundColor)
+	assert.Equal(t, "#16202D", *cfg.BlockQuote.StylePrimitive.BackgroundColor)
+	require.NotNil(t, cfg.BlockQuote.IndentToken)
+	assert.Equal(t, "▎ ", *cfg.BlockQuote.IndentToken)
+
+	require.NotNil(t, cfg.Strong.Color)
+	assert.Equal(t, "#FFF8EE", *cfg.Strong.Color)
+	require.NotNil(t, cfg.Strong.Bold)
+	assert.True(t, *cfg.Strong.Bold)
+
+	require.NotNil(t, cfg.Code.StylePrimitive.BackgroundColor)
+	assert.Equal(t, "#243244", *cfg.Code.StylePrimitive.BackgroundColor)
+	require.NotNil(t, cfg.Code.StylePrimitive.Bold)
+	assert.True(t, *cfg.Code.StylePrimitive.Bold)
+
+	require.NotNil(t, cfg.CodeBlock.Chroma)
+	require.NotNil(t, cfg.CodeBlock.Chroma.Comment.Color)
+	assert.Equal(t, "#AAB8C7", *cfg.CodeBlock.Chroma.Comment.Color)
 }

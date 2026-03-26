@@ -72,7 +72,7 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 
 	assert.Equal(t, bodyLayout.detailWidth, model.detailViewport.Width())
 	assert.Equal(t, bodyLayout.detailHeight, model.detailViewport.Height())
-	assert.Equal(t, max(12, bodyLayout.previewWidth-4), model.artifactPreview.Width())
+	assert.Equal(t, max(12, bodyLayout.previewWidth-6), model.artifactPreview.Width())
 	assert.Equal(t, max(3, previewBlockHeight-2), model.artifactPreview.Height())
 	assert.Equal(t, model.renderDetailTimeline(surfaceRect{Width: bodyLayout.detailWidth, Height: bodyLayout.detailHeight}), model.detailViewport.GetContent())
 }
