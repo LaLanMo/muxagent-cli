@@ -79,9 +79,6 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	assert.Equal(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.Rect.Height)
 
 	occupied := snapshot.Surfaces.Timeline.Height
-	if snapshot.Surfaces.Launcher.Height > 0 {
-		occupied += snapshot.Surfaces.Launcher.Height + 1
-	}
 	if snapshot.Surfaces.Panel.Rect.Height > 0 {
 		occupied += snapshot.Surfaces.Panel.Rect.Height + 1
 	}
@@ -123,7 +120,6 @@ func TestFailedDetailPanelUsesContentDrivenHeight(t *testing.T) {
 
 	snapshot := model.computeDetailLayoutSnapshot()
 
-	assert.Equal(t, artifactLayoutSplit, snapshot.Frame.layoutMode)
 	assert.Equal(t, snapshot.Surfaces.Panel.MaxHeight, model.computeDetailPanelSurface(snapshot.Frame).MaxHeight)
 	assert.Less(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.MaxHeight)
 	assert.Equal(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.Rect.Height)

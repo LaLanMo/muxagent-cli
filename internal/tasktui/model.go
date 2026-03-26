@@ -64,7 +64,6 @@ type Model struct {
 	sessionByRun        map[string]string
 	artifactItems       []artifactItem
 	artifactIndex       int
-	artifactDrillIn     bool
 	artifactPreviewPath string
 	autoScrollDetail    bool
 	errorText           string
@@ -75,6 +74,7 @@ type Model struct {
 	focusRegion         FocusRegion
 	dialog              dialogModel
 	failure             failureState
+	activeDetailTab     DetailTab
 
 	width  int
 	height int

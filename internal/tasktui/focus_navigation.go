@@ -72,51 +72,23 @@ func (m *Model) handleDetailPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 
 func (m *Model) handleArtifactPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch m.focusRegion {
-	case FocusRegionArtifactLauncher:
-		if !m.artifactLauncherVisible() || len(m.artifactItems) == 0 {
-			return nil, false
-		}
-		switch {
-		case keyMatches(msg, m.keys.back):
-			m.focusRegion = FocusRegionDetail
-			return m.syncInputFocus(), true
-		case keyMatches(msg, m.keys.confirm):
-			m.artifactDrillIn = true
-			m.focusRegion = FocusRegionArtifactFiles
-			return m.syncInputFocus(), true
-		}
 	case FocusRegionArtifactFiles:
-		if !m.artifactPaneVisible() || len(m.artifactItems) == 0 {
+		if !m.artifactTabActive() {
 			return nil, false
 		}
 		switch {
-		case keyMatches(msg, m.keys.back):
-			if m.artifactDrillInVisible() {
-				m.artifactDrillIn = false
-			}
-			m.focusRegion = FocusRegionDetail
-			return m.syncInputFocus(), true
 		case keyMatches(msg, m.keys.up):
 			m.artifactIndex = moveSelection(m.artifactIndex, -1, len(m.artifactItems))
 			return nil, true
 		case keyMatches(msg, m.keys.down):
 			m.artifactIndex = moveSelection(m.artifactIndex, 1, len(m.artifactItems))
 			return nil, true
-		case keyMatches(msg, m.keys.confirm):
-			m.focusRegion = FocusRegionArtifactPreview
-			return m.syncInputFocus(), true
 		}
 	case FocusRegionArtifactPreview:
-		if !m.artifactPaneVisible() {
+		if !m.artifactTabActive() {
 			return nil, false
 		}
 		switch {
-		case keyMatches(msg, m.keys.back):
-			if m.artifactDrillInVisible() {
-				m.artifactDrillIn = false
-			}
-			m.focusRegion = FocusRegionDetail
-			return m.syncInputFocus(), true
 		case keyMatches(msg, m.keys.up), keyMatches(msg, m.keys.down):
 			nextPreview, cmd := m.artifactPreview.Update(msg)
 			m.artifactPreview = nextPreview

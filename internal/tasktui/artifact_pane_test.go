@@ -43,13 +43,17 @@ func TestApprovalScreenShowsExpandedArtifactsPaneAndPreview(t *testing.T) {
 	model.screen = ScreenApproval
 	model.syncComponents()
 
+	// Switch to artifacts tab
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "Artifacts (2)")
+	assert.Contains(t, view, "1 timeline")
 	assert.Contains(t, view, "Files")
 	assert.Contains(t, view, "Preview · plan.md")
 	assert.Contains(t, view, "Plan")
 	assert.NotContains(t, view, "# Plan")
-	assert.Contains(t, view, "Review artifacts in the pane")
 }
 
 func TestRunningDetailLetsUserSwitchArtifactSelection(t *testing.T) {
@@ -73,13 +77,17 @@ func TestRunningDetailLetsUserSwitchArtifactSelection(t *testing.T) {
 	model.screen = ScreenRunning
 	model.syncComponents()
 
+	// Switch to artifacts tab to see the files
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Preview · new.md")
 	assert.Contains(t, view, "New")
 	assert.NotContains(t, view, "# New")
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = next.(Model)
+	// Navigate up in file list
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = next.(Model)
 	view = strippedView(model.View().Content)
@@ -124,18 +132,14 @@ func TestCompletedTaskOpenedFromListShowsArtifactsPaneImmediately(t *testing.T) 
 
 	screen := strippedView(model.View().Content)
 	assert.Equal(t, ScreenComplete, model.screen)
-	assert.Equal(t, artifactLayoutSplit, model.currentArtifactLayoutMode())
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
-	assert.Contains(t, screen, "Artifacts (1)")
-	assert.Contains(t, screen, "Files")
-	assert.Contains(t, screen, "Preview · summary.md")
-	assert.Contains(t, screen, "Summary")
+	assert.Contains(t, screen, "2 artifacts")
 	assert.Contains(t, screen, "Esc back")
 	assert.Contains(t, screen, "Ctrl+C quit")
-	assert.NotContains(t, screen, "Enter open")
 }
 
-func TestWideCompletedScreenTabsBetweenDetailAndArtifactPanes(t *testing.T) {
+func TestTabSwitchingBetweenTimelineAndArtifacts(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")
 	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
@@ -155,25 +159,89 @@ func TestWideCompletedScreenTabsBetweenDetailAndArtifactPanes(t *testing.T) {
 	model.syncComponents()
 
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
-	assert.Equal(t, artifactLayoutSplit, model.currentArtifactLayoutMode())
-	assert.Contains(t, strippedView(model.View().Content), "Files")
-	assert.Contains(t, strippedView(model.View().Content), "Preview · summary.md")
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	// Press 2 to switch to artifacts tab
+	next, _ = model.Update(tea.KeyPressMsg{Code: '2'})
 	model = next.(Model)
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
-	assert.Contains(t, strippedView(model.View().Content), "Files · focused")
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = next.(Model)
-	assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
+	screen := strippedView(model.View().Content)
+	assert.Contains(t, screen, "Files")
+	assert.Contains(t, screen, "Preview · summary.md")
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// Press 1 to switch back to timeline
+	next, _ = model.Update(tea.KeyPressMsg{Code: '1'})
 	model = next.(Model)
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 }
 
-func TestSmallTerminalArtifactLauncherOpensDrillInView(t *testing.T) {
+func TestClarificationPanelVisibleAfterTabRoundTrip(t *testing.T) {
+	tempDir := t.TempDir()
+	art1 := filepath.Join(tempDir, "review-1.md")
+	art2 := filepath.Join(tempDir, "implementation-1.md")
+	art3 := filepath.Join(tempDir, "verify-1.md")
+	require.NoError(t, os.WriteFile(art1, []byte("# Review\n\nLGTM\n"), 0o644))
+	require.NoError(t, os.WriteFile(art2, []byte("# Impl\n\nDone\n"), 0o644))
+	require.NoError(t, os.WriteFile(art3, []byte("# Verify\n\nPassed\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 149, Height: 39})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Clarification with artifacts", WorkDir: tempDir},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-r", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}, ArtifactPaths: []string{art1}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-a", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}, ArtifactPaths: []string{art2, art3}},
+		},
+		ArtifactPaths: []string{art1, art2, art3},
+	}
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:          taskruntime.InputKindClarification,
+		TaskID:        "task-1",
+		NodeRunID:     "run-1",
+		NodeName:      "implement",
+		ArtifactPaths: []string{art1, art2, art3},
+		Questions: []taskdomain.ClarificationQuestion{{
+			Question:     "Which path should we take?",
+			WhyItMatters: "Determines the next implementation step.",
+			Options: []taskdomain.ClarificationOption{
+				{Label: "A", Description: "First approach"},
+				{Label: "B", Description: "Second approach"},
+				{Label: "C", Description: "Third approach"},
+				{Label: "D", Description: "Other approach"},
+			},
+			MultiSelect: true,
+		}},
+	}
+	model.screen = ScreenClarification
+	model.syncComponents()
+
+	// Verify panel visible on timeline tab
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Question 1/1", "panel should be visible before tab switch")
+
+	// Switch to artifacts tab
+	next, _ = model.Update(tea.KeyPressMsg{Code: '2'})
+	model = next.(Model)
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
+
+	// Switch back to timeline
+	next, _ = model.Update(tea.KeyPressMsg{Code: '1'})
+	model = next.(Model)
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+
+	view = strippedView(model.View().Content)
+	t.Logf("View after round-trip:\n%s", view)
+	assert.Contains(t, view, "Question 1/1", "panel should be visible after tab round-trip")
+}
+
+func TestArtifactTabCyclesViaTab(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")
 	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
@@ -190,110 +258,54 @@ func TestSmallTerminalArtifactLauncherOpensDrillInView(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
 	model.syncComponents()
 
-	assert.Equal(t, artifactLayoutLauncher, model.currentArtifactLayoutMode())
-	assert.False(t, model.artifactDrillIn)
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 
-	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "Artifacts (1)")
-	assert.Contains(t, view, "Enter open")
-	assert.NotContains(t, view, "Files")
-
+	// Tab cycles from files to preview
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
-	assert.Equal(t, FocusRegionArtifactLauncher, model.focusRegion)
+	assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Tab cycles from preview back to files
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
-	assert.True(t, model.artifactDrillIn)
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 
-	view = strippedView(model.View().Content)
-	assert.Contains(t, view, "Files")
-	assert.Contains(t, view, "Preview · summary.md")
-	assert.Contains(t, view, "Ship it")
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// Press 1 to switch back to timeline
+	next, _ = model.Update(tea.KeyPressMsg{Code: '1'})
 	model = next.(Model)
-	assert.False(t, model.artifactDrillIn)
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 }
 
-func TestSmallTerminalCompletedScreenKeepsFooterVisibleAcrossArtifactDrillIn(t *testing.T) {
-	tempDir := t.TempDir()
-	artifactPath := filepath.Join(tempDir, "summary.md")
-	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
-
-	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 96, Height: 24})
-	model = next.(Model)
-	model.current = &taskdomain.TaskView{
-		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
-		Status:        taskdomain.TaskStatusDone,
-		ArtifactPaths: []string{artifactPath},
-		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}},
-		},
-	}
-	model.screen = ScreenComplete
-	model.syncComponents()
-
-	assert.Equal(t, artifactLayoutLauncher, model.currentArtifactLayoutMode())
-	assert.False(t, model.artifactDrillIn)
-
-	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "Task completed successfully")
-	assert.Contains(t, view, "Artifacts (1)")
-	assert.Contains(t, view, "Enter open")
-	assert.Contains(t, view, "Esc back")
-	assert.Contains(t, view, "Ctrl+C quit")
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = next.(Model)
-	assert.Equal(t, FocusRegionArtifactLauncher, model.focusRegion)
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(Model)
-	assert.True(t, model.artifactDrillIn)
-	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
-
-	view = strippedView(model.View().Content)
-	assert.Contains(t, view, "Files")
-	assert.Contains(t, view, "Preview · summary.md")
-	assert.Contains(t, view, "Esc detail")
-	assert.Contains(t, view, "Ctrl+C quit")
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = next.(Model)
-	assert.False(t, model.artifactDrillIn)
-	assert.Equal(t, FocusRegionDetail, model.focusRegion)
-}
-
-func TestExpandedArtifactPaneUsesMacPreviewHint(t *testing.T) {
+func TestTabHintShowsInFooter(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")
 	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n"), 0o644))
 
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 96, Height: 24})
 	model = next.(Model)
 	model.current = &taskdomain.TaskView{
 		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
-		Status:        taskdomain.TaskStatusRunning,
+		Status:        taskdomain.TaskStatusDone,
 		ArtifactPaths: []string{artifactPath},
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}},
 		},
 	}
-	model.screen = ScreenRunning
+	model.screen = ScreenComplete
 	model.syncComponents()
 
-	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "Tab next pane")
-	assert.NotContains(t, view, "Ctrl+U/Ctrl+D preview")
-	assert.NotContains(t, view, "PgUp")
-	assert.NotContains(t, view, "PgDn")
+	screen := strippedView(model.View().Content)
+	assert.Contains(t, screen, "2 artifacts")
+	assert.NotContains(t, screen, "[1] Timeline")
+	assert.NotContains(t, screen, "[2] Artifacts")
+	assert.Contains(t, screen, "Ctrl+C quit")
 }
 
 func TestArtifactPaneShowsCompactFileWindow(t *testing.T) {
@@ -332,12 +344,13 @@ func TestArtifactPaneLabelsFilesWithSourceNodeAndIteration(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "upsert_plan (#1) · .muxagent/tasks/task-1/todo-first.md")
-	assert.Contains(t, view, "upsert_plan (#2) · .muxagent/tasks/task-1/todo-second.md")
-	assert.Contains(t, view, "Preview · upsert_plan (#2) · todo-second.md")
+	assert.Contains(t, view, "upsert_plan (#1)")
+	assert.Contains(t, view, "upsert_plan (#2)")
 }
 
 func TestMarkdownArtifactPreviewRendersMarkdownInsteadOfRawSource(t *testing.T) {
@@ -357,6 +370,8 @@ func TestMarkdownArtifactPreviewRendersMarkdownInsteadOfRawSource(t *testing.T) 
 		},
 	}
 	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
@@ -383,6 +398,8 @@ func TestMarkdownArtifactPreviewFormatsDocumentStructure(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)

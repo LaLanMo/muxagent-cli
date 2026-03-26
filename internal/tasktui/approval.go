@@ -53,9 +53,5 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderApprovalFooter(surface surfaceRect) string {
-	return m.renderApprovalFooterForLayout(surface, m.currentArtifactLayoutMode())
-}
-
-func (m Model) renderApprovalFooterForLayout(surface surfaceRect, mode artifactLayoutMode) string {
-	return renderFooterHintBar(surface.Width, m.detailHintForLayout(joinHintParts("↑↓ select", "Enter confirm", "Esc back"), mode))
+	return renderFooterHintBar(surface.Width, m.detailHint(joinHintParts("↑↓ select", "Enter confirm", "Esc back")))
 }

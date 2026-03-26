@@ -5,7 +5,6 @@ type FocusRegion int
 const (
 	FocusRegionNone FocusRegion = iota
 	FocusRegionDetail
-	FocusRegionArtifactLauncher
 	FocusRegionArtifactFiles
 	FocusRegionArtifactPreview
 	FocusRegionChoices
@@ -34,54 +33,11 @@ func (m Model) shouldFocusDetailComposer() bool {
 	return m.focusRegion == FocusRegionComposer && m.detailComposerVisible()
 }
 
-func artifactPaneVisibleForLayout(mode artifactLayoutMode, artifactDrillIn bool) bool {
-	switch mode {
-	case artifactLayoutSplit:
-		return true
-	case artifactLayoutLauncher:
-		return artifactDrillIn
-	default:
-		return false
-	}
+func (m Model) artifactTabActive() bool {
+	return m.activeDetailTab == DetailTabArtifacts && len(m.artifactItems) > 0
 }
 
-func artifactLauncherVisibleForLayout(mode artifactLayoutMode, artifactDrillIn bool) bool {
-	return mode == artifactLayoutLauncher && !artifactDrillIn
-}
-
-func artifactDrillInVisibleForLayout(mode artifactLayoutMode, artifactDrillIn bool) bool {
-	return mode == artifactLayoutLauncher && artifactDrillIn
-}
-
-func (m Model) artifactPaneExpandable() bool {
-	return m.currentArtifactLayoutMode() == artifactLayoutSplit
-}
-
-func (m Model) currentArtifactLayoutMode() artifactLayoutMode {
-	if !m.isDetailScreen() {
-		return artifactLayoutHidden
-	}
-	return m.computeDetailLayoutSnapshot().Frame.layoutMode
-}
-
-func (m Model) artifactPaneVisible() bool {
-	return artifactPaneVisibleForLayout(m.currentArtifactLayoutMode(), m.artifactDrillIn)
-}
-
-func (m Model) artifactLauncherVisible() bool {
-	return artifactLauncherVisibleForLayout(m.currentArtifactLayoutMode(), m.artifactDrillIn)
-}
-
-func (m Model) artifactDrillInVisible() bool {
-	return artifactDrillInVisibleForLayout(m.currentArtifactLayoutMode(), m.artifactDrillIn)
-}
-
-func (m Model) availableFocusRegionsForLayout(mode artifactLayoutMode) []FocusRegion {
-	if artifactDrillInVisibleForLayout(mode, m.artifactDrillIn) {
-		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}
-	}
-	artifactPaneVisible := artifactPaneVisibleForLayout(mode, m.artifactDrillIn)
-	artifactLauncherVisible := artifactLauncherVisibleForLayout(mode, m.artifactDrillIn)
+func (m Model) availableFocusRegions() []FocusRegion {
 	switch m.screen {
 	case ScreenNewTask:
 		return []FocusRegion{FocusRegionComposer}
@@ -90,19 +46,18 @@ func (m Model) availableFocusRegionsForLayout(mode artifactLayoutMode) []FocusRe
 		if m.composerRegionVisible() {
 			regions = append(regions, FocusRegionComposer)
 		}
-		regions = append(regions, FocusRegionDetail)
-		if artifactPaneVisible {
+		if m.artifactTabActive() {
 			regions = append(regions, FocusRegionArtifactFiles, FocusRegionArtifactPreview)
-		} else if artifactLauncherVisible {
-			regions = append(regions, FocusRegionArtifactLauncher)
+		} else {
+			regions = append(regions, FocusRegionDetail)
 		}
 		return regions
 	case ScreenClarification:
-		regions := []FocusRegion{FocusRegionChoices, FocusRegionComposer, FocusRegionActionPanel, FocusRegionDetail}
-		if artifactPaneVisible {
+		regions := []FocusRegion{FocusRegionChoices, FocusRegionComposer, FocusRegionActionPanel}
+		if m.artifactTabActive() {
 			regions = append(regions, FocusRegionArtifactFiles, FocusRegionArtifactPreview)
-		} else if artifactLauncherVisible {
-			regions = append(regions, FocusRegionArtifactLauncher)
+		} else {
+			regions = append(regions, FocusRegionDetail)
 		}
 		return regions
 	case ScreenFailed:
@@ -110,28 +65,24 @@ func (m Model) availableFocusRegionsForLayout(mode artifactLayoutMode) []FocusRe
 		if len(m.availableFailureActions()) > 0 {
 			regions = append(regions, FocusRegionActionPanel)
 		}
-		regions = append(regions, FocusRegionDetail)
-		if artifactPaneVisible {
+		if m.artifactTabActive() {
 			regions = append(regions, FocusRegionArtifactFiles, FocusRegionArtifactPreview)
-		} else if artifactLauncherVisible {
-			regions = append(regions, FocusRegionArtifactLauncher)
+		} else {
+			regions = append(regions, FocusRegionDetail)
 		}
 		return regions
 	case ScreenRunning, ScreenComplete:
-		regions := []FocusRegion{FocusRegionDetail}
-		if artifactPaneVisible {
-			regions = append(regions, FocusRegionArtifactFiles, FocusRegionArtifactPreview)
-		} else if artifactLauncherVisible {
-			regions = append(regions, FocusRegionArtifactLauncher)
+		if m.artifactTabActive() {
+			return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}
 		}
-		return regions
+		return []FocusRegion{FocusRegionDetail}
 	default:
 		return nil
 	}
 }
 
-func (m Model) defaultFocusRegionForLayout(mode artifactLayoutMode) FocusRegion {
-	if artifactDrillInVisibleForLayout(mode, m.artifactDrillIn) {
+func (m Model) defaultFocusRegion() FocusRegion {
+	if m.artifactTabActive() {
 		return FocusRegionArtifactFiles
 	}
 	switch m.screen {
@@ -151,14 +102,6 @@ func (m Model) defaultFocusRegionForLayout(mode artifactLayoutMode) FocusRegion 
 	default:
 		return FocusRegionNone
 	}
-}
-
-func (m Model) availableFocusRegions() []FocusRegion {
-	return m.availableFocusRegionsForLayout(m.currentArtifactLayoutMode())
-}
-
-func (m Model) defaultFocusRegion() FocusRegion {
-	return m.defaultFocusRegionForLayout(m.currentArtifactLayoutMode())
 }
 
 func focusRegionIndex(regions []FocusRegion, target FocusRegion) int {

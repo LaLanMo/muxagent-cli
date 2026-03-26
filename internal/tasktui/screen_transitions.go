@@ -37,7 +37,7 @@ func (m *Model) setScreen(screen Screen) {
 func (m *Model) setDetailScreen(screen Screen, resetArtifacts bool) {
 	m.setScreen(screen)
 	if resetArtifacts {
-		m.artifactDrillIn = false
+		m.activeDetailTab = DetailTabTimeline
 	}
 }
 

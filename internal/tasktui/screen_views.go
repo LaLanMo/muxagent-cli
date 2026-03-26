@@ -1,8 +1,6 @@
 package tasktui
 
 import (
-	"strings"
-
 	"charm.land/lipgloss/v2"
 )
 
@@ -61,24 +59,19 @@ func (m Model) renderDetailScreen(width, height int) string {
 	header := snapshot.Header
 	footer := snapshot.Footer
 	panel := snapshot.PanelView.View
-	bodyContent := ""
-	switch {
-	case artifactDrillInVisibleForLayout(frame.layoutMode, m.artifactDrillIn):
-		bodyContent = lipgloss.Place(frame.contentWidth, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.renderArtifactsPane(surfaces.Artifact))
-	case surfaces.Frame.layoutMode == artifactLayoutSplit:
-		leftBody := lipgloss.Place(surfaces.Timeline.Width, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.detailViewport.View())
-		rightBody := m.renderArtifactsPane(surfaces.Artifact)
-		bodyContent = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			leftBody,
-			strings.Repeat(" ", surfaces.Body.gap),
-			rightBody,
-		)
-	case surfaces.Frame.layoutMode == artifactLayoutLauncher:
-		bodyContent = m.renderDetailWithArtifactLauncher(surfaces.Timeline, surfaces.Launcher)
+
+	var bodyContent string
+	switch m.activeDetailTab {
+	case DetailTabArtifacts:
+		if len(m.artifactItems) > 0 {
+			bodyContent = lipgloss.Place(frame.contentWidth, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.renderArtifactsPane(surfaces.Artifact))
+		} else {
+			bodyContent = lipgloss.Place(frame.contentWidth, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.detailViewport.View())
+		}
 	default:
 		bodyContent = lipgloss.Place(frame.contentWidth, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.detailViewport.View())
 	}
+
 	if panel != "" {
 		bodyContent = lipgloss.JoinVertical(lipgloss.Left, bodyContent, "", panel)
 	}

@@ -71,7 +71,6 @@ func (m *Model) syncArtifactPane() {
 	m.artifactItems = buildArtifactItems(m.workDir, m.current, m.currentInput)
 	if len(m.artifactItems) == 0 {
 		m.artifactIndex = 0
-		m.artifactDrillIn = false
 		m.artifactPreview.SetContent("")
 		m.artifactPreview.GotoTop()
 		return

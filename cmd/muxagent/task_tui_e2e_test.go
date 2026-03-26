@@ -429,7 +429,7 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	session.quit(t)
 }
 
-func TestTaskTUISmallTerminalArtifactDrillInFlow(t *testing.T) {
+func TestTaskTUISmallTerminalArtifactTabSwitching(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
 	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
@@ -454,29 +454,22 @@ func TestTaskTUISmallTerminalArtifactDrillInFlow(t *testing.T) {
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Inspect artifacts on small terminal")
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open")
+	session.waitForAll(t, 5*time.Second, "2 artifacts")
 	session.resetOutput()
 
-	session.send(t, "\t")
-	session.pause(150 * time.Millisecond)
-	session.send(t, "\t")
-	session.pause(150 * time.Millisecond)
-	session.send(t, "\r")
+	// Switch to artifacts tab via '2' key
+	session.send(t, "2")
 	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
 	session.resetOutput()
 
-	session.send(t, "\r")
-	session.pause(200 * time.Millisecond)
-	session.send(t, "\x1b")
-	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open")
-
-	output := session.output()
-	assert.NotContains(t, output, "Tab next pane")
+	// Press 1 to return to timeline tab (footer shows "2 artifacts" on timeline)
+	session.send(t, "1")
+	session.waitForAll(t, 5*time.Second, "2 artifacts")
 
 	session.quit(t)
 }
 
-func TestTaskTUIWideTerminalCompletedArtifactsStayVisibleOnCompleteAndReopen(t *testing.T) {
+func TestTaskTUIWideTerminalCompletedArtifactsTabSwitch(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
 	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
@@ -503,27 +496,32 @@ func TestTaskTUIWideTerminalCompletedArtifactsStayVisibleOnCompleteAndReopen(t *
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	output := session.waitForAll(t, 15*time.Second, "Task completed successfully", "Artifacts (", "Files", "Preview ·", "Esc back")
-	assert.NotContains(t, output, "Enter open")
-
+	session.waitForAll(t, 15*time.Second, "Task completed successfully", "2 artifacts", "Esc back")
 	session.resetOutput()
+
+	// Switch to artifacts tab and verify content
+	session.send(t, "2")
+	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+	session.resetOutput()
+
+	// Switch back to timeline, then go back to task list
+	session.send(t, "1")
+	session.pause(150 * time.Millisecond)
 	session.send(t, "\x1b")
 	session.waitForAll(t, 5*time.Second, "new task", "done Wide completed artifacts")
 
+	// Re-open the task and switch to artifacts
 	session.resetOutput()
-	session.send(t, "\x1b[A")
-	session.pause(150 * time.Millisecond)
-	session.send(t, "\x1b[B")
-	session.pause(150 * time.Millisecond)
 	session.send(t, "\r")
-
-	output = session.waitForAll(t, 5*time.Second, "Task completed successfully", "Artifacts (", "Files", "Preview ·", "Esc back")
-	assert.NotContains(t, output, "Enter open")
+	session.waitForAll(t, 5*time.Second, "Task completed successfully", "2 artifacts")
+	session.resetOutput()
+	session.send(t, "2")
+	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
 
 	session.quit(t)
 }
 
-func TestTaskTUISmallTerminalCompletedArtifactsKeepFooterVisibleOnCompleteAndReopen(t *testing.T) {
+func TestTaskTUISmallTerminalCompletedArtifactsTabSwitchAndReopen(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
 	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
@@ -550,31 +548,31 @@ func TestTaskTUISmallTerminalCompletedArtifactsKeepFooterVisibleOnCompleteAndReo
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	output := session.waitForAll(t, 15*time.Second, "Task completed successfully", "Artifacts (", "Enter open", "Esc back")
-	assert.NotContains(t, output, "Files · focused")
-
+	session.waitForAll(t, 15*time.Second, "Task completed successfully", "2 artifacts", "Esc back")
 	session.resetOutput()
-	session.send(t, "\t")
-	session.pause(150 * time.Millisecond)
-	session.send(t, "\r")
-	output = session.waitForAll(t, 5*time.Second, "Files", "Preview ·", "Esc detail")
 
+	// Switch to artifacts tab
+	session.send(t, "2")
+	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
 	session.resetOutput()
-	session.send(t, "\x1b")
-	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open", "Esc back")
 
+	// Press 1 back to timeline, then esc to task list
+	session.send(t, "1")
+	session.waitForAll(t, 5*time.Second, "2 artifacts", "Esc back")
 	session.resetOutput()
+
 	session.send(t, "\x1b")
 	session.waitForAll(t, 5*time.Second, "new task", "done Small completed artifacts")
 
+	// Re-open and verify footer hint
 	session.resetOutput()
 	session.send(t, "\r")
-	session.waitForAll(t, 5*time.Second, "Artifacts (", "Enter open", "Esc back")
+	session.waitForAll(t, 5*time.Second, "2 artifacts", "Esc back")
 
 	session.quit(t)
 }
 
-func TestTaskTUIClarificationWithArtifactsKeepsArtifactPaneReachable(t *testing.T) {
+func TestTaskTUIClarificationWithArtifactsTabSwitchReachable(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
 	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
@@ -601,19 +599,23 @@ func TestTaskTUIClarificationWithArtifactsKeepsArtifactPaneReachable(t *testing.
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	output := session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "Artifacts (")
+	output := session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "2 artifacts")
 	assert.Contains(t, output, "Write your own answer")
 	assert.Contains(t, output, "Submit answers")
 	assert.NotContains(t, output, "[ ] Other")
-	assert.Contains(t, output, "Preview ·")
 
+	// Switch to artifacts tab via '2' key
 	session.resetOutput()
-	for i := 0; i < 4; i++ {
-		session.send(t, "\t")
-		session.pause(150 * time.Millisecond)
-	}
-	output = session.waitForAll(t, 5*time.Second, "↑↓ browse")
-	assert.NotContains(t, output, "Tab next pane")
+	session.send(t, "2")
+	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+
+	// Switch back to timeline. The clarification panel is identical on both
+	// tabs, so bubbletea's differential renderer won't re-send those lines.
+	// A resize forces a full repaint so we can assert on the panel content.
+	session.resetOutput()
+	session.send(t, "1")
+	session.resize(t, 150, 39)
+	session.waitForAll(t, 5*time.Second, "2 artifacts", "Question 1/1")
 
 	session.quit(t)
 }
@@ -652,6 +654,9 @@ func TestTaskTUILongTaskDescriptionsKeepAwaitingFootersVisible(t *testing.T) {
 
 	session.resetOutput()
 	session.confirm(t)
+	// Resize forces a full repaint; the incremental renderer skips
+	// unchanged right-side characters (like "Ctrl+C quit") otherwise.
+	session.resize(t, 150, 39)
 
 	session.waitForAll(t, 10*time.Second, "awaiting input", "Question 1/1", "Ctrl+C quit", "Write your own answer")
 
@@ -692,10 +697,10 @@ func TestTaskTUILongTaskDescriptionsKeepFailedAndRunningFootersVisible(t *testin
 
 	session.resetOutput()
 	session.confirm(t)
+	session.resize(t, 150, 39)
 
 	session.waitForAll(t, 10*time.Second, "Task failed", "Retry step", "Ctrl+C quit")
 
-	session.resetOutput()
 	session.send(t, "\r")
 
 	session.waitForAll(t, 5*time.Second, "implement", "elapsed:", "Ctrl+C quit")

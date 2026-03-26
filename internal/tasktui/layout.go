@@ -7,22 +7,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-type artifactLayoutMode int
+// DetailTab selects which full-screen tab is active on the detail screen.
+type DetailTab int
 
 const (
-	artifactLayoutHidden artifactLayoutMode = iota
-	artifactLayoutSplit
-	artifactLayoutLauncher
+	DetailTabTimeline  DetailTab = iota
+	DetailTabArtifacts
 )
-
-func detailPaneWidths(totalWidth int) (leftWidth, rightWidth, gap int) {
-	gap = 2
-	minLeft := 24
-	minRight := 34
-	rightWidth = clamp((totalWidth*2)/3, minRight, max(minRight, totalWidth-gap-minLeft))
-	leftWidth = max(minLeft, totalWidth-gap-rightWidth)
-	return leftWidth, rightWidth, gap
-}
 
 func detailContentWidth(innerWidth int) int {
 	if innerWidth <= 80 {

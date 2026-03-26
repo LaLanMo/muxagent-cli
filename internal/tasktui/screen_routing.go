@@ -20,8 +20,39 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.syncComponents()
 		return m, cmd
 	}
+	if cmd, handled := m.handleTabSwitchKey(msg); handled {
+		m.syncComponents()
+		return m, cmd
+	}
 
 	return m.handleScreenKey(msg)
+}
+
+func (m *Model) handleTabSwitchKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if !m.isDetailScreen() || m.shouldFocusDetailComposer() {
+		return nil, false
+	}
+	switch {
+	case keyMatches(msg, m.keys.tabTimeline):
+		if m.activeDetailTab == DetailTabTimeline {
+			return nil, false
+		}
+		m.activeDetailTab = DetailTabTimeline
+		m.focusRegion = FocusRegionDetail
+		return m.syncInputFocus(), true
+	case keyMatches(msg, m.keys.tabArtifacts):
+		if len(m.artifactItems) == 0 {
+			return nil, false
+		}
+		if m.activeDetailTab == DetailTabArtifacts {
+			return nil, false
+		}
+		m.activeDetailTab = DetailTabArtifacts
+		m.focusRegion = FocusRegionArtifactFiles
+		return m.syncInputFocus(), true
+	default:
+		return nil, false
+	}
 }
 
 func (m Model) handleScreenKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

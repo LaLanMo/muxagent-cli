@@ -52,7 +52,7 @@ func TestModelOpensAwaitingTaskIntoApprovalScreen(t *testing.T) {
 
 	assert.Equal(t, ScreenApproval, model.screen)
 	assert.Contains(t, strippedView(model.View().Content), "Approve this plan?")
-	assert.Contains(t, strippedView(model.View().Content), "plan.md")
+	assert.Contains(t, strippedView(model.View().Content), "2 artifacts")
 }
 
 func TestModelHandlesClarificationEvent(t *testing.T) {
@@ -454,11 +454,8 @@ func TestClarificationFooterDoesNotContainQuestionPanel(t *testing.T) {
 	assert.NotContains(t, footer, "Question 1/1")
 	assert.NotContains(t, footer, "Which path should we take?")
 
-	contentWidth := detailContentWidth(96)
-	header := model.renderDetailHeader(contentWidth)
-	footerView := model.renderDetailFooter(surfaceRect{Width: contentWidth})
-	frame := model.computeDetailFrameLayout(contentWidth, header, footerView)
-	panel := strippedView(model.renderDetailPanel(model.computeDetailPanelSurface(frame)))
+	snapshot := model.computeDetailLayoutSnapshot()
+	panel := strippedView(model.renderDetailPanel(model.computeDetailPanelSurface(snapshot.Frame)))
 	assert.Contains(t, panel, "Question 1/1")
 	assert.Contains(t, panel, "Which path should we take?")
 }
@@ -552,27 +549,19 @@ func TestClarificationTabReachesVisibleArtifactPane(t *testing.T) {
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "Artifacts (1)")
+	assert.Contains(t, view, "2 artifacts")
 	assert.Contains(t, view, "Question 1/1")
 	assert.Contains(t, view, "Ctrl+C quit")
 
-	var cmd tea.Cmd
-	for range 4 {
-		next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-		model = next.(Model)
-		if cmd != nil {
-			if msg := cmd(); msg != nil {
-				next, _ = model.Update(msg)
-				model = next.(Model)
-			}
-		}
-	}
+	// Switch to artifacts tab via '2' key
+	next, _ = model.Update(tea.KeyPressMsg{Code: '2'})
+	model = next.(Model)
 
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
 	view = strippedView(model.View().Content)
-	assert.Contains(t, view, "Artifacts (1)")
-	assert.Contains(t, view, "Files · focused")
-	assert.Contains(t, view, "Preview · upsert_plan (#1) · plan.md")
+	assert.Contains(t, view, "1 timeline")
+	assert.Contains(t, view, "Files")
 	assert.Contains(t, view, "Ctrl+C quit")
 }
 

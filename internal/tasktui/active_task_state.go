@@ -9,6 +9,7 @@ import (
 func (m *Model) activateTask(view taskdomain.TaskView, cfg *taskconfig.Config, input *taskruntime.InputRequest) {
 	m.activeTaskID = view.Task.ID
 	m.current = &view
+	m.activeDetailTab = DetailTabTimeline
 	if cfg != nil {
 		m.currentConfig = cfg
 	} else if m.currentConfig == nil {
@@ -28,6 +29,7 @@ func (m *Model) clearActiveTask() {
 	m.startupText = ""
 	m.errorText = ""
 	m.failure.action = failureActionNone
+	m.activeDetailTab = DetailTabTimeline
 }
 
 func (m Model) isActiveTask(taskID string) bool {

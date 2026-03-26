@@ -33,7 +33,6 @@ type detailScreenSurfaces struct {
 	Timeline surfaceRect
 	Panel    panelSurface
 	Artifact artifactSurface
-	Launcher surfaceRect
 	Preview  surfaceRect
 	Footer   surfaceRect
 }
@@ -47,12 +46,8 @@ func (m Model) computeNewTaskModalSurface(layout newTaskScreenLayout) surfaceRec
 }
 
 func (m Model) computeDetailPanelSurface(frame detailFrameLayout) panelSurface {
-	return m.computeDetailPanelSurfaceForMode(frame, frame.layoutMode)
-}
-
-func (m Model) computeDetailPanelSurfaceForMode(frame detailFrameLayout, mode artifactLayoutMode) panelSurface {
 	bodyHeight := frame.bodyHeight
-	minTopBodyHeight := detailMinTopBodyHeight(mode, m.artifactDrillIn)
+	minTopBodyHeight := 4
 	if minTopBodyHeight >= bodyHeight {
 		minTopBodyHeight = max(1, bodyHeight-1)
 	}
@@ -83,11 +78,10 @@ func (m Model) computeDetailScreenSurfacesWithPanel(frame detailFrameLayout, bod
 		Timeline: surfaceRect{Width: body.detailWidth, Height: body.detailHeight},
 		Panel:    panel,
 		Artifact: artifactSurface{
-			Rect: surfaceRect{Width: body.artifactWidth, Height: body.topBodyHeight},
+			Rect: surfaceRect{Width: frame.contentWidth, Height: body.topBodyHeight},
 		},
-		Launcher: surfaceRect{Width: frame.contentWidth, Height: body.launcherHeight},
-		Preview:  surfaceRect{Width: body.previewWidth, Height: 0},
-		Footer:   surfaceRect{Width: frame.contentWidth, Height: frame.footerHeight},
+		Preview: surfaceRect{Width: body.previewWidth, Height: 0},
+		Footer:  surfaceRect{Width: frame.contentWidth, Height: frame.footerHeight},
 	}
 	if fileLines := m.renderArtifactFileLines(max(18, body.previewWidth-6), artifactVisibleCapacity(len(m.artifactItems))); body.previewWidth > 0 && body.topBodyHeight > 0 {
 		_, previewBlockHeight := artifactPaneLayout(body.topBodyHeight, len(fileLines))
@@ -95,10 +89,6 @@ func (m Model) computeDetailScreenSurfacesWithPanel(frame detailFrameLayout, bod
 			Width:  max(12, body.previewWidth-6),
 			Height: max(1, previewBlockHeight-2),
 		}
-	}
-	if artifactDrillInVisibleForLayout(frame.layoutMode, m.artifactDrillIn) {
-		surfaces.Artifact.Rect = surfaceRect{Width: frame.contentWidth, Height: body.topBodyHeight}
-		surfaces.Preview.Width = max(12, frame.contentWidth-6)
 	}
 	return surfaces
 }

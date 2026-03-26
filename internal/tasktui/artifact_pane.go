@@ -32,71 +32,78 @@ func (m *Model) syncArtifactPreview(surface surfaceRect) {
 	}
 }
 
+// artifactPaneSidebarWidth computes the file sidebar width for the horizontal split.
+func artifactPaneSidebarWidth(totalWidth int) int {
+	sidebar := totalWidth * 30 / 100
+	return clamp(sidebar, 20, min(40, totalWidth/2))
+}
+
 func (m Model) renderArtifactsPane(surface artifactSurface) string {
 	width := surface.Rect.Width
 	height := surface.Rect.Height
-	contentWidth := max(18, width-2)
-	fileLines := m.renderArtifactFileLines(max(18, contentWidth-4), artifactVisibleCapacity(len(m.artifactItems)))
-	fileBlockHeight, previewBlockHeight := artifactPaneLayout(height, len(fileLines))
-	header := joinHorizontal(
-		tuiTheme.Artifact.Header.Render(fmt.Sprintf("Artifacts (%d)", len(m.artifactItems))),
-		tuiTheme.Artifact.Hint.Render("Tab next pane"),
-		contentWidth,
-	)
-	files := m.renderArtifactFilesBlock(contentWidth, fileBlockHeight, fileLines)
-	preview := m.renderArtifactPreviewBlock(contentWidth, previewBlockHeight)
-	content := lipgloss.JoinVertical(lipgloss.Left, header, files, preview)
-	inner := lipgloss.Place(contentWidth, max(1, height), lipgloss.Left, lipgloss.Top, content)
-	return tuiTheme.Artifact.Pane.Width(width).Height(height).Render(inner)
-}
-
-func artifactLauncherSurfaceHeight(topBodyHeight int) int {
-	switch {
-	case topBodyHeight >= 12:
-		return 5
-	case topBodyHeight >= 10:
-		return 4
-	case topBodyHeight >= 8:
-		return 3
-	default:
-		return 0
+	if width < 20 || height < 4 {
+		return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top,
+			tuiTheme.Artifact.Empty.Render("Terminal too small for artifact view."))
 	}
+
+	sidebarWidth := artifactPaneSidebarWidth(width)
+	previewWidth := max(12, width-sidebarWidth-1) // 1 for divider
+
+	// Render file sidebar
+	fileLines := m.renderArtifactFileLines(max(12, sidebarWidth-4), min(len(m.artifactItems), max(1, height-2)))
+	filesContent := m.renderArtifactFilesColumn(sidebarWidth, height, fileLines)
+
+	// Render preview pane
+	previewContent := m.renderArtifactPreviewColumn(previewWidth, height)
+
+	// Vertical divider
+	divider := strings.Repeat(tuiTheme.divider.Render("│")+"\n", max(1, height))
+	divider = lipgloss.Place(1, height, lipgloss.Left, lipgloss.Top, divider)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, filesContent, divider, previewContent)
 }
 
-func (m Model) renderArtifactLauncher(surface surfaceRect) string {
-	width := surface.Width
-	height := max(1, surface.Height)
-	title := joinHorizontal(
-		tuiTheme.Artifact.Header.Render(fmt.Sprintf("Artifacts (%d)", len(m.artifactItems))),
-		tuiTheme.Artifact.Hint.Render("Enter open"),
-		width,
-	)
-	body := tuiTheme.Text.Muted.Render("Inspect files and preview in a dedicated artifact view.")
+func (m Model) renderArtifactFilesColumn(width, height int, lines []string) string {
+	innerWidth := max(10, width-2)
+	titleText := fmt.Sprintf("Files (%d)", len(m.artifactItems))
+	title := tuiTheme.Artifact.BlockTitle.Render(titleText)
+
+	bodyHeight := max(1, height-1)
+	body := lipgloss.Place(innerWidth, bodyHeight, lipgloss.Left, lipgloss.Top, strings.Join(lines, "\n"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, title, body)
+
+	style := lipgloss.NewStyle().Width(width).Height(height).PaddingLeft(1)
+	if m.focusRegion == FocusRegionArtifactFiles {
+		style = style.BorderLeft(true).
+			BorderStyle(lipgloss.Border{Left: "│"}).
+			BorderForeground(tuiTheme.halfMuted).
+			Width(width)
+	}
+	return style.Render(content)
+}
+
+func (m Model) renderArtifactPreviewColumn(width, height int) string {
+	title := "Preview"
 	if len(m.artifactItems) > 0 && m.artifactIndex < len(m.artifactItems) {
-		current := ansi.Truncate(m.artifactItems[m.artifactIndex].Label, max(12, width-2), "…")
-		body = tuiTheme.Text.Muted.Render("Current: " + current)
+		title = fmt.Sprintf("Preview · %s", m.artifactItems[m.artifactIndex].PreviewTitle)
 	}
-	hint := renderFooterHintText("Tab artifacts  Enter open  Esc detail")
-	if m.focusRegion == FocusRegionArtifactLauncher {
-		hint = renderFooterHintText("Enter open  Tab next focus  Esc detail")
-	}
-	lines := []string{title, body, hint}
-	if height >= 5 {
-		lines = []string{title, "", body, "", hint}
-	} else if height == 4 {
-		lines = []string{title, "", body, hint}
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
-	return tuiTheme.Artifact.Block.Width(width).Height(height).Render(content)
-}
+	header := tuiTheme.Artifact.BlockTitle.Render(title)
 
-func (m Model) renderDetailWithArtifactLauncher(timeline, launcher surfaceRect) string {
-	detail := lipgloss.Place(timeline.Width, timeline.Height, lipgloss.Left, lipgloss.Top, m.detailViewport.View())
-	if launcher.Height <= 0 {
-		return detail
+	contentHeight := max(1, height-1)
+	innerWidth := max(10, width-2)
+	bodyContent := lipgloss.Place(innerWidth, contentHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
+
+	content := lipgloss.JoinVertical(lipgloss.Left, header, bodyContent)
+
+	style := lipgloss.NewStyle().Width(width).Height(height).PaddingLeft(1)
+	if m.focusRegion == FocusRegionArtifactPreview {
+		style = style.BorderLeft(true).
+			BorderStyle(lipgloss.Border{Left: "│"}).
+			BorderForeground(tuiTheme.halfMuted).
+			Width(width)
 	}
-	launcherView := m.renderArtifactLauncher(launcher)
-	return lipgloss.JoinVertical(lipgloss.Left, detail, "", launcherView)
+	return style.Render(content)
 }
 
 func artifactPaneLayout(bodyHeight int, fileLineCount int) (fileBlockHeight, previewBlockHeight int) {
@@ -125,22 +132,6 @@ func artifactVisibleCapacity(total int) int {
 	return min(total, 3)
 }
 
-func (m Model) renderArtifactFilesBlock(width, height int, lines []string) string {
-	titleText := "Files"
-	hintText := "Tab focus"
-	if m.focusRegion == FocusRegionArtifactFiles {
-		titleText = "Files · focused"
-		hintText = "↑↓ browse"
-	}
-	title := joinHorizontal(
-		tuiTheme.Artifact.BlockTitle.Render(titleText),
-		tuiTheme.Artifact.Hint.Render(hintText),
-		width,
-	)
-	body := lipgloss.Place(width-2, max(1, height-1), lipgloss.Left, lipgloss.Top, strings.Join(lines, "\n"))
-	return tuiTheme.Artifact.Block.Width(width).Height(height).Render(lipgloss.JoinVertical(lipgloss.Left, title, body))
-}
-
 func (m Model) renderArtifactFileLines(width, rows int) []string {
 	if len(m.artifactItems) == 0 {
 		return []string{tuiTheme.Artifact.Empty.Render("No artifacts yet.")}
@@ -162,25 +153,4 @@ func (m Model) renderArtifactFileLines(width, rows int) []string {
 		lines = append(lines, tuiTheme.Artifact.Hint.Render(fmt.Sprintf("… %d more file(s)", len(m.artifactItems)-end)))
 	}
 	return lines
-}
-
-func (m Model) renderArtifactPreviewBlock(width, height int) string {
-	title := "Preview"
-	if len(m.artifactItems) > 0 && m.artifactIndex < len(m.artifactItems) {
-		title = fmt.Sprintf("Preview · %s", m.artifactItems[m.artifactIndex].PreviewTitle)
-	}
-	hintText := "Tab focus"
-	if m.focusRegion == FocusRegionArtifactPreview {
-		hintText = "↑↓ scroll"
-	}
-	header := joinHorizontal(
-		tuiTheme.Artifact.BlockTitle.Render(title),
-		tuiTheme.Artifact.Hint.Render(hintText),
-		width,
-	)
-	contentHeight := max(1, height-2)
-	innerWidth := max(10, width-4)
-	bodyContent := lipgloss.Place(innerWidth, contentHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
-	body := lipgloss.NewStyle().Width(width - 2).PaddingLeft(1).Render(bodyContent)
-	return tuiTheme.Artifact.Block.Width(width).Height(height).Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
 }

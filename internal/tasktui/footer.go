@@ -67,26 +67,22 @@ func (m Model) detailFooterReservedHeight() int {
 }
 
 func (m Model) renderDetailFooter(surface surfaceRect) string {
-	return m.renderDetailFooterForLayout(surface, m.currentArtifactLayoutMode())
-}
-
-func (m Model) renderDetailFooterForLayout(surface surfaceRect, mode artifactLayoutMode) string {
 	if m.current == nil {
 		return m.renderStatsFooter(surface, "", "", "Esc back")
 	}
 	switch m.screen {
 	case ScreenApproval:
-		return m.renderApprovalFooterForLayout(surface, mode)
+		return m.renderApprovalFooter(surface)
 	case ScreenClarification:
-		return m.renderClarificationFooterForLayout(surface, mode)
+		return m.renderClarificationFooter(surface)
 	case ScreenComplete:
-		return m.renderStatsFooter(surface, taskSummaryLeft(m.current, m.currentConfig), taskSummaryRight(m.current), m.detailHintForLayout("Esc back", mode))
+		return m.renderStatsFooter(surface, taskSummaryLeft(m.current, m.currentConfig), taskSummaryRight(m.current), m.detailHint("Esc back"))
 	case ScreenFailed:
-		return m.renderFailureFooterForLayout(surface, mode)
+		return m.renderFailureFooter(surface)
 	default:
 		left := fmt.Sprintf("%d runs · %d artifacts", len(m.current.NodeRuns), len(m.current.ArtifactPaths))
 		right := "elapsed: " + taskElapsed(m.current)
-		return m.renderStatsFooter(surface, left, right, m.detailHintForLayout("Esc back", mode))
+		return m.renderStatsFooter(surface, left, right, m.detailHint("Esc back"))
 	}
 }
 
@@ -95,11 +91,7 @@ func (m Model) renderStatsFooter(surface surfaceRect, left, right, hint string) 
 }
 
 func (m Model) renderFailureFooter(surface surfaceRect) string {
-	return m.renderFailureFooterForLayout(surface, m.currentArtifactLayoutMode())
-}
-
-func (m Model) renderFailureFooterForLayout(surface surfaceRect, mode artifactLayoutMode) string {
-	return renderFooterHintBar(surface.Width, m.failureHintForLayout(mode))
+	return renderFooterHintBar(surface.Width, m.failureHint())
 }
 
 func (m Model) renderFailurePanel(surface panelSurface) string {
@@ -148,23 +140,15 @@ func (m Model) renderFailurePanel(surface panelSurface) string {
 }
 
 func (m Model) failureHint() string {
-	return m.failureHintForLayout(m.currentArtifactLayoutMode())
-}
-
-func (m Model) failureHintForLayout(mode artifactLayoutMode) string {
 	actions := m.availableFailureActions()
 	if m.focusRegion == FocusRegionActionPanel && len(actions) > 0 {
 		return joinHintParts("↑↓ actions", "Enter confirm", "Tab detail", "Esc back")
 	}
-	return m.detailHintForLayout("Esc back", mode)
+	return m.detailHint("Esc back")
 }
 
 func (m Model) nextFocusHint() string {
-	return m.nextFocusHintForLayout(m.currentArtifactLayoutMode())
-}
-
-func (m Model) nextFocusHintForLayout(mode artifactLayoutMode) string {
-	regions := m.availableFocusRegionsForLayout(mode)
+	regions := m.availableFocusRegions()
 	if len(regions) <= 1 {
 		return ""
 	}
@@ -182,8 +166,6 @@ func (m Model) nextFocusHintForLayout(mode artifactLayoutMode) string {
 		return "Tab composer"
 	case FocusRegionDetail:
 		return "Tab detail"
-	case FocusRegionArtifactLauncher:
-		return "Tab artifacts"
 	case FocusRegionArtifactFiles:
 		return "Tab artifacts"
 	case FocusRegionArtifactPreview:
@@ -193,38 +175,67 @@ func (m Model) nextFocusHintForLayout(mode artifactLayoutMode) string {
 	}
 }
 
-func (m Model) detailHint(base string) string {
-	return m.detailHintForLayout(base, m.currentArtifactLayoutMode())
+func (m Model) tabHint() string {
+	if !m.isDetailScreen() {
+		return ""
+	}
+	if m.activeDetailTab == DetailTabArtifacts {
+		return "1 timeline"
+	}
+	if len(m.artifactItems) > 0 {
+		return "2 artifacts"
+	}
+	return ""
 }
 
-func (m Model) detailHintForLayout(base string, mode artifactLayoutMode) string {
+func (m Model) detailHint(base string) string {
 	switch m.focusRegion {
 	case FocusRegionDetail:
 		parts := []string{"↑↓ scroll"}
 		if base != "" {
 			parts = append(parts, base)
 		}
-		if next := m.nextFocusHintForLayout(mode); next != "" {
+		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
 		}
-		return joinHintParts(parts...)
-	case FocusRegionArtifactLauncher:
-		parts := []string{"Enter open", "Esc detail"}
-		if next := m.nextFocusHintForLayout(mode); next != "" {
-			parts = append(parts, next)
+		if tab := m.tabHint(); tab != "" {
+			parts = append(parts, tab)
 		}
 		return joinHintParts(parts...)
 	case FocusRegionArtifactFiles:
-		return joinHintParts("↑↓ files", "Enter preview", "Esc detail")
+		parts := []string{"↑↓ files"}
+		if base != "" {
+			parts = append(parts, base)
+		}
+		if next := m.nextFocusHint(); next != "" {
+			parts = append(parts, next)
+		}
+		if tab := m.tabHint(); tab != "" {
+			parts = append(parts, tab)
+		}
+		return joinHintParts(parts...)
 	case FocusRegionArtifactPreview:
-		return joinHintParts("↑↓ scroll", "Esc detail")
+		parts := []string{"↑↓ scroll"}
+		if base != "" {
+			parts = append(parts, base)
+		}
+		if next := m.nextFocusHint(); next != "" {
+			parts = append(parts, next)
+		}
+		if tab := m.tabHint(); tab != "" {
+			parts = append(parts, tab)
+		}
+		return joinHintParts(parts...)
 	case FocusRegionActionPanel:
 		parts := []string{}
 		if base != "" {
 			parts = append(parts, base)
 		}
-		if next := m.nextFocusHintForLayout(mode); next != "" {
+		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
+		}
+		if tab := m.tabHint(); tab != "" {
+			parts = append(parts, tab)
 		}
 		return joinHintParts(parts...)
 	case FocusRegionChoices:
@@ -232,8 +243,11 @@ func (m Model) detailHintForLayout(base string, mode artifactLayoutMode) string 
 		if base != "" {
 			parts = append(parts, base)
 		}
-		if next := m.nextFocusHintForLayout(mode); next != "" {
+		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
+		}
+		if tab := m.tabHint(); tab != "" {
+			parts = append(parts, tab)
 		}
 		return joinHintParts(parts...)
 	case FocusRegionComposer:
@@ -241,7 +255,7 @@ func (m Model) detailHintForLayout(base string, mode artifactLayoutMode) string 
 			return joinHintParts("Enter newline", "Tab start", "Esc cancel")
 		}
 		parts := []string{"Enter newline", "Esc choices"}
-		if next := m.nextFocusHintForLayout(mode); next != "" {
+		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
 		}
 		return joinHintParts(parts...)
