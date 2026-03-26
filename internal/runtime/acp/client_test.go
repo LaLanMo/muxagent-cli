@@ -532,6 +532,74 @@ func TestClient_LoadSessionReplaysCompletedToolCallWithDiff(t *testing.T) {
 	assert.NotEmpty(t, completed.Tool.App.MessageID)
 }
 
+func TestClient_LoadSessionReplaysClaudeStyleEditDiffAcrossPendingAndCompletedUpdates(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_LOAD_CLAUDE_STYLE_REPLAY": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan []appwire.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 3*time.Second)
+	}()
+
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	events := <-done
+
+	started := findToolEvent(events, appwire.EventToolStarted, func(tool *appwire.ToolEvent) bool {
+		return tool.App.CallID == "hist-tool-edit-1"
+	})
+	require.NotNil(t, started)
+	require.Len(t, started.Tool.App.Diffs, 1)
+	assert.Equal(t, "/workspace/file.txt", started.Tool.App.Diffs[0].Path)
+	assert.Equal(t, appwire.ToolStatusPending, started.Tool.App.Status)
+
+	completed := findToolEvent(events, appwire.EventToolCompleted, func(tool *appwire.ToolEvent) bool {
+		return tool.App.CallID == "hist-tool-edit-1"
+	})
+	require.NotNil(t, completed)
+	assert.Equal(t, appwire.ToolStatusCompleted, completed.Tool.App.Status)
+	assert.Equal(
+		t,
+		"The file /workspace/file.txt has been updated successfully.",
+		completed.Tool.App.Output,
+	)
+}
+
+func TestClient_LoadSessionReplaysClaudeStyleReadOutput(t *testing.T) {
+	bin := buildMockAgent(t)
+	client := newTestClientWithEnv(t, bin, map[string]string{
+		"MOCKAGENT_LOAD_CLAUDE_STYLE_REPLAY": "1",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan []appwire.Event, 1)
+	go func() {
+		done <- collectEvents(client.Events(), 3*time.Second)
+	}()
+
+	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	events := <-done
+
+	completed := findToolEvent(events, appwire.EventToolCompleted, func(tool *appwire.ToolEvent) bool {
+		return tool.App.CallID == "hist-tool-read-1"
+	})
+	require.NotNil(t, completed)
+	assert.Equal(t, appwire.ToolStatusCompleted, completed.Tool.App.Status)
+	assert.Equal(t, "     1→hello\n     2→world\n     3→", completed.Tool.App.Output)
+}
+
 func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) {
 	bin := buildMockAgent(t)
 	client := newTestClientWithEnv(t, bin, map[string]string{
