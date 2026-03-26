@@ -39,6 +39,10 @@ func (m Model) editorCursorOffset() (int, int, bool) {
 }
 
 func (m Model) newTaskEditorCursorOffset() (int, int, bool) {
+	spec := m.currentEditorSurfaceSpec()
+	if !spec.Visible {
+		return 0, 0, false
+	}
 	metrics := m.computeScreenMetrics()
 	header := m.renderAppHeader(metrics.innerWidth)
 	footer := renderFooterHintBar(metrics.innerWidth, m.newTaskModalHint())
@@ -55,6 +59,10 @@ func (m Model) newTaskEditorCursorOffset() (int, int, bool) {
 }
 
 func (m Model) approvalEditorCursorOffset() (int, int, bool) {
+	spec := m.currentEditorSurfaceSpec()
+	if !spec.Visible {
+		return 0, 0, false
+	}
 	metrics := m.computeScreenMetrics()
 	contentWidth := detailContentWidth(metrics.innerWidth)
 	header := m.renderDetailHeader(contentWidth)
@@ -73,7 +81,8 @@ func (m Model) approvalEditorCursorOffset() (int, int, bool) {
 }
 
 func (m Model) clarificationEditorCursorOffset() (int, int, bool) {
-	if m.currentInput == nil || len(m.currentInput.Questions) == 0 {
+	spec := m.currentEditorSurfaceSpec()
+	if !spec.Visible {
 		return 0, 0, false
 	}
 

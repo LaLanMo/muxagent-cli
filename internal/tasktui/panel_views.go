@@ -30,8 +30,8 @@ func renderOpaquePanelSurface(width int, content string) string {
 		Render(content)
 }
 
-func (m Model) buildEditorField(width int, label, caption string) builtEditorField {
-	width = max(18, width)
+func (m Model) buildEditorField(spec editorSurfaceSpec) builtEditorField {
+	width := max(18, spec.FieldWidth)
 	focused := m.focusRegion == FocusRegionComposer && m.activeEditorSlot() != ""
 	labelStyle := tuiTheme.Form.InputLabel
 	frameStyle := tuiTheme.Form.InputBlurred
@@ -39,11 +39,11 @@ func (m Model) buildEditorField(width int, label, caption string) builtEditorFie
 		labelStyle = tuiTheme.Form.InputLabelHot
 		frameStyle = tuiTheme.Form.InputFocused
 	}
-	labelView := renderOpaquePanelSurface(width, labelStyle.Render(label))
+	labelView := renderOpaquePanelSurface(width, labelStyle.Render(spec.Label))
 	frameView := frameStyle.Width(width).Render(m.editor.View())
 	lines := []string{labelView, frameView}
-	if strings.TrimSpace(caption) != "" {
-		lines = append(lines, renderOpaquePanelSurface(width, tuiTheme.Form.InputCaption.Render(caption)))
+	if strings.TrimSpace(spec.Caption) != "" {
+		lines = append(lines, renderOpaquePanelSurface(width, tuiTheme.Form.InputCaption.Render(spec.Caption)))
 	}
 	return builtEditorField{
 		View:           lipgloss.JoinVertical(lipgloss.Left, lines...),
@@ -53,7 +53,14 @@ func (m Model) buildEditorField(width int, label, caption string) builtEditorFie
 }
 
 func (m Model) renderEditorField(width int, label, caption string) string {
-	return m.buildEditorField(width, label, caption).View
+	return m.buildEditorField(editorSurfaceSpec{
+		editorBindingSpec: editorBindingSpec{
+			Visible: true,
+			Label:   label,
+			Caption: caption,
+		},
+		FieldWidth: width,
+	}).View
 }
 
 func (m Model) renderNewTaskModal(layout newTaskScreenLayout) string {
@@ -66,8 +73,17 @@ func (m Model) renderNewTaskPanelBody(innerWidth int) string {
 }
 
 func (m Model) buildNewTaskPanel(innerWidth int) builtPanel {
-	inputWidth := max(18, innerWidth)
-	input := m.buildEditorField(inputWidth, "Task description", "")
+	spec := m.currentEditorSurfaceSpec()
+	if !spec.Visible {
+		spec = editorSurfaceSpec{
+			editorBindingSpec: editorBindingSpec{
+				Visible: true,
+				Label:   "Task description",
+			},
+			FieldWidth: max(18, innerWidth),
+		}
+	}
+	input := m.buildEditorField(spec)
 	title := renderOpaquePanelSurface(innerWidth, tuiTheme.modalTitle.Render("New Task"))
 	subtitle := renderOpaquePanelSurface(innerWidth, tuiTheme.modalSubtitle.Render(m.newTaskSubtitle()))
 	hint := renderOpaquePanelSurface(innerWidth, renderFooterHintText(m.newTaskModalHint()))
@@ -129,7 +145,17 @@ func (m Model) buildApprovalPanel(surface panelSurface) builtPanel {
 	content = append(content, options...)
 	build := builtPanel{}
 	if m.approval.choice == 1 {
-		input := m.buildEditorField(innerWidth, "Feedback", "")
+		spec := m.currentEditorSurfaceSpec()
+		if !spec.Visible {
+			spec = editorSurfaceSpec{
+				editorBindingSpec: editorBindingSpec{
+					Visible: true,
+					Label:   "Feedback",
+				},
+				FieldWidth: innerWidth,
+			}
+		}
+		input := m.buildEditorField(spec)
 		prefixHeight := lipgloss.Height(strings.Join(append(append([]string{}, content...), ""), "\n"))
 		content = append(content, "", input.View)
 		build.EditorOffsetX = panelFrameLeft(tuiTheme.Panel.Warning) + input.ContentOffsetX
@@ -179,7 +205,18 @@ func (m Model) buildClarificationPanel(surface panelSurface) builtPanel {
 	if m.clarification.question == len(m.currentInput.Questions)-1 {
 		actionLabel = "Submit answers"
 	}
-	input := m.buildEditorField(innerWidth, "Other", "")
+	spec := m.currentEditorSurfaceSpec()
+	if !spec.Visible {
+		spec = editorSurfaceSpec{
+			editorBindingSpec: editorBindingSpec{
+				Visible: true,
+				Label:   "Other",
+			},
+			FieldWidth: innerWidth,
+			Rows:       1,
+		}
+	}
+	input := m.buildEditorField(spec)
 	otherBlock := []string{
 		"",
 		input.View,

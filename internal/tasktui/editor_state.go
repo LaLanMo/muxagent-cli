@@ -3,32 +3,15 @@ package tasktui
 import "github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 
 func (m Model) activeEditorSlot() string {
-	switch m.screen {
-	case ScreenNewTask:
-		return editorSlotNewTask
-	case ScreenApproval:
-		if m.approval.choice == 1 {
-			return approvalEditorSlot(m.currentInput)
-		}
-	case ScreenClarification:
-		if m.currentInput != nil && len(m.currentInput.Questions) > 0 {
-			return clarificationEditorSlot(m.currentInput, m.clarification.question)
-		}
-	}
-	return ""
+	return m.currentEditorBindingSpec().Slot
 }
 
 func (m Model) activeEditorPlaceholder() string {
-	switch m.screen {
-	case ScreenNewTask:
-		return "Describe your task..."
-	case ScreenApproval:
-		return "Explain what needs to change…"
-	case ScreenClarification:
-		return "Write your own answer…"
-	default:
+	spec := m.currentEditorBindingSpec()
+	if spec.Placeholder == "" {
 		return "Type here..."
 	}
+	return spec.Placeholder
 }
 
 func (m Model) activeEditorSeedValue(slot string) string {
@@ -47,15 +30,15 @@ func (m Model) activeEditorSeedValue(slot string) string {
 }
 
 func (m *Model) syncEditorState() {
-	slot := m.activeEditorSlot()
-	if slot == "" {
+	spec := m.currentEditorBindingSpec()
+	if spec.Slot == "" {
 		m.editor.SetSlot("")
 		m.editor.SetPlaceholder("Type here...")
 		return
 	}
-	m.editor.EnsureSlot(slot, m.activeEditorSeedValue(slot))
-	m.editor.SetSlot(slot)
-	m.editor.SetPlaceholder(m.activeEditorPlaceholder())
+	m.editor.EnsureSlot(spec.Slot, m.activeEditorSeedValue(spec.Slot))
+	m.editor.SetSlot(spec.Slot)
+	m.editor.SetPlaceholder(spec.Placeholder)
 }
 
 func (m Model) currentClarificationQuestion() *taskdomain.ClarificationQuestion {

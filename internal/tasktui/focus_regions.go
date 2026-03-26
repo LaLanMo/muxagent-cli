@@ -23,21 +23,11 @@ func (m Model) isDetailScreen() bool {
 }
 
 func (m Model) detailComposerVisible() bool {
-	switch m.screen {
-	case ScreenApproval:
-		return m.approval.choice == 1
-	case ScreenClarification:
-		return true
-	default:
-		return false
-	}
+	return m.currentEditorBindingSpec().Visible && m.screen != ScreenNewTask
 }
 
 func (m Model) composerRegionVisible() bool {
-	if m.screen == ScreenNewTask {
-		return true
-	}
-	return m.detailComposerVisible()
+	return m.currentEditorBindingSpec().Visible
 }
 
 func (m Model) shouldFocusDetailComposer() bool {

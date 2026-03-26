@@ -88,31 +88,12 @@ func (m *Model) syncArtifactPane() {
 }
 
 func (m *Model) syncInputWidths() {
-	metrics := m.computeScreenMetrics()
-	newTaskHeader := m.renderAppHeader(metrics.innerWidth)
-	newTaskFooter := renderFooterHintBar(metrics.innerWidth, m.newTaskModalHint())
-	newTaskLayout := m.computeNewTaskScreenLayout(newTaskHeader, newTaskFooter)
-	if m.screen == ScreenNewTask {
-		m.editor.SetWidth(editorFieldInnerWidth(max(18, newTaskLayout.modalInnerWidth)))
-		m.editor.SetRows(newTaskLayout.editorRows)
+	spec := m.currentEditorSurfaceSpec()
+	if !spec.Visible {
+		return
 	}
-
-	detailWidth := detailContentWidth(metrics.innerWidth)
-	detailHeader := m.renderDetailHeader(detailWidth)
-	detailFooter := m.renderDetailFooter(surfaceRect{Width: detailWidth})
-	detailFrame := m.computeDetailFrameLayout(detailWidth, detailHeader, detailFooter)
-	if m.screen == ScreenApproval || m.screen == ScreenClarification {
-		panelSurface := m.computeDetailPanelSurface(detailFrame)
-		fieldWidth := max(18, panelSurface.Rect.Width-tuiTheme.Panel.Warning.GetHorizontalFrameSize())
-		m.editor.SetWidth(editorFieldInnerWidth(fieldWidth))
-		rows := 4
-		if m.screen == ScreenClarification {
-			rows = 1
-		} else if detailFrame.bodyHeight < 18 {
-			rows = 3
-		}
-		m.editor.SetRows(rows)
-	}
+	m.editor.SetWidth(editorFieldInnerWidth(spec.FieldWidth))
+	m.editor.SetRows(spec.Rows)
 }
 
 func (m *Model) syncDetailViewport() {
