@@ -11,8 +11,7 @@ type panelSurface struct {
 }
 
 type artifactSurface struct {
-	Rect      surfaceRect
-	Collapsed bool
+	Rect surfaceRect
 }
 
 type detailScreenSurfaces struct {
@@ -58,15 +57,13 @@ func (m Model) computeDetailScreenSurfaces(frame detailFrameLayout, panel string
 		Timeline: surfaceRect{Width: body.detailWidth, Height: body.detailHeight},
 		Panel:    m.computeDetailPanelSurface(frame),
 		Artifact: artifactSurface{
-			Rect:      surfaceRect{Width: body.artifactWidth, Height: body.topBodyHeight},
-			Collapsed: frame.layoutMode == artifactLayoutCollapsedRail,
+			Rect: surfaceRect{Width: body.artifactWidth, Height: body.topBodyHeight},
 		},
 		Launcher: surfaceRect{Width: frame.contentWidth, Height: body.launcherHeight},
 		Footer:   surfaceRect{Width: frame.contentWidth, Height: frame.footerHeight},
 	}
 	if m.artifactDrillInVisible() {
 		surfaces.Artifact.Rect = surfaceRect{Width: frame.contentWidth, Height: body.topBodyHeight}
-		surfaces.Artifact.Collapsed = false
 	}
 	return surfaces
 }

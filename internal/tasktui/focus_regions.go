@@ -48,9 +48,6 @@ func (m Model) currentArtifactLayoutMode() artifactLayoutMode {
 		return artifactLayoutHidden
 	}
 	if m.artifactPaneExpandable() {
-		if m.artifactCollapsed {
-			return artifactLayoutCollapsedRail
-		}
 		return artifactLayoutSplit
 	}
 	return artifactLayoutLauncher
@@ -68,14 +65,7 @@ func (m Model) artifactPaneVisible() bool {
 }
 
 func (m Model) artifactLauncherVisible() bool {
-	switch m.currentArtifactLayoutMode() {
-	case artifactLayoutCollapsedRail:
-		return true
-	case artifactLayoutLauncher:
-		return !m.artifactDrillIn
-	default:
-		return false
-	}
+	return m.currentArtifactLayoutMode() == artifactLayoutLauncher && !m.artifactDrillIn
 }
 
 func (m Model) artifactDrillInVisible() bool {

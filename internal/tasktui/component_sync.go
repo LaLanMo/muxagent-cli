@@ -112,7 +112,7 @@ func (m *Model) syncDetailViewport() {
 		m.detailViewport.GotoBottom()
 		m.autoScrollDetail = false
 	}
-	m.syncArtifactPreview(surfaces.Body.previewWidth, surfaces.Body.topBodyHeight, surfaces.Artifact.Collapsed)
+	m.syncArtifactPreview(surfaces.Body.previewWidth, surfaces.Body.topBodyHeight)
 
 	taskListHeader := m.renderTaskListHeader(metrics.innerWidth)
 	taskListFooter := m.renderTaskListFooter(surfaceRect{Width: metrics.innerWidth})

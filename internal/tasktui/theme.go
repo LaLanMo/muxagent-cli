@@ -71,10 +71,6 @@ type artifactTheme struct {
 	FileInactive lipgloss.Style
 	PreviewText  lipgloss.Style
 	Empty        lipgloss.Style
-	Rail         lipgloss.Style
-	RailBadge    lipgloss.Style
-	RailDots     lipgloss.Style
-	RailHint     lipgloss.Style
 }
 
 type dialogTheme struct {
@@ -96,7 +92,6 @@ type theme struct {
 	panelBg              color.Color
 	artifactPaneBg       color.Color
 	artifactBlock        color.Color
-	artifactRailBg       color.Color
 	inputBgBlurred       color.Color
 	inputBgFocused       color.Color
 	borderMuted          color.Color
@@ -122,10 +117,6 @@ type theme struct {
 	artifactFileInactive lipgloss.Style
 	artifactPreviewText  lipgloss.Style
 	artifactEmpty        lipgloss.Style
-	artifactRail         lipgloss.Style
-	artifactRailBadge    lipgloss.Style
-	artifactRailDots     lipgloss.Style
-	artifactRailHint     lipgloss.Style
 	canvas               lipgloss.Style
 	brand                lipgloss.Style
 	version              lipgloss.Style
@@ -174,7 +165,6 @@ func newTheme() theme {
 	panelBgHex := "#1A1A1A"
 	artifactPaneBgHex := "#151D2A"
 	artifactBlockHex := "#0B111B"
-	artifactRailBgHex := "#17202C"
 	inputBgBlurredHex := "#121212"
 	inputBgFocusedHex := "#141311"
 	borderMutedHex := "#303030"
@@ -194,7 +184,6 @@ func newTheme() theme {
 	panelBg := lipgloss.Color(panelBgHex)
 	artifactPaneBg := lipgloss.Color(artifactPaneBgHex)
 	artifactBlock := lipgloss.Color(artifactBlockHex)
-	artifactRailBg := lipgloss.Color(artifactRailBgHex)
 	inputBgBlurred := lipgloss.Color(inputBgBlurredHex)
 	inputBgFocused := lipgloss.Color(inputBgFocusedHex)
 	borderMuted := lipgloss.Color(borderMutedHex)
@@ -234,20 +223,6 @@ func newTheme() theme {
 		Foreground(lipgloss.Color("#E2E8F0"))
 	artifactEmpty := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#94A3B8"))
-	artifactRail := lipgloss.NewStyle().
-		Background(artifactRailBg).
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(lipgloss.Color("#94A3B8")).
-		Padding(1, 1)
-	artifactRailBadge := lipgloss.NewStyle().
-		Foreground(text).
-		Background(lipgloss.Color("#64748B")).
-		Bold(true).
-		Padding(0, 1)
-	artifactRailDots := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#CBD5E1"))
-	artifactRailHint := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#CBD5E1"))
 	bodyText := lipgloss.NewStyle().Foreground(text)
 	halfMutedText := lipgloss.NewStyle().Foreground(halfMuted)
 	mutedText := lipgloss.NewStyle().Foreground(muted)
@@ -373,10 +348,6 @@ func newTheme() theme {
 		FileInactive: artifactFileInactive,
 		PreviewText:  artifactPreviewText,
 		Empty:        artifactEmpty,
-		Rail:         artifactRail,
-		RailBadge:    artifactRailBadge,
-		RailDots:     artifactRailDots,
-		RailHint:     artifactRailHint,
 	}
 	dialogButton := lipgloss.NewStyle().
 		Background(panelBg).
@@ -421,7 +392,6 @@ func newTheme() theme {
 		panelBg:              panelBg,
 		artifactPaneBg:       artifactPaneBg,
 		artifactBlock:        artifactBlock,
-		artifactRailBg:       artifactRailBg,
 		inputBgBlurred:       inputBgBlurred,
 		inputBgFocused:       inputBgFocused,
 		borderMuted:          borderMuted,
@@ -447,10 +417,6 @@ func newTheme() theme {
 		artifactFileInactive: artifactStyles.FileInactive,
 		artifactPreviewText:  artifactStyles.PreviewText,
 		artifactEmpty:        artifactStyles.Empty,
-		artifactRail:         artifactStyles.Rail,
-		artifactRailBadge:    artifactStyles.RailBadge,
-		artifactRailDots:     artifactStyles.RailDots,
-		artifactRailHint:     artifactStyles.RailHint,
 		canvas: lipgloss.NewStyle().
 			Foreground(text).
 			Background(bg).

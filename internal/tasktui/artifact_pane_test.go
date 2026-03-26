@@ -41,7 +41,6 @@ func TestApprovalScreenShowsExpandedArtifactsPaneAndPreview(t *testing.T) {
 		ArtifactPaths: []string{planPath, apiPath},
 	}
 	model.screen = ScreenApproval
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
@@ -72,7 +71,6 @@ func TestRunningDetailLetsUserSwitchArtifactSelection(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
@@ -90,15 +88,12 @@ func TestRunningDetailLetsUserSwitchArtifactSelection(t *testing.T) {
 	assert.NotContains(t, view, "# Old")
 }
 
-func TestCompleteScreenDefaultsToCollapsedArtifactRail(t *testing.T) {
+func TestCompletedTaskOpenedFromListShowsArtifactsPaneImmediately(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")
 	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n"), 0o644))
 
-	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
-	model = next.(Model)
-	model.current = &taskdomain.TaskView{
+	view := taskdomain.TaskView{
 		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
 		Status:        taskdomain.TaskStatusDone,
 		ArtifactPaths: []string{artifactPath},
@@ -106,17 +101,39 @@ func TestCompleteScreenDefaultsToCollapsedArtifactRail(t *testing.T) {
 			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}},
 		},
 	}
-	model.screen = ScreenComplete
-	model.artifactCollapsed = true
-	model.syncComponents()
+	service := &fakeService{
+		events: make(chan taskruntime.RunEvent, 8),
+		tasks:  []taskdomain.TaskView{view},
+		openViews: map[string]taskdomain.TaskView{
+			"task-1": view,
+		},
+	}
+	model := NewModel(service, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	next, _ = model.Update(tasksLoadedMsg{tasks: service.tasks})
+	model = next.(Model)
 
-	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "Tab artifacts")
-	assert.NotContains(t, view, "Files")
-	assert.NotContains(t, view, "Preview ·")
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	require.IsType(t, taskOpenedMsg{}, msg)
+	next, _ = model.Update(msg)
+	model = next.(Model)
+
+	screen := strippedView(model.View().Content)
+	assert.Equal(t, ScreenComplete, model.screen)
+	assert.Equal(t, artifactLayoutSplit, model.currentArtifactLayoutMode())
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+	assert.Contains(t, screen, "Artifacts (1)")
+	assert.Contains(t, screen, "Files")
+	assert.Contains(t, screen, "Preview · summary.md")
+	assert.Contains(t, screen, "Summary")
+	assert.NotContains(t, screen, "Enter open")
 }
 
-func TestTabFocusExpandsCollapsedArtifactsAndEnterMovesIntoPreview(t *testing.T) {
+func TestWideCompletedScreenTabsBetweenDetailAndArtifactPanes(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")
 	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
@@ -133,22 +150,19 @@ func TestTabFocusExpandsCollapsedArtifactsAndEnterMovesIntoPreview(t *testing.T)
 		},
 	}
 	model.screen = ScreenComplete
-	model.artifactCollapsed = true
 	model.syncComponents()
 
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+	assert.Equal(t, artifactLayoutSplit, model.currentArtifactLayoutMode())
+	assert.Contains(t, strippedView(model.View().Content), "Files")
+	assert.Contains(t, strippedView(model.View().Content), "Preview · summary.md")
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
-	assert.True(t, model.artifactCollapsed)
-	assert.Equal(t, FocusRegionArtifactLauncher, model.focusRegion)
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(Model)
-	assert.False(t, model.artifactCollapsed)
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+	assert.Contains(t, strippedView(model.View().Content), "Files · focused")
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
 	assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
 
@@ -174,7 +188,6 @@ func TestSmallTerminalArtifactLauncherOpensDrillInView(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	assert.Equal(t, artifactLayoutLauncher, model.currentArtifactLayoutMode())
@@ -222,7 +235,6 @@ func TestExpandedArtifactPaneUsesMacPreviewHint(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
@@ -268,7 +280,6 @@ func TestArtifactPaneLabelsFilesWithSourceNodeAndIteration(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
@@ -294,7 +305,6 @@ func TestMarkdownArtifactPreviewRendersMarkdownInsteadOfRawSource(t *testing.T) 
 		},
 	}
 	model.screen = ScreenRunning
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
@@ -321,7 +331,6 @@ func TestMarkdownArtifactPreviewFormatsDocumentStructure(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)

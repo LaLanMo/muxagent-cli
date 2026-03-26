@@ -745,7 +745,6 @@ func TestFocusedComposerTakesPriorityOverArtifactPaneKeys(t *testing.T) {
 		NodeName:      "approve_plan",
 		ArtifactPaths: []string{artifactPath},
 	}
-	model.artifactCollapsed = false
 	model.focusRegion = FocusRegionComposer
 	model.activeTaskID = "task-1"
 	model.syncComponents()

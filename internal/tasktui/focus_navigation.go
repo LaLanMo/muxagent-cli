@@ -81,11 +81,7 @@ func (m *Model) handleArtifactPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.focusRegion = FocusRegionDetail
 			return m.syncInputFocus(), true
 		case keyMatches(msg, m.keys.confirm):
-			if m.currentArtifactLayoutMode() == artifactLayoutCollapsedRail {
-				m.artifactCollapsed = false
-			} else {
-				m.artifactDrillIn = true
-			}
+			m.artifactDrillIn = true
 			m.focusRegion = FocusRegionArtifactFiles
 			return m.syncInputFocus(), true
 		}

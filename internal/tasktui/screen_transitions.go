@@ -2,17 +2,6 @@ package tasktui
 
 import tea "charm.land/bubbletea/v2"
 
-func detailArtifactCollapsedDefault(screen Screen) bool {
-	switch screen {
-	case ScreenComplete:
-		return true
-	case ScreenRunning, ScreenApproval, ScreenClarification, ScreenFailed:
-		return false
-	default:
-		return true
-	}
-}
-
 func (m *Model) openNewTask() tea.Cmd {
 	if m.screen != ScreenNewTask {
 		m.returnScreen = m.screen
@@ -48,7 +37,6 @@ func (m *Model) setScreen(screen Screen) {
 func (m *Model) setDetailScreen(screen Screen, resetArtifacts bool) {
 	m.setScreen(screen)
 	if resetArtifacts {
-		m.artifactCollapsed = detailArtifactCollapsedDefault(screen)
 		m.artifactDrillIn = false
 	}
 }

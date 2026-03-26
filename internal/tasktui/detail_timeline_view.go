@@ -52,13 +52,6 @@ func (m Model) renderDetailTimeline(surface surfaceRect) string {
 	return strings.Join(trimTrailingBlank(lines), "\n")
 }
 
-func (m Model) shouldCollapseArtifactsPane(innerWidth, innerHeight int) bool {
-	if innerWidth < 110 || innerHeight < 26 {
-		return true
-	}
-	return m.artifactCollapsed
-}
-
 func (m Model) renderNodeRunBlock(run taskdomain.NodeRunView, width int) []string {
 	timeLabel := relativeTime(nodeRunTimestamp(run))
 	nodeLabel := m.nodeRunLabel(run)

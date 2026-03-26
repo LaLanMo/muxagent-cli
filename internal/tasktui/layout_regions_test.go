@@ -45,7 +45,6 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 		},
 	}
 	model.screen = ScreenRunning
-	model.artifactCollapsed = false
 	model.syncComponents()
 
 	metrics := model.computeScreenMetrics()
@@ -71,7 +70,7 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	panel := model.renderDetailPanel(model.computeDetailPanelSurface(frame))
 	bodyLayout := model.computeDetailBodyLayout(frame, panel)
 	fileLines := model.renderArtifactFileLines(max(18, bodyLayout.previewWidth-6), artifactVisibleCapacity(len(model.artifactItems)))
-	_, previewBlockHeight := artifactPaneLayout(bodyLayout.topBodyHeight, false, len(fileLines))
+	_, previewBlockHeight := artifactPaneLayout(bodyLayout.topBodyHeight, len(fileLines))
 
 	assert.Equal(t, bodyLayout.detailWidth, model.detailViewport.Width())
 	assert.Equal(t, bodyLayout.detailHeight, model.detailViewport.Height())

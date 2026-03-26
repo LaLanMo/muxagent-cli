@@ -123,9 +123,8 @@ func (m Model) computeDetailBodyLayout(frame detailFrameLayout, panel string) de
 	switch {
 	case m.artifactDrillInVisible():
 		return layout
-	case frame.layoutMode == artifactLayoutSplit || frame.layoutMode == artifactLayoutCollapsedRail:
-		collapsed := frame.layoutMode == artifactLayoutCollapsedRail
-		leftWidth, rightWidth, gap := detailPaneWidths(frame.contentWidth, collapsed)
+	case frame.layoutMode == artifactLayoutSplit:
+		leftWidth, rightWidth, gap := detailPaneWidths(frame.contentWidth)
 		layout.detailWidth = leftWidth
 		layout.artifactWidth = rightWidth
 		layout.previewWidth = rightWidth

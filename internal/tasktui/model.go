@@ -62,7 +62,6 @@ type Model struct {
 	sessionByRun        map[string]string
 	artifactItems       []artifactItem
 	artifactIndex       int
-	artifactCollapsed   bool
 	artifactDrillIn     bool
 	artifactPreviewPath string
 	autoScrollDetail    bool

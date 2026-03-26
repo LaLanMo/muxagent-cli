@@ -68,7 +68,7 @@ func (m Model) renderDetailScreen(width, height int) string {
 	switch {
 	case m.artifactDrillInVisible():
 		bodyContent = lipgloss.Place(frame.contentWidth, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.renderArtifactsPane(surfaces.Artifact))
-	case surfaces.Frame.layoutMode == artifactLayoutSplit || surfaces.Frame.layoutMode == artifactLayoutCollapsedRail:
+	case surfaces.Frame.layoutMode == artifactLayoutSplit:
 		leftBody := lipgloss.Place(surfaces.Timeline.Width, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, m.detailViewport.View())
 		rightBody := m.renderArtifactsPane(surfaces.Artifact)
 		bodyContent = lipgloss.JoinHorizontal(

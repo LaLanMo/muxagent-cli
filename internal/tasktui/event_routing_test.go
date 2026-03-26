@@ -1,6 +1,8 @@
 package tasktui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -344,6 +346,57 @@ func TestActiveTaskEventsStillDriveDetailTransitions(t *testing.T) {
 			assert.Contains(t, strippedView(model.View().Content), tt.wantText)
 		})
 	}
+}
+
+func TestTaskCompletedEventShowsArtifactsPaneImmediately(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
+
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusRunning,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.screen = ScreenRunning
+	model.syncComponents()
+
+	completedView := taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusDone,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+		},
+	}
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:      taskruntime.EventTaskCompleted,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "verify",
+		TaskView:  &completedView,
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenComplete, model.screen)
+	assert.Equal(t, artifactLayoutSplit, model.currentArtifactLayoutMode())
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Artifacts (1)")
+	assert.Contains(t, view, "Files")
+	assert.Contains(t, view, "Preview · summary.md")
+	assert.Contains(t, view, "Ship it")
+	assert.NotContains(t, view, "Enter open")
 }
 
 func TestBackgroundTaskDoesNotStealOpenedDetail(t *testing.T) {

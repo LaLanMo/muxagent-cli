@@ -12,17 +12,11 @@ type artifactLayoutMode int
 const (
 	artifactLayoutHidden artifactLayoutMode = iota
 	artifactLayoutSplit
-	artifactLayoutCollapsedRail
 	artifactLayoutLauncher
 )
 
-func detailPaneWidths(totalWidth int, collapsed bool) (leftWidth, rightWidth, gap int) {
+func detailPaneWidths(totalWidth int) (leftWidth, rightWidth, gap int) {
 	gap = 2
-	if collapsed {
-		rightWidth = clamp(8, 8, max(8, totalWidth/6))
-		leftWidth = max(20, totalWidth-gap-rightWidth)
-		return leftWidth, rightWidth, gap
-	}
 	minLeft := 24
 	minRight := 34
 	rightWidth = clamp((totalWidth*2)/3, minRight, max(minRight, totalWidth-gap-minLeft))

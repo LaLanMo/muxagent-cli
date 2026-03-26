@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func (m *Model) syncArtifactPreview(paneWidth, bodyHeight int, collapsed bool) {
+func (m *Model) syncArtifactPreview(paneWidth, bodyHeight int) {
 	fileLines := m.renderArtifactFileLines(max(18, paneWidth-6), artifactVisibleCapacity(len(m.artifactItems)))
-	_, previewBlockHeight := artifactPaneLayout(bodyHeight, collapsed, len(fileLines))
+	_, previewBlockHeight := artifactPaneLayout(bodyHeight, len(fileLines))
 	contentWidth := max(12, paneWidth-6)
 	previewHeight := max(3, previewBlockHeight-2)
 	m.artifactPreview.SetWidth(contentWidth)
@@ -37,13 +37,9 @@ func (m *Model) syncArtifactPreview(paneWidth, bodyHeight int, collapsed bool) {
 func (m Model) renderArtifactsPane(surface artifactSurface) string {
 	width := surface.Rect.Width
 	height := surface.Rect.Height
-	collapsed := surface.Collapsed
-	if collapsed {
-		return m.renderCollapsedArtifactRail(width, height)
-	}
 	contentWidth := max(18, width-2)
 	fileLines := m.renderArtifactFileLines(max(18, contentWidth-4), artifactVisibleCapacity(len(m.artifactItems)))
-	fileBlockHeight, previewBlockHeight := artifactPaneLayout(height, false, len(fileLines))
+	fileBlockHeight, previewBlockHeight := artifactPaneLayout(height, len(fileLines))
 	header := joinHorizontal(
 		tuiTheme.Artifact.Header.Render(fmt.Sprintf("Artifacts (%d)", len(m.artifactItems))),
 		tuiTheme.Artifact.Hint.Render("Tab next pane"),
@@ -86,10 +82,7 @@ func (m Model) renderDetailWithArtifactLauncher(timeline, launcher surfaceRect) 
 	return lipgloss.JoinVertical(lipgloss.Left, detail, "", launcherView)
 }
 
-func artifactPaneLayout(bodyHeight int, collapsed bool, fileLineCount int) (fileBlockHeight, previewBlockHeight int) {
-	if collapsed {
-		return 0, 0
-	}
+func artifactPaneLayout(bodyHeight int, fileLineCount int) (fileBlockHeight, previewBlockHeight int) {
 	innerHeight := max(10, bodyHeight)
 	fileBlockHeight = clamp(fileLineCount+1, 3, 6)
 	previewBlockHeight = max(8, innerHeight-fileBlockHeight-1)
@@ -161,26 +154,4 @@ func (m Model) renderArtifactPreviewBlock(width, height int) string {
 	bodyContent := lipgloss.Place(innerWidth, contentHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
 	body := lipgloss.NewStyle().Width(width - 2).PaddingLeft(1).Render(bodyContent)
 	return tuiTheme.Artifact.Block.Width(width).Height(height).Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
-}
-
-func (m Model) renderCollapsedArtifactRail(width, height int) string {
-	top := lipgloss.JoinVertical(
-		lipgloss.Center,
-		tuiTheme.Artifact.RailBadge.Render(fmt.Sprintf("%d", len(m.artifactItems))),
-		"",
-		tuiTheme.Artifact.RailDots.Render("·\n·\n·"),
-	)
-	bottom := lipgloss.JoinVertical(
-		lipgloss.Center,
-		tuiTheme.Artifact.RailHint.Render("◀"),
-		tuiTheme.Artifact.RailHint.Render("Tab"),
-	)
-	gapHeight := max(1, height-lipgloss.Height(top)-lipgloss.Height(bottom)-2)
-	content := lipgloss.JoinVertical(
-		lipgloss.Center,
-		top,
-		strings.Repeat("\n", gapHeight),
-		bottom,
-	)
-	return tuiTheme.Artifact.Rail.Width(width).Height(height).Render(content)
 }
