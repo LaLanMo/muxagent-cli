@@ -350,7 +350,65 @@ func main() {
 			if os.Getenv("MOCKAGENT_EXIT_DURING_LOAD") == "1" {
 				return
 			}
-			if os.Getenv("MOCKAGENT_LOAD_TOOL_CALL_DIFF") == "1" {
+			if os.Getenv("MOCKAGENT_LOAD_CLAUDE_STYLE_REPLAY") == "1" {
+				sessionUpdate(sid, map[string]any{
+					"sessionUpdate": "tool_call",
+					"toolCallId":    "hist-tool-read-1",
+					"title":         "Read /workspace/readme.md",
+					"kind":          "read",
+					"status":        "pending",
+					"rawInput": map[string]any{
+						"file_path": "/workspace/readme.md",
+					},
+					"locations": []map[string]any{
+						{"path": "/workspace/readme.md", "line": 1},
+					},
+				})
+				sessionUpdate(sid, map[string]any{
+					"sessionUpdate": "tool_call_update",
+					"toolCallId":    "hist-tool-read-1",
+					"status":        "completed",
+					"rawOutput":     "     1→hello\n     2→world\n     3→",
+					"content": []map[string]any{
+						{
+							"type": "content",
+							"content": map[string]any{
+								"type": "text",
+								"text": "```\n     1→hello\n     2→world\n     3→\n```",
+							},
+						},
+					},
+				})
+				sessionUpdate(sid, map[string]any{
+					"sessionUpdate": "tool_call",
+					"toolCallId":    "hist-tool-edit-1",
+					"title":         "Edit /workspace/file.txt",
+					"kind":          "edit",
+					"status":        "pending",
+					"rawInput": map[string]any{
+						"file_path":  "/workspace/file.txt",
+						"old_string": "before",
+						"new_string": "after",
+					},
+					"content": []map[string]any{
+						{
+							"type":    "diff",
+							"path":    "/workspace/file.txt",
+							"oldText": "before\n",
+							"newText": "after\n",
+						},
+					},
+					"locations": []map[string]any{
+						{"path": "/workspace/file.txt", "line": 1},
+					},
+				})
+				sessionUpdate(sid, map[string]any{
+					"sessionUpdate": "tool_call_update",
+					"toolCallId":    "hist-tool-edit-1",
+					"status":        "completed",
+					"rawOutput":     "The file /workspace/file.txt has been updated successfully.",
+				})
+			} else if os.Getenv("MOCKAGENT_LOAD_TOOL_CALL_DIFF") == "1" {
 				sessionUpdate(sid, map[string]any{
 					"sessionUpdate": "tool_call",
 					"toolCallId":    "hist-tool-edit-1",

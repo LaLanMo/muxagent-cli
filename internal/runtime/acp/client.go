@@ -870,6 +870,9 @@ func buildToolEvent(msgID, partID string, update *acpprotocol.ToolCallUpdate) (a
 			Locations:  locations,
 		},
 	}
+	if diffs := extractDiffsFromContent(rawJSONFromMessages(update.Content)); diffs != nil {
+		toolEvent.App.Diffs = diffs
+	}
 
 	switch toolCallStatusValue(update.Status) {
 	case "pending":
@@ -884,7 +887,6 @@ func buildToolEvent(msgID, partID string, update *acpprotocol.ToolCallUpdate) (a
 		if toolEvent.App.Output == "" {
 			toolEvent.App.Output = extractTextFromContent(rawJSONFromMessages(update.Content))
 		}
-		toolEvent.App.Diffs = extractDiffsFromContent(rawJSONFromMessages(update.Content))
 		return appwire.EventToolCompleted, toolEvent
 	case "failed":
 		toolEvent.App.Status = appwire.ToolStatusFailed
