@@ -150,24 +150,32 @@ func taskStatusLabel(view taskdomain.TaskView) (string, lipgloss.Style) {
 }
 
 func taskListMeta(view taskdomain.TaskView) string {
+	parts := []string{taskListPositionLabel(view)}
+	if taskUsesWorktree(view.Task) {
+		parts = append(parts, "worktree")
+	}
+	if strings.TrimSpace(view.Task.ConfigAlias) != "" {
+		parts = append(parts, "config "+view.Task.ConfigAlias)
+	}
+	parts = append(parts, relativeTime(taskTimestamp(view)))
+	return strings.Join(parts, " · ")
+}
+
+func taskListPositionLabel(view taskdomain.TaskView) string {
 	nodeLabel := "starting"
 	if view.CurrentNodeName != "" {
 		nodeLabel = "at " + currentNodeListLabel(view)
 	}
 	if view.Status == taskdomain.TaskStatusDone {
-		nodeLabel = "completed"
+		return "completed"
 	}
 	if view.Status == taskdomain.TaskStatusFailed {
 		if view.CurrentIssue != nil && view.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep {
-			nodeLabel = "blocked at " + currentNodeListLabel(view)
-		} else {
-			nodeLabel = "failed at " + currentNodeListLabel(view)
+			return "blocked at " + currentNodeListLabel(view)
 		}
+		return "failed at " + currentNodeListLabel(view)
 	}
-	if strings.TrimSpace(view.Task.ConfigAlias) != "" {
-		nodeLabel += " · config " + view.Task.ConfigAlias
-	}
-	return nodeLabel + " · " + relativeTime(taskTimestamp(view))
+	return nodeLabel
 }
 
 func currentNodeListLabel(view taskdomain.TaskView) string {

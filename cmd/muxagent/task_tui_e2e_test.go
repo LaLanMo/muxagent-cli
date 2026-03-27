@@ -553,12 +553,25 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	session.quit(t)
 
 	restarted := startTUISession(t, binaryPath, workDir)
-	restarted.waitForAll(t, 10*time.Second, "done Worktree-backed task", "new task")
-	for i := 0; i < 3; i++ {
+	restarted.resize(t, 141, 40)
+	restarted.waitForAll(t, 10*time.Second, "done Worktree-backed task", "worktree", "new task")
+	restarted.send(t, "\x1b[B")
+	restarted.pause(150 * time.Millisecond)
+	restarted.send(t, "\x1b[B")
+	restarted.pause(150 * time.Millisecond)
+	restarted.send(t, "\r")
+	restarted.resetOutput()
+	restarted.waitForAll(t, 5*time.Second, "Task: Worktree-backed task", "done", "worktree", "✓ upsert_plan")
+	assert.NotContains(t, restarted.output(), "→")
+	restarted.send(t, "\x1b")
+	restarted.resetOutput()
+	restarted.waitForAll(t, 5*time.Second, "done Worktree-backed task", "worktree", "new task")
+	for i := 0; i < 2; i++ {
 		restarted.send(t, "\x1b[A")
 		restarted.pause(150 * time.Millisecond)
 	}
 	restarted.send(t, "\r")
+	restarted.resetOutput()
 	restarted.waitForAll(t, 5*time.Second, "New Task", "worktree on", "Ctrl+T worktree on")
 	restarted.quit(t)
 }

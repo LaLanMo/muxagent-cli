@@ -87,6 +87,15 @@ func currentWorkDir(current *taskdomain.TaskView) string {
 	return current.Task.WorkDir
 }
 
+func taskUsesWorktree(task taskdomain.Task) bool {
+	executionDir := strings.TrimSpace(task.ExecutionDir)
+	workDir := strings.TrimSpace(task.WorkDir)
+	if executionDir == "" || workDir == "" {
+		return false
+	}
+	return filepath.Clean(executionDir) != filepath.Clean(workDir)
+}
+
 func taskSummaryLeft(view *taskdomain.TaskView, cfg *taskconfig.Config) string {
 	if view == nil {
 		return ""

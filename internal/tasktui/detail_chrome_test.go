@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/stretchr/testify/assert"
@@ -154,6 +155,60 @@ func TestLongTaskDescriptionsKeepDetailFooterVisible(t *testing.T) {
 			assert.LessOrEqual(t, ansi.StringWidth(strings.TrimRight(headerLines[1], " ")), detailTitleMeasureWidth(contentWidth))
 		})
 	}
+}
+
+func TestDetailHeaderShowsWorktreeSummaryAndConnectorFreeStageStrip(t *testing.T) {
+	tempDir := t.TempDir()
+	now := time.Now().UTC()
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.currentConfig = &taskconfig.Config{
+		Topology: taskconfig.Topology{
+			Nodes: []taskconfig.NodeRef{
+				{Name: "upsert_plan"},
+				{Name: "review_plan"},
+				{Name: "approve_plan"},
+				{Name: "implement"},
+				{Name: "verify"},
+				{Name: "done"},
+			},
+		},
+	}
+	model.current = &taskdomain.TaskView{
+		Task: taskdomain.Task{
+			ID:           "task-1",
+			Description:  "Review a worktree-backed task",
+			ConfigAlias:  "reviewer",
+			WorkDir:      tempDir,
+			ExecutionDir: filepath.Join("/tmp", "worktrees", "task-1"),
+		},
+		Status:          taskdomain.TaskStatusAwaitingUser,
+		CurrentNodeName: "approve_plan",
+		CurrentNodeType: taskconfig.NodeTypeHuman,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunDone, StartedAt: now}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone, StartedAt: now.Add(time.Minute)}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: now.Add(2 * time.Minute)}},
+		},
+	}
+	model.screen = ScreenApproval
+	model.syncComponents()
+
+	innerWidth, _ := innerSize(120, 32)
+	header := strippedView(model.renderDetailHeader(detailContentWidth(innerWidth, model.activeDetailTab)))
+
+	assert.Contains(t, header, "awaiting approval")
+	assert.Contains(t, header, "at approve_plan")
+	assert.Contains(t, header, "worktree")
+	assert.Contains(t, header, "config reviewer")
+	assert.Contains(t, header, "✓ upsert_plan")
+	assert.Contains(t, header, "✓ review_plan")
+	assert.Contains(t, header, "● approve_plan")
+	assert.Contains(t, header, "○ implement")
+	assert.NotContains(t, header, "→")
+	assert.NotContains(t, header, filepath.Join("/tmp", "worktrees", "task-1"))
 }
 
 func TestWideDetailHeaderKeepsMeasuredTitleInsideFullWidthFrame(t *testing.T) {

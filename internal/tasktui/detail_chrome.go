@@ -20,9 +20,18 @@ func (m Model) renderDetailHeader(width int) string {
 		return fitLine(tuiTheme.taskLabel.Render("Task"), width)
 	}
 	title := tuiTheme.taskLabel.Render(clampWrappedText("Task: "+m.current.Task.Description, detailTitleMeasureWidth(width), 2))
-	dag := m.renderDAG(width)
+	summary := m.renderDetailSummaryLine(width)
+	stageStrip := m.renderDetailStageStrip(width)
 	divider := tuiTheme.divider.Render(strings.Repeat("─", max(8, width)))
-	return lipgloss.JoinVertical(lipgloss.Left, title, dag, divider)
+	lines := []string{title}
+	if strings.TrimSpace(summary) != "" {
+		lines = append(lines, summary)
+	}
+	if strings.TrimSpace(stageStrip) != "" {
+		lines = append(lines, stageStrip)
+	}
+	lines = append(lines, divider)
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func clampWrappedText(text string, width, maxLines int) string {
@@ -38,7 +47,35 @@ func clampWrappedText(text string, width, maxLines int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) renderDAG(width int) string {
+func (m Model) renderDetailSummaryLine(width int) string {
+	if m.current == nil {
+		return ""
+	}
+	statusText, statusStyle := taskStatusLabel(*m.current)
+	parts := []string{statusStyle.Render(statusText)}
+	if label := detailCurrentNodeSummary(*m.current); label != "" {
+		parts = append(parts, tuiTheme.Header.MetaValue.Render(label))
+	}
+	if taskUsesWorktree(m.current.Task) {
+		parts = append(parts, tuiTheme.Header.MetaStrong.Render("worktree"))
+	}
+	if alias := strings.TrimSpace(m.current.Task.ConfigAlias); alias != "" {
+		parts = append(parts, tuiTheme.Header.MetaValue.Render("config "+alias))
+	}
+	return fitLine(ansi.Truncate(strings.Join(parts, tuiTheme.Header.MetaLabel.Render(" · ")), width, "…"), width)
+}
+
+func detailCurrentNodeSummary(view taskdomain.TaskView) string {
+	if view.Status == taskdomain.TaskStatusDone {
+		return ""
+	}
+	if view.CurrentNodeName == "" {
+		return "starting"
+	}
+	return "at " + currentNodeListLabel(view)
+}
+
+func (m Model) renderDetailStageStrip(width int) string {
 	cfg := m.currentConfig
 	if cfg == nil {
 		cfg = m.selectedTaskConfig()
@@ -78,12 +115,9 @@ func (m Model) renderDAG(width int) string {
 		}
 	}
 
-	parts := make([]string, 0, len(cfg.Topology.Nodes)*2)
-	for i, node := range cfg.Topology.Nodes {
+	parts := make([]string, 0, len(cfg.Topology.Nodes))
+	for _, node := range cfg.Topology.Nodes {
 		parts = append(parts, renderDAGNode(node.Name, states[node.Name]))
-		if i < len(cfg.Topology.Nodes)-1 {
-			parts = append(parts, tuiTheme.lineMuted.Render(" → "))
-		}
 	}
-	return ansi.Truncate(strings.Join(parts, ""), width, "…")
+	return fitLine(ansi.Truncate(strings.Join(parts, "   "), width, "…"), width)
 }

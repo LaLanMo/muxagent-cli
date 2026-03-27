@@ -134,6 +134,29 @@ func TestTaskListMetaUsesHashIterationSuffixForRepeatedCurrentNode(t *testing.T)
 	assert.Contains(t, meta, "approve_plan (#2)")
 }
 
+func TestTaskListMetaPlacesWorktreeBeforeConfig(t *testing.T) {
+	view := taskdomain.TaskView{
+		Task: taskdomain.Task{
+			ID:           "task-1",
+			Description:  "Implement login",
+			ConfigAlias:  "reviewer",
+			WorkDir:      "/tmp/project",
+			ExecutionDir: "/tmp/worktrees/task-1",
+		},
+		Status:          taskdomain.TaskStatusRunning,
+		CurrentNodeName: "implement",
+	}
+
+	meta := taskListMeta(view)
+	worktreeIndex := strings.Index(meta, "worktree")
+	configIndex := strings.Index(meta, "config reviewer")
+
+	require.NotEqual(t, -1, worktreeIndex)
+	require.NotEqual(t, -1, configIndex)
+	assert.Less(t, worktreeIndex, configIndex)
+	assert.Contains(t, meta, "at implement")
+}
+
 func TestTaskListDelegateRendersSelectedRowAsFullWidthBlock(t *testing.T) {
 	delegate := taskListDelegate{}
 	model := newTaskListModel()
