@@ -1,3 +1,4 @@
 .idea/
 /muxagent
 cmd/muxagent/muxagent
+tasks/
