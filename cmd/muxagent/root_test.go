@@ -87,6 +87,7 @@ func TestRootHelpOmitsCompletionCommand(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	assert.NotContains(t, out.String(), "completion")
+	assert.NotContains(t, out.String(), "acp-test")
 	assert.Contains(t, out.String(), "auth")
 	assert.Contains(t, out.String(), "daemon")
 	assert.Contains(t, out.String(), "health")

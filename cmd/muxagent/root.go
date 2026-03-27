@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/acptest"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/auth"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/config"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/daemon"
@@ -104,7 +103,6 @@ func newRootCmd(opts rootOptions) *cobra.Command {
 	rootCmd.Flags().StringVar(&runtimeOverride, "runtime", "", "Task runtime override (codex or claude-code)")
 
 	rootCmd.AddCommand(
-		acptest.NewCmd(),
 		auth.NewCmd(),
 		config.NewCmd(),
 		daemon.NewCmd(),
