@@ -50,7 +50,7 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	assert.NotContains(t, strippedView(view.Content), "Enter select")
 }
 
-func TestTaskListHeaderShowsVersionRevisionCwdAndRuntime(t *testing.T) {
+func TestTaskListHeaderShowsVersionRevisionCwdAndConfig(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(
 		service,
@@ -62,14 +62,29 @@ func TestTaskListHeaderShowsVersionRevisionCwdAndRuntime(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
 	model = next.(Model)
 
-	view := strippedView(model.View().Content)
-	assert.Contains(t, view, renderBlockGlyphRows("MUX")[0])
-	assert.Contains(t, view, renderBlockGlyphRows("AGENT")[0])
-	assert.NotContains(t, view, "muxagent CLI")
-	assert.Contains(t, view, "dev")
-	assert.Contains(t, view, "1234567890ab")
-	assert.Contains(t, view, "/tmp/project")
-	assert.Contains(t, view, "runtime Claude Code")
+	metrics := model.computeScreenMetrics()
+	header := strippedView(model.renderTaskListHeader(metrics.innerWidth))
+	assert.Contains(t, header, renderBlockGlyphRows("MUX")[0])
+	assert.Contains(t, header, renderBlockGlyphRows("AGENT")[0])
+	assert.NotContains(t, header, "muxagent CLI")
+	assert.Contains(t, header, "dev")
+	assert.Contains(t, header, "1234567890ab")
+	assert.Contains(t, header, "/tmp/project")
+	assert.Contains(t, header, "config default")
+	assert.NotContains(t, header, "runtime")
+}
+
+func TestTaskListCompactHeaderShowsCwdAndConfigWithoutRuntime(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	model = next.(Model)
+
+	metrics := model.computeScreenMetrics()
+	header := strippedView(model.renderTaskListHeader(metrics.innerWidth))
+	assert.Contains(t, header, "cwd /tmp")
+	assert.Contains(t, header, "config default")
+	assert.NotContains(t, header, "runtime")
 }
 
 func TestModelSubmitsNewTaskCommand(t *testing.T) {
