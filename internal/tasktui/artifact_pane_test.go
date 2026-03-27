@@ -49,7 +49,7 @@ func TestApprovalScreenShowsExpandedArtifactsPaneAndPreview(t *testing.T) {
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "1 timeline")
+	assert.Contains(t, view, "Shift+Tab timeline")
 	assert.Contains(t, view, "Files")
 	assert.Contains(t, view, "Preview · plan.md")
 	assert.Contains(t, view, "Plan")
@@ -128,7 +128,7 @@ func TestCompletedTaskOpenedFromListShowsArtifactsPaneImmediately(t *testing.T) 
 	assert.Equal(t, ScreenComplete, model.screen)
 	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
-	assert.Contains(t, screen, "2 artifacts")
+	assert.Contains(t, screen, "Shift+Tab artifacts")
 	assert.Contains(t, screen, "Esc back")
 	assert.Contains(t, screen, "Ctrl+C quit")
 }
@@ -155,8 +155,8 @@ func TestTabSwitchingBetweenTimelineAndArtifacts(t *testing.T) {
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 
-	// Press 2 to switch to artifacts tab
-	next, _ = model.Update(tea.KeyPressMsg{Code: '2'})
+	// Press Shift+Tab to switch to artifacts tab
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = next.(Model)
 	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
@@ -165,8 +165,8 @@ func TestTabSwitchingBetweenTimelineAndArtifacts(t *testing.T) {
 	assert.Contains(t, screen, "Files")
 	assert.Contains(t, screen, "Preview · summary.md")
 
-	// Press 1 to switch back to timeline
-	next, _ = model.Update(tea.KeyPressMsg{Code: '1'})
+	// Press Shift+Tab to switch back to timeline
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = next.(Model)
 	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
@@ -220,12 +220,12 @@ func TestClarificationPanelVisibleAfterTabRoundTrip(t *testing.T) {
 	assert.Contains(t, view, "Question 1/1", "panel should be visible before tab switch")
 
 	// Switch to artifacts tab
-	next, _ = model.Update(tea.KeyPressMsg{Code: '2'})
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = next.(Model)
 	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 
 	// Switch back to timeline
-	next, _ = model.Update(tea.KeyPressMsg{Code: '1'})
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = next.(Model)
 	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
@@ -269,8 +269,8 @@ func TestArtifactTabCyclesViaTab(t *testing.T) {
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
 	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 
-	// Press 1 to switch back to timeline
-	next, _ = model.Update(tea.KeyPressMsg{Code: '1'})
+	// Press Shift+Tab to switch back to timeline
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = next.(Model)
 	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
@@ -344,7 +344,7 @@ func TestTabHintShowsInFooter(t *testing.T) {
 	model.syncComponents()
 
 	screen := strippedView(model.View().Content)
-	assert.Contains(t, screen, "2 artifacts")
+	assert.Contains(t, screen, "Shift+Tab artifacts")
 	assert.NotContains(t, screen, "[1] Timeline")
 	assert.NotContains(t, screen, "[2] Artifacts")
 	assert.Contains(t, screen, "Ctrl+C quit")

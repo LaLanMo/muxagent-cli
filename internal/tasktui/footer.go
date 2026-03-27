@@ -181,10 +181,10 @@ func (m Model) tabHint() string {
 		return ""
 	}
 	if m.activeDetailTab == DetailTabArtifacts {
-		return "1 timeline"
+		return "Shift+Tab timeline"
 	}
 	if len(m.artifactItems) > 0 {
-		return "2 artifacts"
+		return "Shift+Tab artifacts"
 	}
 	return ""
 }

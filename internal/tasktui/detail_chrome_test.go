@@ -48,7 +48,7 @@ func TestLongTaskDescriptionsKeepDetailFooterVisible(t *testing.T) {
 				}
 				model.screen = ScreenRunning
 			},
-			want: []string{"2 artifacts", "Ctrl+C quit", "elapsed:"},
+			want: []string{"Shift+Tab artifacts", "Ctrl+C quit", "elapsed:"},
 		},
 		{
 			name:   "approval with split artifacts",

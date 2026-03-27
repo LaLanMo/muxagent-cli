@@ -48,7 +48,7 @@ func TestModelOpensAwaitingTaskIntoApprovalScreen(t *testing.T) {
 
 	assert.Equal(t, ScreenApproval, model.screen)
 	assert.Contains(t, strippedView(model.View().Content), "Approve this plan?")
-	assert.Contains(t, strippedView(model.View().Content), "2 artifacts")
+	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab artifacts")
 }
 
 func TestModelHandlesClarificationEvent(t *testing.T) {
@@ -541,18 +541,18 @@ func TestClarificationTabReachesVisibleArtifactPane(t *testing.T) {
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "2 artifacts")
+	assert.Contains(t, view, "Shift+Tab artifacts")
 	assert.Contains(t, view, "Question 1/1")
 	assert.Contains(t, view, "Ctrl+C quit")
 
-	// Switch to artifacts tab via '2' key
-	next, _ = model.Update(tea.KeyPressMsg{Code: '2'})
+	// Switch to artifacts tab via Shift+Tab
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = next.(Model)
 
 	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
 	view = strippedView(model.View().Content)
-	assert.Contains(t, view, "1 timeline")
+	assert.Contains(t, view, "Shift+Tab timeline")
 	assert.Contains(t, view, "Files")
 	assert.Contains(t, view, "Ctrl+C quit")
 }
@@ -738,6 +738,91 @@ func TestFocusedComposerTakesPriorityOverArtifactPaneKeys(t *testing.T) {
 
 	assert.Equal(t, "", model.editor.Value(), "ctrl+u should reach the focused composer instead of the artifact pane")
 	assert.NotContains(t, strippedView(model.View().Content), "Ctrl+U/Ctrl+D preview")
+}
+
+func TestFocusedComposerShiftTabDoesNotToggleDetailTabs(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "plan.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Plan\n"), 0o644))
+
+	tests := []struct {
+		name           string
+		nodeName       string
+		screen         Screen
+		setup          func(*Model)
+		wantEditorText string
+	}{
+		{
+			name:     "approval composer",
+			nodeName: "approve_plan",
+			screen:   ScreenApproval,
+			setup: func(model *Model) {
+				model.approval.choice = 1
+				model.currentInput = &taskruntime.InputRequest{
+					Kind:          taskruntime.InputKindHumanNode,
+					TaskID:        "task-1",
+					NodeRunID:     "run-1",
+					NodeName:      "approve_plan",
+					ArtifactPaths: []string{artifactPath},
+				}
+			},
+			wantEditorText: "Need more detail",
+		},
+		{
+			name:     "clarification composer",
+			nodeName: "implement",
+			screen:   ScreenClarification,
+			setup: func(model *Model) {
+				model.currentInput = &taskruntime.InputRequest{
+					Kind:          taskruntime.InputKindClarification,
+					TaskID:        "task-1",
+					NodeRunID:     "run-1",
+					NodeName:      "implement",
+					ArtifactPaths: []string{artifactPath},
+					Questions: []taskdomain.ClarificationQuestion{{
+						Question:     "Which path should we take?",
+						WhyItMatters: "Need the answer before implementing.",
+						Options: []taskdomain.ClarificationOption{
+							{Label: "A", Description: "First path"},
+							{Label: "B", Description: "Second path"},
+						},
+					}},
+				}
+			},
+			wantEditorText: "Custom answer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+			model := NewModel(service, tempDir, "", nil, "v0.1.0")
+			next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+			model = next.(Model)
+			model.current = &taskdomain.TaskView{
+				Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+				Status:        taskdomain.TaskStatusAwaitingUser,
+				ArtifactPaths: []string{artifactPath},
+				NodeRuns: []taskdomain.NodeRunView{
+					{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: tt.nodeName, Status: taskdomain.NodeRunAwaitingUser}, ArtifactPaths: []string{artifactPath}},
+				},
+			}
+			model.screen = tt.screen
+			model.focusRegion = FocusRegionComposer
+			model.activeTaskID = "task-1"
+			tt.setup(&model)
+			model.syncComponents()
+			_ = model.syncInputFocus()
+			model.editor.SetValue(tt.wantEditorText)
+
+			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+			model = next.(Model)
+
+			assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
+			assert.Equal(t, FocusRegionComposer, model.focusRegion)
+			assert.Equal(t, tt.wantEditorText, model.editor.Value())
+		})
+	}
 }
 
 func TestApprovalComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) {

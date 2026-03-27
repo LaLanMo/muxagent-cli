@@ -1,6 +1,8 @@
 package tasktui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -213,4 +215,44 @@ func TestForceContinueCommandErrorRestoresFailedScreen(t *testing.T) {
 	assert.Equal(t, "cannot continue blocked step", model.errorText)
 	assert.Equal(t, failureActionForceContinue, model.failure.action)
 	assert.Nil(t, model.pendingRuntimeCmd)
+}
+
+func TestFailedScreenShiftTabTogglesArtifactsRoundTrip(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "failure.log")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("executor failed\n"), 0o644))
+
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.currentConfig = retryTUIConfig(2)
+	model.current = &taskdomain.TaskView{
+		Task:            taskdomain.Task{ID: "task-1", Description: "Broken task", WorkDir: tempDir},
+		Status:          taskdomain.TaskStatusFailed,
+		CurrentNodeName: "implement",
+		ArtifactPaths:   []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunFailed, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}, ArtifactPaths: []string{artifactPath}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.screen = ScreenFailed
+	model.errorText = "executor failed"
+	model.syncComponents()
+
+	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = next.(Model)
+
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
+	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = next.(Model)
+
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 }

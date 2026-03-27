@@ -402,7 +402,7 @@ func TestTaskCompletedEventShowsArtifactsPaneImmediately(t *testing.T) {
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "2 artifacts")
+	assert.Contains(t, view, "Shift+Tab artifacts")
 	assert.Contains(t, view, "Esc back")
 	assert.Contains(t, view, "Ctrl+C quit")
 	assert.NotContains(t, view, "Enter open")

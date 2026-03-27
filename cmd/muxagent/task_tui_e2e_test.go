@@ -627,17 +627,17 @@ func TestTaskTUISmallTerminalArtifactTabSwitching(t *testing.T) {
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Inspect artifacts on small terminal")
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.waitForAll(t, 5*time.Second, "2 artifacts")
+	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts")
 	session.resetOutput()
 
-	// Switch to artifacts tab via '2' key
-	session.send(t, "2")
-	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+	// Switch to artifacts tab via Shift+Tab
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·")
 	session.resetOutput()
 
-	// Press 1 to return to timeline tab (footer shows "2 artifacts" on timeline)
-	session.send(t, "1")
-	session.waitForAll(t, 5*time.Second, "2 artifacts")
+	// Press Shift+Tab to return to timeline tab
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts")
 
 	session.quit(t)
 }
@@ -669,16 +669,16 @@ func TestTaskTUIWideTerminalCompletedArtifactsTabSwitch(t *testing.T) {
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	session.waitForAll(t, 15*time.Second, "Task completed successfully", "2 artifacts", "Esc back")
+	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Shift+Tab artifacts", "Esc back")
 	session.resetOutput()
 
 	// Switch to artifacts tab and verify content
-	session.send(t, "2")
-	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·")
 	session.resetOutput()
 
 	// Switch back to timeline, then go back to task list
-	session.send(t, "1")
+	session.sendBacktab(t)
 	session.pause(150 * time.Millisecond)
 	session.send(t, "\x1b")
 	session.waitForAll(t, 5*time.Second, "new task", "done Wide completed artifacts")
@@ -686,10 +686,10 @@ func TestTaskTUIWideTerminalCompletedArtifactsTabSwitch(t *testing.T) {
 	// Re-open the task and switch to artifacts
 	session.resetOutput()
 	session.send(t, "\r")
-	session.waitForAll(t, 5*time.Second, "Task completed successfully", "2 artifacts")
+	session.waitForAll(t, 5*time.Second, "Task completed successfully", "Shift+Tab artifacts")
 	session.resetOutput()
-	session.send(t, "2")
-	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·")
 
 	session.quit(t)
 }
@@ -721,17 +721,17 @@ func TestTaskTUISmallTerminalCompletedArtifactsTabSwitchAndReopen(t *testing.T) 
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	session.waitForAll(t, 15*time.Second, "Task completed successfully", "2 artifacts", "Esc back")
+	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Shift+Tab artifacts", "Esc back")
 	session.resetOutput()
 
 	// Switch to artifacts tab
-	session.send(t, "2")
-	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·")
 	session.resetOutput()
 
-	// Press 1 back to timeline, then esc to task list
-	session.send(t, "1")
-	session.waitForAll(t, 5*time.Second, "2 artifacts", "Esc back")
+	// Press Shift+Tab back to timeline, then esc to task list
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts", "Esc back")
 	session.resetOutput()
 
 	session.send(t, "\x1b")
@@ -740,7 +740,7 @@ func TestTaskTUISmallTerminalCompletedArtifactsTabSwitchAndReopen(t *testing.T) 
 	// Re-open and verify footer hint
 	session.resetOutput()
 	session.send(t, "\r")
-	session.waitForAll(t, 5*time.Second, "2 artifacts", "Esc back")
+	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts", "Esc back")
 
 	session.quit(t)
 }
@@ -772,23 +772,23 @@ func TestTaskTUIClarificationWithArtifactsTabSwitchReachable(t *testing.T) {
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	output := session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "2 artifacts")
+	output := session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "Shift+Tab artifacts")
 	assert.Contains(t, output, "Write your own answer")
 	assert.Contains(t, output, "Submit answers")
 	assert.NotContains(t, output, "[ ] Other")
 
-	// Switch to artifacts tab via '2' key
+	// Switch to artifacts tab via Shift+Tab
 	session.resetOutput()
-	session.send(t, "2")
-	session.waitForAll(t, 5*time.Second, "Files", "Preview ·")
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·")
 
 	// Switch back to timeline. The clarification panel is identical on both
 	// tabs, so bubbletea's differential renderer won't re-send those lines.
 	// A resize forces a full repaint so we can assert on the panel content.
 	session.resetOutput()
-	session.send(t, "1")
+	session.sendBacktab(t)
 	session.resize(t, 150, 39)
-	session.waitForAll(t, 5*time.Second, "2 artifacts", "Question 1/1")
+	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts", "Question 1/1")
 
 	session.quit(t)
 }
@@ -1035,6 +1035,11 @@ func (s *tuiSession) send(t *testing.T, input string) {
 	t.Helper()
 	_, err := s.ptmx.Write([]byte(input))
 	require.NoError(t, err)
+}
+
+func (s *tuiSession) sendBacktab(t *testing.T) {
+	t.Helper()
+	s.send(t, "\x1b[Z")
 }
 
 func (s *tuiSession) pause(delay time.Duration) {
