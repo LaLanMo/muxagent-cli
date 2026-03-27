@@ -23,7 +23,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type launchFuncWithRuntime func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error
+type launchFuncWithRuntime func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error
 
 type rootOptions struct {
 	launchTUI launchFuncWithRuntime
@@ -31,15 +31,14 @@ type rootOptions struct {
 
 func NewRootCmd() *cobra.Command {
 	return newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
 			workDir = taskstore.NormalizeWorkDir(workDir)
-			launchConfig, err := loadTaskLaunchConfig(configPath, runtime)
+			catalog, err := loadTaskConfigCatalog()
 			if err != nil {
 				return err
 			}
 			service, err := taskruntime.NewService(
 				workDir,
-				configPath,
 				taskexecutor.NewRouter(codexexec.New(""), claudeexec.New("")),
 			)
 			if err != nil {
@@ -47,18 +46,17 @@ func NewRootCmd() *cobra.Command {
 			}
 			defer service.Close()
 			return tasktui.App{
-				Service:        service,
-				WorkDir:        workDir,
-				ConfigOverride: configPath,
-				LaunchConfig:   launchConfig,
-				Version:        cliversion.CLIString(),
+				Service:               service,
+				WorkDir:               workDir,
+				ConfigCatalog:         catalog,
+				LaunchRuntimeOverride: runtime,
+				Version:               cliversion.CLIString(),
 			}.Run(ctx)
 		},
 	})
 }
 
 func newRootCmd(opts rootOptions) *cobra.Command {
-	var configPath string
 	var runtimeOverride string
 	rootCmd := &cobra.Command{
 		Use:     "muxagent",
@@ -76,12 +74,11 @@ func newRootCmd(opts rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return opts.launchTUI(cmd.Context(), workDir, configPath, runtime)
+			return opts.launchTUI(cmd.Context(), workDir, runtime)
 		},
 	}
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	rootCmd.Flags().StringVarP(&configPath, "config", "c", "", "Task config override path for task-first TUI")
 	rootCmd.Flags().StringVar(&runtimeOverride, "runtime", "", "Task runtime override (codex or claude-code)")
 
 	rootCmd.AddCommand(
@@ -103,23 +100,6 @@ func Execute() {
 	}
 }
 
-func loadTaskLaunchConfig(configPath string, runtimeOverride appconfig.RuntimeID) (*taskconfig.Config, error) {
-	var (
-		cfg *taskconfig.Config
-		err error
-	)
-	if configPath == "" {
-		cfg, err = taskconfig.LoadDefault()
-	} else {
-		cfg, err = taskconfig.Load(configPath)
-	}
-	if err != nil {
-		return nil, err
-	}
-	runtime, err := taskconfig.ResolveRuntime(runtimeOverride, cfg)
-	if err != nil {
-		return nil, err
-	}
-	cfg.Runtime = runtime
-	return cfg, nil
+func loadTaskConfigCatalog() (*taskconfig.Catalog, error) {
+	return taskconfig.LoadCatalog()
 }

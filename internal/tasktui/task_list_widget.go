@@ -164,6 +164,9 @@ func taskListMeta(view taskdomain.TaskView) string {
 			nodeLabel = "failed at " + currentNodeListLabel(view)
 		}
 	}
+	if strings.TrimSpace(view.Task.ConfigAlias) != "" {
+		nodeLabel += " · config " + view.Task.ConfigAlias
+	}
 	return nodeLabel + " · " + relativeTime(taskTimestamp(view))
 }
 

@@ -33,6 +33,16 @@ func (m Model) handleNewTaskKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.closeNewTask()
 		m.syncComponents()
 		return m, m.syncInputFocus()
+	case keyMatches(msg, m.keys.prevConfig):
+		if m.cycleTaskConfig(-1) {
+			m.syncComponents()
+		}
+		return m, nil
+	case keyMatches(msg, m.keys.nextConfig):
+		if m.cycleTaskConfig(1) {
+			m.syncComponents()
+		}
+		return m, nil
 	case keyMatches(msg, m.keys.nextFocus):
 		if strings.TrimSpace(m.editor.Value()) == "" {
 			return m, nil

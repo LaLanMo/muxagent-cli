@@ -5,8 +5,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
-	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
@@ -16,7 +14,6 @@ func (m *Model) submitNewTask() tea.Cmd {
 	if desc == "" {
 		return nil
 	}
-	m.editor.ClearSlot(editorSlotNewTask)
 	m.clearActiveTask()
 	m.pendingRuntimeCmd = &pendingRuntimeCommand{
 		kind: pendingRuntimeCommandStartTask,
@@ -26,19 +23,22 @@ func (m *Model) submitNewTask() tea.Cmd {
 	m.current = &taskdomain.TaskView{
 		Task: taskdomain.Task{
 			Description: desc,
+			ConfigAlias: m.selectedTaskConfigAlias(),
+			ConfigPath:  m.selectedTaskConfigPath(),
 			WorkDir:     m.workDir,
 		},
 		Status: taskdomain.TaskStatusRunning,
 	}
-	m.currentConfig = m.launchConfig
+	m.currentConfig = m.selectedTaskConfig()
 	m.currentInput = nil
 	m.setDetailScreen(ScreenRunning, true)
 	m.syncComponents()
 	return m.dispatchCmd(taskruntime.RunCommand{
 		Type:        taskruntime.CommandStartTask,
 		Description: desc,
+		ConfigAlias: m.selectedTaskConfigAlias(),
 		WorkDir:     m.workDir,
-		ConfigPath:  m.configOverride,
+		ConfigPath:  m.selectedTaskConfigPath(),
 		Runtime:     m.effectiveLaunchRuntime(),
 	})
 }
@@ -95,14 +95,6 @@ func (m *Model) applyRetry(force bool) tea.Cmd {
 func (m Model) triggerRetry(force bool) (tea.Model, tea.Cmd) {
 	cmd := m.applyRetry(force)
 	return m, cmd
-}
-
-func (m Model) effectiveLaunchRuntime() appconfig.RuntimeID {
-	runtime, err := taskconfig.ResolveRuntime("", m.launchConfig)
-	if err != nil {
-		return appconfig.RuntimeCodex
-	}
-	return runtime
 }
 
 func (m Model) submitCurrentInput(payload map[string]interface{}) (tea.Model, tea.Cmd) {

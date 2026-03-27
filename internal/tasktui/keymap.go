@@ -12,6 +12,8 @@ type appKeyMap struct {
 	nextFocus    key.Binding
 	tabTimeline  key.Binding
 	tabArtifacts key.Binding
+	prevConfig   key.Binding
+	nextConfig   key.Binding
 }
 
 func newAppKeyMap() appKeyMap {
@@ -25,5 +27,7 @@ func newAppKeyMap() appKeyMap {
 		nextFocus:    key.NewBinding(key.WithKeys("tab")),
 		tabTimeline:  key.NewBinding(key.WithKeys("1")),
 		tabArtifacts: key.NewBinding(key.WithKeys("2")),
+		prevConfig:   key.NewBinding(key.WithKeys("ctrl+p")),
+		nextConfig:   key.NewBinding(key.WithKeys("ctrl+n")),
 	}
 }

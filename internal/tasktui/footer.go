@@ -50,7 +50,7 @@ func (m Model) taskListHint() string {
 }
 
 func (m Model) newTaskModalHint() string {
-	return joinHintParts("Enter newline", "Tab start", "Esc cancel")
+	return joinHintParts("Ctrl+P prev config", "Ctrl+N next config", "Enter newline", "Tab start", "Esc cancel")
 }
 
 func (m Model) renderTaskListFooter(surface surfaceRect) string {

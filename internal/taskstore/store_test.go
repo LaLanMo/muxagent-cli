@@ -24,6 +24,8 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 	task := taskdomain.Task{
 		ID:          "task-1",
 		Description: "Implement login",
+		ConfigAlias: "bugfix",
+		ConfigPath:  "/tmp/taskconfigs/bugfix.yaml",
 		WorkDir:     "/tmp/project",
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -70,6 +72,8 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, task.Description, tasks[0].Description)
+	assert.Equal(t, task.ConfigAlias, tasks[0].ConfigAlias)
+	assert.Equal(t, task.ConfigPath, tasks[0].ConfigPath)
 
 	runs, err := store.ListNodeRunsByTask(ctx, task.ID)
 	require.NoError(t, err)
@@ -158,6 +162,45 @@ func TestStoreSchemaDeclaresJSONValidityChecks(t *testing.T) {
 	assert.Contains(t, tableSQL, "json_valid(clarifications_json)")
 	assert.Contains(t, tableSQL, "json_valid(triggered_by_json)")
 	assert.Contains(t, tableSQL, "failure_reason")
+}
+
+func TestEnsureSchemaAddsConfigPathColumnForOlderTasksTables(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tasks.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE tasks (
+			id TEXT PRIMARY KEY,
+			description TEXT NOT NULL,
+			config_alias TEXT NOT NULL DEFAULT '',
+			work_dir TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE node_runs (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			node_name TEXT NOT NULL,
+			status TEXT NOT NULL,
+			session_id TEXT,
+			result_json TEXT,
+			clarifications_json TEXT NOT NULL,
+			triggered_by_json TEXT,
+			started_at TEXT NOT NULL,
+			completed_at TEXT
+		);`)
+	require.NoError(t, err)
+
+	store := &Store{db: db}
+	require.NoError(t, store.EnsureSchema(context.Background()))
+
+	hasConfigPath, err := store.tableHasColumn(context.Background(), "tasks", "config_path")
+	require.NoError(t, err)
+	assert.True(t, hasConfigPath)
 }
 
 func TestNormalizeWorkDirResolvesSymlinks(t *testing.T) {

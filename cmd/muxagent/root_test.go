@@ -107,13 +107,11 @@ func TestRootLaunchesTaskTUIOnBareInvocation(t *testing.T) {
 	var (
 		called     bool
 		gotWorkDir string
-		gotConfig  string
 	)
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
 			called = true
 			gotWorkDir = workDir
-			gotConfig = configPath
 			return nil
 		},
 	})
@@ -126,31 +124,21 @@ func TestRootLaunchesTaskTUIOnBareInvocation(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, called)
 	assert.NotEmpty(t, gotWorkDir)
-	assert.Empty(t, gotConfig)
 }
 
-func TestRootPassesConfigOverrideToTaskTUI(t *testing.T) {
-	var gotConfig string
-	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error {
-			gotConfig = configPath
-			return nil
-		},
-	})
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+func TestRootRejectsRemovedConfigFlag(t *testing.T) {
+	cmd := NewRootCmd()
 	cmd.SetArgs([]string{"-c", "./my-config.yaml"})
 
 	err := cmd.Execute()
-	require.NoError(t, err)
-	assert.Equal(t, "./my-config.yaml", gotConfig)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown shorthand flag: 'c'")
 }
 
 func TestRootPassesRuntimeOverrideToTaskTUI(t *testing.T) {
 	var gotRuntime appconfig.RuntimeID
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
 			gotRuntime = runtime
 			return nil
 		},
@@ -167,7 +155,7 @@ func TestRootPassesRuntimeOverrideToTaskTUI(t *testing.T) {
 
 func TestRootRejectsInvalidRuntime(t *testing.T) {
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
 			return nil
 		},
 	})
@@ -180,7 +168,7 @@ func TestRootRejectsInvalidRuntime(t *testing.T) {
 
 func TestRootPropagatesTaskTUILaunchError(t *testing.T) {
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir, configPath string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
 			return errors.New("boom")
 		},
 	})
@@ -194,9 +182,19 @@ func TestRootPropagatesTaskTUILaunchError(t *testing.T) {
 	assert.Contains(t, err.Error(), "boom")
 }
 
-func TestLoadTaskLaunchConfigResolvesRuntimeOverride(t *testing.T) {
-	configDir := t.TempDir()
-	configPath := filepath.Join(configDir, "taskflow.yaml")
+func TestLoadTaskConfigCatalogUsesRegistryDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	registryPath, err := taskconfig.RegistryPath()
+	require.NoError(t, err)
+	taskConfigDir, err := taskconfig.TaskConfigDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(taskConfigDir, 0o755))
+
+	bundleDir := filepath.Join(taskConfigDir, "bugfix")
+	require.NoError(t, os.MkdirAll(bundleDir, 0o755))
+	configPath := filepath.Join(bundleDir, "config.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte(`
 version: 1
 runtime: claude-code
@@ -219,22 +217,58 @@ node_definitions:
     result_schema:
       type: object
       additionalProperties: false
+      required: []
       properties: {}
   done:
     type: terminal
+    result_schema:
+      type: object
+      additionalProperties: false
+      required: []
+      properties: {}
 `), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "prompt.md"), []byte("# prompt"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "prompt.md"), []byte("# prompt"), 0o644))
+	require.NoError(t, os.WriteFile(registryPath, []byte(`{
+  "default_alias": "bugfix",
+  "configs": [
+    { "alias": "default", "path": "default" },
+    { "alias": "bugfix", "path": "bugfix" }
+  ]
+}`), 0o600))
 
-	cfg, err := loadTaskLaunchConfig(configPath, appconfig.RuntimeCodex)
+	catalog, err := loadTaskConfigCatalog()
 	require.NoError(t, err)
-	assert.Equal(t, appconfig.RuntimeCodex, cfg.Runtime)
+	assert.Equal(t, "bugfix", catalog.DefaultAlias)
+	entry, ok := catalog.Entry("bugfix")
+	require.True(t, ok)
+	assert.Equal(t, configPath, entry.Path)
+	assert.Nil(t, entry.Config)
+}
 
-	cfg, err = loadTaskLaunchConfig(configPath, "")
-	require.NoError(t, err)
-	assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
+func TestLoadTaskConfigCatalogAllowsBrokenRegistryConfigAtStartup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
-	defaultCfg, err := loadTaskLaunchConfig("", "")
+	registryPath, err := taskconfig.RegistryPath()
 	require.NoError(t, err)
-	assert.Equal(t, appconfig.RuntimeCodex, defaultCfg.Runtime)
-	assert.IsType(t, &taskconfig.Config{}, defaultCfg)
+	taskConfigDir, err := taskconfig.TaskConfigDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(taskConfigDir, 0o755))
+	bundleDir := filepath.Join(taskConfigDir, "broken")
+	require.NoError(t, os.MkdirAll(bundleDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "config.yaml"), []byte("version: ["), 0o644))
+	require.NoError(t, os.WriteFile(registryPath, []byte(`{
+  "default_alias": "broken",
+  "configs": [
+    { "alias": "default", "path": "default" },
+    { "alias": "broken", "path": "broken" }
+  ]
+}`), 0o600))
+
+	catalog, err := loadTaskConfigCatalog()
+	require.NoError(t, err)
+	assert.Equal(t, "broken", catalog.DefaultAlias)
+	entry, ok := catalog.Entry("broken")
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(bundleDir, "config.yaml"), entry.Path)
 }

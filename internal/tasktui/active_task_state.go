@@ -13,7 +13,7 @@ func (m *Model) activateTask(view taskdomain.TaskView, cfg *taskconfig.Config, i
 	if cfg != nil {
 		m.currentConfig = cfg
 	} else if m.currentConfig == nil {
-		m.currentConfig = m.launchConfig
+		m.currentConfig = m.selectedTaskConfig()
 	}
 	m.currentInput = input
 	m.resetInputState()

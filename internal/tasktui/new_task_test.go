@@ -85,9 +85,83 @@ func TestModelSubmitsNewTaskCommand(t *testing.T) {
 	require.Nil(t, cmd())
 	require.Len(t, service.dispatched, 1)
 	assert.Equal(t, taskruntime.CommandStartTask, service.dispatched[0].Type)
+	assert.Equal(t, taskconfig.DefaultAlias, service.dispatched[0].ConfigAlias)
 	assert.Equal(t, "./taskflow.yaml", service.dispatched[0].ConfigPath)
 	assert.Equal(t, appconfig.RuntimeClaudeCode, service.dispatched[0].Runtime)
 	assert.Equal(t, ScreenRunning, model.screen)
+}
+
+func TestNewTaskCyclesToNextTaskConfigViaHotkey(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModelWithCatalog(service, "/tmp/project", &taskconfig.Catalog{
+		DefaultAlias: taskconfig.DefaultAlias,
+		Entries: []taskconfig.CatalogEntry{
+			{Alias: taskconfig.DefaultAlias, Config: &taskconfig.Config{Runtime: appconfig.RuntimeCodex}},
+			{Alias: "reviewer", Path: "/tmp/reviewer.yaml", Config: &taskconfig.Config{Runtime: appconfig.RuntimeClaudeCode}},
+		},
+	}, "", "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+	model = openNewTaskModal(t, model)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "config reviewer")
+	assert.Contains(t, view, "runtime claude-code")
+}
+
+func TestModelSubmitsSelectedTaskConfigAlias(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModelWithCatalog(service, "/tmp/project", &taskconfig.Catalog{
+		DefaultAlias: taskconfig.DefaultAlias,
+		Entries: []taskconfig.CatalogEntry{
+			{Alias: taskconfig.DefaultAlias, Config: &taskconfig.Config{Runtime: appconfig.RuntimeCodex}},
+			{Alias: "reviewer", Path: "/tmp/reviewer.yaml", Config: &taskconfig.Config{Runtime: appconfig.RuntimeClaudeCode}},
+		},
+	}, "", "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+	model = openNewTaskModal(t, model)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	model = typeText(t, model, "Review docs")
+
+	model, cmd := submitNewTaskModal(t, model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, "reviewer", service.dispatched[0].ConfigAlias)
+	assert.Equal(t, "/tmp/reviewer.yaml", service.dispatched[0].ConfigPath)
+	assert.Equal(t, appconfig.RuntimeClaudeCode, service.dispatched[0].Runtime)
+}
+
+func TestStartTaskCommandErrorReturnsToComposerAndPreservesInput(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "./taskflow.yaml", &taskconfig.Config{Runtime: appconfig.RuntimeClaudeCode}, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+	model = openNewTaskModal(t, model)
+	model = typeText(t, model, "Broken config")
+
+	model, cmd := submitNewTaskModal(t, model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Equal(t, ScreenRunning, model.screen)
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:  taskruntime.EventCommandError,
+		Error: &taskruntime.RunError{Message: "invalid task config"},
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenNewTask, model.screen)
+	assert.Equal(t, "Broken config", model.editor.Value())
+	assert.Equal(t, "invalid task config", model.errorText)
+	assert.Nil(t, model.current)
+	assert.Empty(t, model.activeTaskID)
 }
 
 func TestNewTaskTextAreaGrowsOnEnterAndPreservesFirstLine(t *testing.T) {

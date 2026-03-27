@@ -23,17 +23,18 @@ func (m Model) renderTaskListHeader(width int) string {
 	}
 	meta := parseVersionMeta(m.version)
 	cwd := prettyTaskListPath(m.workDir)
+	config := m.selectedTaskConfigAlias()
 	runtime := runtimeDisplayLabel(m.effectiveLaunchRuntime())
 	if width < 72 {
-		return renderCompactTaskListHeader(width, meta, cwd, runtime)
+		return renderCompactTaskListHeader(width, meta, cwd, config, runtime)
 	}
-	return renderWideTaskListHeader(width, meta, cwd, runtime)
+	return renderWideTaskListHeader(width, meta, cwd, config, runtime)
 }
 
-func renderWideTaskListHeader(width int, meta versionMeta, cwd, runtime string) string {
+func renderWideTaskListHeader(width int, meta versionMeta, cwd, config, runtime string) string {
 	hero := renderTaskListWordmark(width)
 	version := centerHeaderLine(renderTaskListVersionMeta(meta), width)
-	metaBlock := renderTaskListMetadataBlock(width, cwd, runtime, true)
+	metaBlock := renderTaskListMetadataBlock(width, cwd, config, runtime, true)
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		hero,
@@ -42,7 +43,7 @@ func renderWideTaskListHeader(width int, meta versionMeta, cwd, runtime string) 
 	)
 }
 
-func renderCompactTaskListHeader(width int, meta versionMeta, cwd, runtime string) string {
+func renderCompactTaskListHeader(width int, meta versionMeta, cwd, config, runtime string) string {
 	top := joinHorizontal(
 		tuiTheme.Header.Brand.Render("muxagent"),
 		renderTaskListVersionMeta(meta),
@@ -60,7 +61,7 @@ func renderCompactTaskListHeader(width int, meta versionMeta, cwd, runtime strin
 		lipgloss.Left,
 		top,
 		hero,
-		renderTaskListMetadataBlock(width, cwd, runtime, false),
+		renderTaskListMetadataBlock(width, cwd, config, runtime, false),
 	)
 }
 
@@ -105,19 +106,18 @@ func renderTaskListVersionMeta(meta versionMeta) string {
 	return label
 }
 
-func renderTaskListMetadataBlock(width int, cwd, runtime string, centered bool) string {
-	joined := renderTaskListMetaLine("cwd", cwd, false) +
-		tuiTheme.Header.MetaLabel.Render("  •  ") +
-		renderTaskListMetaLine("runtime", runtime, true)
+func renderTaskListMetadataBlock(width int, cwd, config, runtime string, centered bool) string {
+	lines := []string{
+		renderTaskListMetaLine("cwd", cwd, false),
+		renderTaskListMetaLine("config", config, true),
+		renderTaskListMetaLine("runtime", runtime, true),
+	}
+	joined := strings.Join(lines, tuiTheme.Header.MetaLabel.Render("  •  "))
 	if ansi.StringWidth(ansi.Strip(joined)) <= width {
 		if centered {
 			return centerHeaderLine(joined, width)
 		}
 		return fitLine(joined, width)
-	}
-	lines := []string{
-		renderTaskListMetaLine("cwd", cwd, false),
-		renderTaskListMetaLine("runtime", runtime, true),
 	}
 	if centered {
 		for i := range lines {

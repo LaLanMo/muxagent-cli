@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -23,11 +24,11 @@ type RuntimeService interface {
 }
 
 type App struct {
-	Service        RuntimeService
-	WorkDir        string
-	ConfigOverride string
-	LaunchConfig   *taskconfig.Config
-	Version        string
+	Service               RuntimeService
+	WorkDir               string
+	ConfigCatalog         *taskconfig.Catalog
+	LaunchRuntimeOverride appconfig.RuntimeID
+	Version               string
 }
 
 func (a App) Run(ctx context.Context) error {
@@ -37,7 +38,7 @@ func (a App) Run(ctx context.Context) error {
 		runDone <- a.Service.Run(runtimeCtx)
 	}()
 
-	model := NewModel(a.Service, a.WorkDir, a.ConfigOverride, a.LaunchConfig, a.Version)
+	model := NewModelWithCatalog(a.Service, a.WorkDir, a.ConfigCatalog, a.LaunchRuntimeOverride, a.Version)
 	_, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
 	shutdownErr := a.Service.PrepareShutdown(context.Background())
 	cancel()

@@ -21,8 +21,9 @@ type RunCommand struct {
 	TaskID      string
 	NodeRunID   string
 	Description string
-	WorkDir     string
+	ConfigAlias string
 	ConfigPath  string
+	WorkDir     string
 	Runtime     appconfig.RuntimeID
 	Payload     map[string]interface{}
 	Force       bool
@@ -48,6 +49,7 @@ type RunEvent struct {
 	NodeRunID    string
 	NodeName     string
 	TaskView     *taskdomain.TaskView
+	Config       *taskconfig.Config
 	Progress     *ProgressInfo
 	InputRequest *InputRequest
 	Error        *RunError

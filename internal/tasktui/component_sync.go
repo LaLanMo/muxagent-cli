@@ -55,9 +55,9 @@ func (m *Model) syncTaskList() {
 }
 
 func (m Model) newTaskListActionItem() taskListItem {
-	meta := "Create a new task in this working directory."
+	meta := "Create a new task with config " + m.selectedTaskConfigAlias() + "."
 	if len(m.tasks) == 0 {
-		meta = "No tasks in this working directory yet. Press Enter to start one."
+		meta = "No tasks in this working directory yet. Press Enter to start one with config " + m.selectedTaskConfigAlias() + "."
 	}
 	return taskListItem{
 		action: taskListActionNewTask,

@@ -37,7 +37,7 @@ func TestServiceHappyPathCompletesDefaultFlow(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "Implement login", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "Implement login"))
 	inputEvent := waitForEvent(t, service.Events(), EventInputRequested)
 	require.NotNil(t, inputEvent.InputRequest)
 	assert.Equal(t, InputKindHumanNode, inputEvent.InputRequest.Kind)
@@ -89,7 +89,7 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "Implement login", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "Implement login"))
 	requested := waitForEvent(t, service.Events(), EventInputRequested)
 	require.Equal(t, InputKindClarification, requested.InputRequest.Kind)
 
@@ -175,6 +175,8 @@ func TestServicePersistsRuntimeOverrideIntoClarificationResume(t *testing.T) {
 	service.Dispatch(RunCommand{
 		Type:        CommandStartTask,
 		Description: "Implement login",
+		ConfigAlias: taskconfig.DefaultAlias,
+		ConfigPath:  managedDefaultTestConfigPath(t),
 		WorkDir:     service.workDir,
 		Runtime:     appconfig.RuntimeClaudeCode,
 	})
@@ -203,6 +205,77 @@ func TestServicePersistsRuntimeOverrideIntoClarificationResume(t *testing.T) {
 	assert.Equal(t, appconfig.RuntimeClaudeCode, upsertRequests[1].Runtime)
 }
 
+func TestServicePersistsTaskConfigAlias(t *testing.T) {
+	cfg, err := taskconfig.LoadDefault()
+	require.NoError(t, err)
+	configPath := writeOverrideConfig(t, cfg)
+	service := newTestService(t, &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"upsert_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{
+		Type:        CommandStartTask,
+		Description: "Persist alias",
+		ConfigAlias: "bugfix",
+		ConfigPath:  configPath,
+		WorkDir:     service.workDir,
+	})
+	inputEvent := waitForEvent(t, service.Events(), EventInputRequested)
+
+	task, err := service.store.GetTask(context.Background(), inputEvent.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, "bugfix", task.ConfigAlias)
+	assert.Equal(t, configPath, task.ConfigPath)
+}
+
+func TestServiceStartTaskRequiresExplicitConfigIdentity(t *testing.T) {
+	service := newTestService(t, &fakeExecutor{})
+	defer service.Close()
+
+	tests := []struct {
+		name    string
+		command RunCommand
+		wantErr string
+	}{
+		{
+			name: "missing alias",
+			command: RunCommand{
+				Type:        CommandStartTask,
+				Description: "Missing alias",
+				ConfigPath:  managedDefaultTestConfigPath(t),
+				WorkDir:     service.workDir,
+			},
+			wantErr: "task config alias is required",
+		},
+		{
+			name: "missing path",
+			command: RunCommand{
+				Type:        CommandStartTask,
+				Description: "Missing path",
+				ConfigAlias: taskconfig.DefaultAlias,
+				WorkDir:     service.workDir,
+			},
+			wantErr: "task config path is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := service.handleCommand(context.Background(), tt.command)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestServiceReviewRejectLoopsBackToUpsertPlan(t *testing.T) {
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
@@ -222,7 +295,7 @@ func TestServiceReviewRejectLoopsBackToUpsertPlan(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "Implement login", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "Implement login"))
 	inputRequested := waitForEvent(t, service.Events(), EventInputRequested)
 	assert.Equal(t, "approve_plan", inputRequested.NodeName)
 
@@ -262,7 +335,7 @@ func TestServiceHumanNodeSubmissionCreatesAuditArtifactAndFeedsNextPrompt(t *tes
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "reject once", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "reject once"))
 	firstApproval := waitForEvent(t, service.Events(), EventInputRequested)
 	require.Equal(t, InputKindHumanNode, firstApproval.InputRequest.Kind)
 
@@ -342,7 +415,7 @@ func TestServicePublishesProgressAndPersistsSessionIDBeforeCompletion(t *testing
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "stream progress", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "stream progress"))
 	<-blockStarted
 
 	progressEvent := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
@@ -390,9 +463,9 @@ func TestServiceRejectsCrossTaskNodeRunInput(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "task one", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "task one"))
 	first := waitForEvent(t, service.Events(), EventInputRequested)
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "task two", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "task two"))
 	second := waitForEvent(t, service.Events(), EventInputRequested)
 
 	_, err := service.BuildInputRequest(context.Background(), first.TaskID, second.NodeRunID)
@@ -428,14 +501,14 @@ func TestServiceStartsSecondTaskWhileFirstAgentRunIsStillExecuting(t *testing.T)
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "task one", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "task one"))
 	firstCreated := waitForEvent(t, service.Events(), EventTaskCreated)
 	waitForEventWhere(t, service.Events(), time.Second, func(event RunEvent) bool {
 		return event.Type == EventNodeStarted && event.TaskID == firstCreated.TaskID
 	})
 	<-blockStarted
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "task two", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "task two"))
 	secondCreated := waitForEventWhere(t, service.Events(), time.Second, func(event RunEvent) bool {
 		return event.Type == EventTaskCreated && event.TaskID != firstCreated.TaskID
 	})
@@ -470,7 +543,7 @@ func TestServiceTaskFailureDoesNotAlsoPublishCommandError(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "fail once", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "fail once"))
 	failed := waitForEvent(t, service.Events(), EventTaskFailed)
 	require.NotNil(t, failed.TaskView)
 	assert.Equal(t, taskdomain.TaskStatusFailed, failed.TaskView.Status)
@@ -539,7 +612,7 @@ func TestServiceRejectsInvalidClarificationPayload(t *testing.T) {
 			defer cancel()
 			go func() { _ = service.Run(ctx) }()
 
-			service.Dispatch(RunCommand{Type: CommandStartTask, Description: "clarify", WorkDir: service.workDir})
+			service.Dispatch(startTaskCommand(t, service, "clarify"))
 			event := waitForEvent(t, service.Events(), EventInputRequested)
 			require.Equal(t, InputKindClarification, event.InputRequest.Kind)
 
@@ -571,7 +644,7 @@ func TestServiceJoinAllWaitsForAllBranchesBeforeJoining(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "join", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "join"))
 	completed := waitForEvent(t, service.Events(), EventTaskCompleted)
 	require.NotNil(t, completed.TaskView)
 	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
@@ -606,7 +679,7 @@ func TestServiceDoesNotCompleteUntilAllActiveTerminalRunsFinish(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "parallel terminals", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "parallel terminals"))
 	<-blockStarted
 	waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
 		return event.Type == EventNodeCompleted && event.NodeName == "left"
@@ -637,7 +710,7 @@ func TestServiceRetryNodeCreatesNewRunAndRecoversFailedTask(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "retry after failure", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "retry after failure"))
 	failed := waitForEvent(t, service.Events(), EventTaskFailed)
 	require.NotNil(t, failed.TaskView)
 	assert.Equal(t, taskdomain.TaskStatusFailed, failed.TaskView.Status)
@@ -673,7 +746,7 @@ func TestServiceDispatchesCommandErrorInsteadOfTaskFailureForInvalidRetry(t *tes
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "command error", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "command error"))
 	completed := waitForEvent(t, service.Events(), EventTaskCompleted)
 	require.NotNil(t, completed.TaskView)
 
@@ -707,7 +780,7 @@ func TestServiceRetryNodeRequiresForceAfterMaxIterations(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "force retry", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "force retry"))
 	failed := waitForEvent(t, service.Events(), EventTaskFailed)
 
 	err := service.retryNode(context.Background(), failed.TaskID, failed.NodeRunID, false)
@@ -747,7 +820,7 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "loop hits limit", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "loop hits limit"))
 	failed := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
 		return event.Type == EventTaskFailed && event.NodeName == "upsert_plan"
 	})
@@ -816,7 +889,7 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 	workDir := t.TempDir()
 	configPath := writeOverrideConfig(t, cfg)
 
-	firstService, err := NewService(workDir, configPath, &fakeExecutor{
+	firstService, err := NewService(workDir, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
 			"upsert_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
@@ -830,7 +903,13 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = firstService.Run(ctx) }()
-	firstService.Dispatch(RunCommand{Type: CommandStartTask, Description: "blocked restart", WorkDir: workDir})
+	firstService.Dispatch(RunCommand{
+		Type:        CommandStartTask,
+		Description: "blocked restart",
+		ConfigAlias: taskconfig.DefaultAlias,
+		ConfigPath:  configPath,
+		WorkDir:     workDir,
+	})
 	failed := waitForEventWhere(t, firstService.Events(), 5*time.Second, func(event RunEvent) bool {
 		return event.Type == EventTaskFailed && event.NodeName == "upsert_plan"
 	})
@@ -838,7 +917,7 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 	cancel()
 	require.NoError(t, firstService.Close())
 
-	secondService, err := NewService(workDir, configPath, &fakeExecutor{
+	secondService, err := NewService(workDir, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
 			"upsert_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
@@ -896,7 +975,7 @@ func TestNewServiceReconcilesStaleRunningRunsOnStartup(t *testing.T) {
 	}))
 	require.NoError(t, store.Close())
 
-	service, err := NewService(workDir, "", &fakeExecutor{steps: map[string][]taskexecutor.Result{}})
+	service, err := NewService(workDir, &fakeExecutor{steps: map[string][]taskexecutor.Result{}})
 	require.NoError(t, err)
 	defer service.Close()
 
@@ -925,7 +1004,7 @@ func TestPrepareShutdownMarksRunningRunsInterrupted(t *testing.T) {
 	defer cancel()
 	go func() { _ = service.Run(ctx) }()
 
-	service.Dispatch(RunCommand{Type: CommandStartTask, Description: "shutdown", WorkDir: service.workDir})
+	service.Dispatch(startTaskCommand(t, service, "shutdown"))
 	<-blockStarted
 	require.NoError(t, service.PrepareShutdown(context.Background()))
 	cancel()
@@ -994,19 +1073,42 @@ func (f *fakeExecutor) requestsForNode(nodeName string) []taskexecutor.Request {
 
 func newTestService(t *testing.T, executor taskexecutor.Executor) *Service {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	_, err := taskconfig.EnsureManagedDefaultAssets()
+	require.NoError(t, err)
 	workDir := t.TempDir()
-	service, err := NewService(workDir, "", executor)
+	service, err := NewService(workDir, executor)
 	require.NoError(t, err)
 	return service
 }
 
 func newTestServiceWithConfig(t *testing.T, cfg *taskconfig.Config, executor taskexecutor.Executor) *Service {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	configPath := managedDefaultTestConfigPath(t)
+	writeConfigAtPath(t, cfg, configPath)
 	workDir := t.TempDir()
-	configPath := writeOverrideConfig(t, cfg)
-	service, err := NewService(workDir, configPath, executor)
+	service, err := NewService(workDir, executor)
 	require.NoError(t, err)
 	return service
+}
+
+func managedDefaultTestConfigPath(t *testing.T) string {
+	t.Helper()
+	path, err := taskconfig.DefaultConfigPath()
+	require.NoError(t, err)
+	return path
+}
+
+func startTaskCommand(t *testing.T, service *Service, description string) RunCommand {
+	t.Helper()
+	return RunCommand{
+		Type:        CommandStartTask,
+		Description: description,
+		ConfigAlias: taskconfig.DefaultAlias,
+		ConfigPath:  managedDefaultTestConfigPath(t),
+		WorkDir:     service.workDir,
+	}
 }
 
 func waitForEvent(t *testing.T, events <-chan RunEvent, want EventType) RunEvent {
@@ -1145,6 +1247,14 @@ func materializeExecutorArtifacts(req taskexecutor.Request, result taskexecutor.
 func writeOverrideConfig(t *testing.T, cfg *taskconfig.Config) string {
 	t.Helper()
 	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "taskflow.yaml")
+	writeConfigAtPath(t, cfg, configPath)
+	return configPath
+}
+
+func writeConfigAtPath(t *testing.T, cfg *taskconfig.Config, configPath string) {
+	t.Helper()
+	configDir := filepath.Dir(configPath)
 	promptsDir := filepath.Join(configDir, "prompts")
 	require.NoError(t, os.MkdirAll(promptsDir, 0o755))
 
@@ -1163,9 +1273,7 @@ func writeOverrideConfig(t *testing.T, cfg *taskconfig.Config) string {
 
 	data, err := yaml.Marshal(cfg)
 	require.NoError(t, err)
-	configPath := filepath.Join(configDir, "taskflow.yaml")
 	require.NoError(t, os.WriteFile(configPath, data, 0o644))
-	return configPath
 }
 
 func joinAllRuntimeFixture() *taskconfig.Config {
@@ -1334,18 +1442,18 @@ func intPtr(value int) *int {
 
 func TestConcurrentInstanceRejected(t *testing.T) {
 	workDir := t.TempDir()
-	svc1, err := NewService(workDir, "", &fakeExecutor{})
+	svc1, err := NewService(workDir, &fakeExecutor{})
 	require.NoError(t, err)
 	defer svc1.Close()
 
 	// Second instance on the same workDir must fail.
-	_, err = NewService(workDir, "", &fakeExecutor{})
+	_, err = NewService(workDir, &fakeExecutor{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "another muxagent instance is already running")
 
 	// After closing the first service, a new one should succeed.
 	require.NoError(t, svc1.Close())
-	svc3, err := NewService(workDir, "", &fakeExecutor{})
+	svc3, err := NewService(workDir, &fakeExecutor{})
 	require.NoError(t, err)
 	defer svc3.Close()
 }

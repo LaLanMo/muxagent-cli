@@ -365,7 +365,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 
 			args := append([]string(nil), tt.cliArgs...)
 			if tt.configPath != nil {
-				args = append(args, "-c", tt.configPath(t, workDir))
+				installDefaultTaskConfigRegistryEntry(t, homeDir, "custom", tt.configPath(t, workDir))
 			}
 			session := startTUISession(t, binaryPath, workDir, args...)
 			tt.drive(t, session)
@@ -382,6 +382,80 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			session.quit(t)
 		})
 	}
+}
+
+func TestTaskTUICanCreateTasksWithDifferentConfigsInOneSession(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	fakeClaudeFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-claude.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	fakeClaudePath := filepath.Join(fakeDir, "claude")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+	copyExecutable(t, fakeClaudeFixture, fakeClaudePath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("FAKE_CLAUDE_FLOW", "happy")
+	t.Setenv("FAKE_CLAUDE_STATE_DIR", filepath.Join(workDir, ".fake-claude-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	defaultSourcePath := writeOverrideConfig(t, t.TempDir(), "default.yaml", singleAgentTerminalConfig(appconfig.RuntimeCodex))
+	reviewerSourcePath := writeOverrideConfig(t, t.TempDir(), "reviewer.yaml", singleAgentTerminalConfig(appconfig.RuntimeClaudeCode))
+	defaultInstalledPath := installManagedDefaultConfig(t, homeDir, defaultSourcePath)
+	installed := installTaskConfigRegistryEntries(t, homeDir, taskconfig.DefaultAlias, map[string]string{
+		"reviewer": reviewerSourcePath,
+	})
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "config default")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "config default")
+	session.submitNewTask(t, "Default config task")
+	session.waitForAll(t, 10*time.Second, "Task completed successfully")
+	session.send(t, "\x1b")
+	session.waitForAll(t, 5*time.Second, "new task", "done Default config task")
+
+	session.send(t, "\x1b[A")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "config default")
+	session.send(t, "\x0e")
+	session.waitForAll(t, 5*time.Second, "config reviewer")
+	session.submitNewTask(t, "Reviewer config task")
+	session.waitForAll(t, 10*time.Second, "Task completed successfully")
+	session.quit(t)
+
+	tasks, err := loadTaskRecords(workDir)
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+
+	byDescription := map[string]taskdomain.Task{}
+	for _, task := range tasks {
+		byDescription[task.Description] = task
+	}
+
+	defaultTask, ok := byDescription["Default config task"]
+	require.True(t, ok)
+	assert.Equal(t, taskconfig.DefaultAlias, defaultTask.ConfigAlias)
+	assert.Equal(t, defaultInstalledPath, defaultTask.ConfigPath)
+	defaultCfg, err := taskconfig.Load(taskstore.ConfigPath(workDir, defaultTask.ID))
+	require.NoError(t, err)
+	assert.Equal(t, appconfig.RuntimeCodex, defaultCfg.Runtime)
+
+	reviewerTask, ok := byDescription["Reviewer config task"]
+	require.True(t, ok)
+	assert.Equal(t, "reviewer", reviewerTask.ConfigAlias)
+	assert.Equal(t, installed["reviewer"], reviewerTask.ConfigPath)
+	reviewerCfg, err := taskconfig.Load(taskstore.ConfigPath(workDir, reviewerTask.ID))
+	require.NoError(t, err)
+	assert.Equal(t, appconfig.RuntimeClaudeCode, reviewerCfg.Runtime)
 }
 
 func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
@@ -771,6 +845,87 @@ func writeOverrideConfig(t *testing.T, workDir, fileName string, cfg *taskconfig
 	return configPath
 }
 
+func installDefaultTaskConfigRegistryEntry(t *testing.T, homeDir, alias, sourcePath string) {
+	t.Helper()
+	installTaskConfigRegistryEntries(t, homeDir, alias, map[string]string{alias: sourcePath})
+}
+
+func installManagedDefaultConfig(t *testing.T, homeDir, sourcePath string) string {
+	t.Helper()
+	taskConfigDir, err := taskconfig.TaskConfigDir()
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(taskConfigDir, homeDir))
+
+	destDir := filepath.Join(taskConfigDir, taskconfig.DefaultAlias)
+	return installConfigBundle(t, sourcePath, destDir)
+}
+
+func installTaskConfigRegistryEntries(t *testing.T, homeDir, defaultAlias string, sources map[string]string) map[string]string {
+	t.Helper()
+	taskConfigDir, err := taskconfig.TaskConfigDir()
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(taskConfigDir, homeDir))
+
+	entries := make([]taskconfig.RegistryEntry, 0, len(sources))
+	installedPaths := make(map[string]string, len(sources))
+	for alias, sourcePath := range sources {
+		destDir := filepath.Join(taskConfigDir, alias)
+		installedPaths[alias] = installConfigBundle(t, sourcePath, destDir)
+		entries = append(entries, taskconfig.RegistryEntry{
+			Alias: alias,
+			Path:  filepath.ToSlash(alias),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Alias < entries[j].Alias
+	})
+
+	_, err = taskconfig.SaveRegistry(taskconfig.Registry{
+		DefaultAlias: defaultAlias,
+		Configs:      entries,
+	})
+	require.NoError(t, err)
+	return installedPaths
+}
+
+func installConfigBundle(t *testing.T, sourceConfigPath, destDir string) string {
+	t.Helper()
+	sourceDir := filepath.Dir(sourceConfigPath)
+	copyTree(t, sourceDir, destDir)
+	destConfigPath := filepath.Join(destDir, "config.yaml")
+	if filepath.Base(sourceConfigPath) != "config.yaml" {
+		sourceData, err := os.ReadFile(sourceConfigPath)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(destConfigPath, sourceData, 0o644))
+	}
+	return destConfigPath
+}
+
+func copyTree(t *testing.T, sourceDir, destDir string) {
+	t.Helper()
+	require.NoError(t, filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destDir, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	}))
+}
+
 func (s *tuiSession) Write(p []byte) (int, error) {
 	s.bufferMu.Lock()
 	defer s.bufferMu.Unlock()
@@ -994,6 +1149,15 @@ func loadSingleTaskState(workDir string) (taskdomain.Task, []taskdomain.NodeRun,
 	return task, runs, taskdomain.DeriveTaskView(task, cfg, runs, blockedSteps), nil
 }
 
+func loadTaskRecords(workDir string) ([]taskdomain.Task, error) {
+	store, err := taskstore.Open(workDir)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return store.ListTasksByWorkDir(context.Background(), workDir)
+}
+
 func assertNodeRunCounts(t *testing.T, runs []taskdomain.NodeRun, want map[string]int) {
 	t.Helper()
 	got := map[string]int{}
@@ -1059,4 +1223,46 @@ func summarizeRuns(runs []taskdomain.NodeRun) []string {
 		out = append(out, run.NodeName+":"+string(run.Status))
 	}
 	return out
+}
+
+func singleAgentTerminalConfig(runtime appconfig.RuntimeID) *taskconfig.Config {
+	deny := false
+	return &taskconfig.Config{
+		Version: 1,
+		Runtime: runtime,
+		Clarification: taskconfig.ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: taskconfig.Topology{
+			MaxIterations: 1,
+			Entry:         "implement",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "implement"},
+				{Name: "done"},
+			},
+			Edges: []taskconfig.Edge{
+				{From: "implement", To: "done"},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"implement": {
+				Type:         taskconfig.NodeTypeAgent,
+				SystemPrompt: "./prompts/implement.md",
+				ResultSchema: taskconfig.JSONSchema{
+					Type:                 "object",
+					AdditionalProperties: &deny,
+					Required:             []string{"file_paths"},
+					Properties: map[string]*taskconfig.JSONSchema{
+						"file_paths": {
+							Type:  "array",
+							Items: &taskconfig.JSONSchema{Type: "string"},
+						},
+					},
+				},
+			},
+			"done": {Type: taskconfig.NodeTypeTerminal},
+		},
+	}
 }

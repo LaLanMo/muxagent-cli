@@ -41,7 +41,7 @@ func clampWrappedText(text string, width, maxLines int) string {
 func (m Model) renderDAG(width int) string {
 	cfg := m.currentConfig
 	if cfg == nil {
-		cfg = m.launchConfig
+		cfg = m.selectedTaskConfig()
 	}
 	if cfg == nil {
 		return ""

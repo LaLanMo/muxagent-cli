@@ -10,6 +10,8 @@ import (
 type Task struct {
 	ID          string
 	Description string
+	ConfigAlias string
+	ConfigPath  string
 	WorkDir     string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

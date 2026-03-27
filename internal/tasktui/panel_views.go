@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 )
 
 type builtEditorField struct {
@@ -107,20 +105,20 @@ func (m Model) buildNewTaskPanel(innerWidth int) builtPanel {
 }
 
 func (m Model) newTaskSubtitle() string {
-	cfg := m.launchConfig
-	if cfg == nil {
-		cfg, _ = taskconfig.LoadDefault()
+	entry := m.selectedTaskConfigEntry()
+	cfg := entry.Config
+	subtitle := "config " + entry.Alias
+	if runtime := strings.TrimSpace(string(m.effectiveLaunchRuntime())); runtime != "" {
+		subtitle += " · runtime " + runtime
 	}
-	subtitle := "default config"
-	if cfg != nil {
+	if cfg != nil && len(cfg.Topology.Nodes) > 0 {
 		nodeNames := make([]string, 0, len(cfg.Topology.Nodes))
 		for _, node := range cfg.Topology.Nodes {
 			nodeNames = append(nodeNames, node.Name)
 		}
-		subtitle += " · runtime " + string(m.effectiveLaunchRuntime()) + " · " + strings.Join(nodeNames, ", ")
-	}
-	if m.configOverride != "" {
-		subtitle = "custom config · " + filepath.Base(m.configOverride) + " · runtime " + string(m.effectiveLaunchRuntime())
+		subtitle += " · " + strings.Join(nodeNames, ", ")
+	} else if entry.Path != "" {
+		subtitle += " · source " + filepath.Base(entry.Path)
 	}
 	return subtitle
 }

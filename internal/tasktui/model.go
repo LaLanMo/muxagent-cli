@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -45,10 +46,12 @@ const (
 )
 
 type Model struct {
-	service        RuntimeService
-	workDir        string
-	configOverride string
-	version        string
+	service               RuntimeService
+	workDir               string
+	configCatalog         *taskconfig.Catalog
+	selectedConfigAlias   string
+	launchRuntimeOverride appconfig.RuntimeID
+	version               string
 
 	screen              Screen
 	returnScreen        Screen
@@ -57,7 +60,6 @@ type Model struct {
 	taskEventVersion    uint64
 	current             *taskdomain.TaskView
 	currentConfig       *taskconfig.Config
-	launchConfig        *taskconfig.Config
 	currentInput        *taskruntime.InputRequest
 	startupText         string
 	progressByRun       map[string][]string
@@ -86,16 +88,38 @@ type Model struct {
 	artifactPreview viewport.Model
 }
 
-func NewModel(service RuntimeService, workDir, configOverride string, launchConfig *taskconfig.Config, version string) Model {
+func NewModel(service RuntimeService, workDir, configPath string, launchConfig *taskconfig.Config, version string) Model {
+	catalog := configCatalogOrDefault(nil)
+	if launchConfig != nil {
+		catalog = &taskconfig.Catalog{
+			DefaultAlias: taskconfig.DefaultAlias,
+			Entries: []taskconfig.CatalogEntry{{
+				Alias:  taskconfig.DefaultAlias,
+				Path:   configPath,
+				Config: launchConfig,
+			}},
+		}
+	}
+	return newModel(service, workDir, catalog, "", version)
+}
+
+func NewModelWithCatalog(service RuntimeService, workDir string, configCatalog *taskconfig.Catalog, runtimeOverride appconfig.RuntimeID, version string) Model {
+	return newModel(service, workDir, configCatalog, runtimeOverride, version)
+}
+
+func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.Catalog, runtimeOverride appconfig.RuntimeID, version string) Model {
+	catalog := configCatalogOrDefault(configCatalog)
 	model := Model{
-		service:        service,
-		workDir:        workDir,
-		configOverride: configOverride,
-		version:        version,
-		screen:         ScreenTaskList,
-		returnScreen:   ScreenTaskList,
-		keys:           newAppKeyMap(),
-		taskList:       newTaskListModel(),
+		service:               service,
+		workDir:               workDir,
+		configCatalog:         catalog,
+		selectedConfigAlias:   catalog.DefaultAlias,
+		launchRuntimeOverride: runtimeOverride,
+		version:               version,
+		screen:                ScreenTaskList,
+		returnScreen:          ScreenTaskList,
+		keys:                  newAppKeyMap(),
+		taskList:              newTaskListModel(),
 		editor: newEditorController(EditorSpec{
 			Placeholder: "Describe your task...",
 			CharLimit:   512,
@@ -103,7 +127,6 @@ func NewModel(service RuntimeService, workDir, configOverride string, launchConf
 		}),
 		detailViewport:   newDetailViewport(),
 		artifactPreview:  newArtifactPreviewViewport(),
-		launchConfig:     launchConfig,
 		progressByRun:    map[string][]string{},
 		sessionByRun:     map[string]string{},
 		autoScrollDetail: true,

@@ -21,7 +21,6 @@ import (
 
 type Service struct {
 	workDir        string
-	configOverride string
 	lock           *instancelock.Lock
 	store          *taskstore.Store
 	engine         *taskengine.Engine
@@ -36,7 +35,7 @@ type Service struct {
 	shutdownReason string
 }
 
-func NewService(workDir, configOverride string, executor taskexecutor.Executor) (*Service, error) {
+func NewService(workDir string, executor taskexecutor.Executor) (*Service, error) {
 	workDir = taskstore.NormalizeWorkDir(workDir)
 	lock, err := instancelock.Acquire(workDir)
 	if err != nil {
@@ -48,15 +47,14 @@ func NewService(workDir, configOverride string, executor taskexecutor.Executor) 
 		return nil, err
 	}
 	service := &Service{
-		workDir:        workDir,
-		configOverride: configOverride,
-		lock:           lock,
-		store:          store,
-		engine:         taskengine.New(),
-		executor:       executor,
-		bus:            NewLocalBus(16, 64),
-		taskCancels:    map[string]context.CancelFunc{},
-		taskCtxs:       map[string]context.Context{},
+		workDir:     workDir,
+		lock:        lock,
+		store:       store,
+		engine:      taskengine.New(),
+		executor:    executor,
+		bus:         NewLocalBus(16, 64),
+		taskCancels: map[string]context.CancelFunc{},
+		taskCtxs:    map[string]context.Context{},
 	}
 	if err := service.reconcileStaleRunning(context.Background()); err != nil {
 		_ = store.Close()
@@ -125,7 +123,7 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	switch cmd.Type {
 	case CommandStartTask:
-		return s.startTask(ctx, cmd.Description, firstNonEmpty(cmd.WorkDir, s.workDir), firstNonEmpty(cmd.ConfigPath, s.configOverride), cmd.Runtime)
+		return s.startTask(ctx, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath, firstNonEmpty(cmd.WorkDir, s.workDir), cmd.Runtime)
 	case CommandSubmitInput:
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
 	case CommandRetryNode:
@@ -139,18 +137,28 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	}
 }
 
-func (s *Service) startTask(ctx context.Context, description, workDir, configOverride string, runtimeOverride appconfig.RuntimeID) error {
+func (s *Service) startTask(ctx context.Context, description, configAlias, configPath, workDir string, runtimeOverride appconfig.RuntimeID) error {
 	workDir = taskstore.NormalizeWorkDir(workDir)
 	taskID := uuid.NewString()
 	now := time.Now().UTC()
+	configAlias = strings.TrimSpace(configAlias)
+	if configAlias == "" {
+		return errors.New("task config alias is required")
+	}
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return errors.New("task config path is required")
+	}
 	task := taskdomain.Task{
 		ID:          taskID,
 		Description: description,
+		ConfigAlias: configAlias,
+		ConfigPath:  configPath,
 		WorkDir:     workDir,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	materialized, err := taskconfig.MaterializeWithRuntime(workDir, taskID, configOverride, runtimeOverride)
+	materialized, err := taskconfig.MaterializeWithRuntime(workDir, taskID, configPath, runtimeOverride)
 	if err != nil {
 		return err
 	}
@@ -158,7 +166,12 @@ func (s *Service) startTask(ctx context.Context, description, workDir, configOve
 		return err
 	}
 	view := taskdomain.DeriveTaskView(task, materialized.Config, nil, nil)
-	s.publish(RunEvent{Type: EventTaskCreated, TaskID: taskID, TaskView: &view})
+	s.publish(RunEvent{
+		Type:     EventTaskCreated,
+		TaskID:   taskID,
+		TaskView: &view,
+		Config:   materialized.Config,
+	})
 
 	entry := materialized.Config.Topology.Entry
 	nodeRun := taskdomain.NodeRun{

@@ -21,12 +21,13 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 	if event.TaskView != nil {
 		view := *event.TaskView
 		if m.hasPendingStartTask() && event.Type == taskruntime.EventTaskCreated {
-			m.activateTask(view, m.currentConfig, nil)
+			m.editor.ClearSlot(editorSlotNewTask)
+			m.activateTask(view, event.Config, nil)
 			m.syncPendingRuntimeCommandTask(event.TaskID)
 		} else {
 			m.current = &view
-			if m.currentConfig == nil {
-				m.currentConfig = m.launchConfig
+			if event.Config != nil {
+				m.currentConfig = event.Config
 			}
 		}
 	}
@@ -103,6 +104,16 @@ func (m *Model) restoreCommandFailureState() {
 	}
 	m.startupText = ""
 	switch m.pendingRuntimeCmd.kind {
+	case pendingRuntimeCommandStartTask:
+		if m.pendingRuntimeCmd.taskID != "" {
+			return
+		}
+		m.activeTaskID = ""
+		m.current = nil
+		m.currentConfig = nil
+		m.currentInput = nil
+		m.setScreen(ScreenNewTask)
+		m.autoScrollDetail = false
 	case pendingRuntimeCommandRetry, pendingRuntimeCommandForceRetry, pendingRuntimeCommandContinueBlocked:
 		screen := m.pendingRuntimeCmd.restoreScreen
 		if screen == ScreenTaskList {
