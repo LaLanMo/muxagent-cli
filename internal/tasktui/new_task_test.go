@@ -43,6 +43,10 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	assert.Contains(t, strippedView(view.Content), "runtime codex")
 	assert.Contains(t, strippedView(view.Content), "Enter newline")
 	assert.Contains(t, strippedView(view.Content), "Tab start")
+	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Ctrl+P prev config"))
+	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Ctrl+N next config"))
+	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Enter newline"))
+	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Tab start"))
 	assert.NotContains(t, strippedView(view.Content), "Enter select")
 }
 
