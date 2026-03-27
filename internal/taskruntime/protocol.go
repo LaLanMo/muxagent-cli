@@ -24,6 +24,7 @@ type RunCommand struct {
 	ConfigAlias string
 	ConfigPath  string
 	WorkDir     string
+	UseWorktree bool
 	Runtime     appconfig.RuntimeID
 	Payload     map[string]interface{}
 	Force       bool

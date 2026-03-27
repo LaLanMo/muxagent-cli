@@ -16,17 +16,18 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime/instancelock"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/google/uuid"
 )
 
 type Service struct {
-	workDir        string
-	lock           *instancelock.Lock
-	store          *taskstore.Store
-	engine         *taskengine.Engine
-	executor       taskexecutor.Executor
-	bus            *LocalBus
-	nodeWG         sync.WaitGroup
+	workDir  string
+	lock     *instancelock.Lock
+	store    *taskstore.Store
+	engine   *taskengine.Engine
+	executor taskexecutor.Executor
+	bus      *LocalBus
+	nodeWG   sync.WaitGroup
 
 	mu             sync.Mutex
 	rootCtx        context.Context
@@ -123,7 +124,7 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	switch cmd.Type {
 	case CommandStartTask:
-		return s.startTask(ctx, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath, firstNonEmpty(cmd.WorkDir, s.workDir), cmd.Runtime)
+		return s.startTask(ctx, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath, firstNonEmpty(cmd.WorkDir, s.workDir), cmd.UseWorktree, cmd.Runtime)
 	case CommandSubmitInput:
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
 	case CommandRetryNode:
@@ -137,7 +138,7 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	}
 }
 
-func (s *Service) startTask(ctx context.Context, description, configAlias, configPath, workDir string, runtimeOverride appconfig.RuntimeID) error {
+func (s *Service) startTask(ctx context.Context, description, configAlias, configPath, workDir string, useWorktree bool, runtimeOverride appconfig.RuntimeID) (err error) {
 	workDir = taskstore.NormalizeWorkDir(workDir)
 	taskID := uuid.NewString()
 	now := time.Now().UTC()
@@ -149,20 +150,36 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 	if configPath == "" {
 		return errors.New("task config path is required")
 	}
-	task := taskdomain.Task{
-		ID:          taskID,
-		Description: description,
-		ConfigAlias: configAlias,
-		ConfigPath:  configPath,
-		WorkDir:     workDir,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
 	materialized, err := taskconfig.MaterializeWithRuntime(workDir, taskID, configPath, runtimeOverride)
 	if err != nil {
 		return err
 	}
-	if err := s.store.CreateTask(ctx, task); err != nil {
+	executionDir, rollbackWorktree, err := prepareTaskExecutionDir(workDir, taskID, useWorktree)
+	if rollbackWorktree != nil {
+		defer func() {
+			if err == nil {
+				return
+			}
+			cleanupErr := rollbackWorktree()
+			if cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("rollback worktree: %w", cleanupErr))
+			}
+		}()
+	}
+	if err != nil {
+		return err
+	}
+	task := taskdomain.Task{
+		ID:           taskID,
+		Description:  description,
+		ConfigAlias:  configAlias,
+		ConfigPath:   configPath,
+		WorkDir:      workDir,
+		ExecutionDir: executionDir,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err = s.store.CreateTask(ctx, task); err != nil {
 		return err
 	}
 	view := taskdomain.DeriveTaskView(task, materialized.Config, nil, nil)
@@ -181,7 +198,7 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 		Status:    initialStatus(materialized.Config.NodeDefinitions[entry]),
 		StartedAt: now,
 	}
-	if err := s.store.SaveNodeRun(ctx, nodeRun); err != nil {
+	if err = s.store.SaveNodeRun(ctx, nodeRun); err != nil {
 		return err
 	}
 	s.engine.RegisterEntryRun(taskID, nodeRun)
@@ -192,7 +209,38 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 	s.taskCtxs[taskID] = taskCtx
 	s.mu.Unlock()
 
-	return s.startNode(taskCtx, task, materialized.Config, nodeRun)
+	if err = s.startNode(taskCtx, task, materialized.Config, nodeRun); err != nil {
+		return err
+	}
+	rollbackWorktree = nil
+	return nil
+}
+
+func prepareTaskExecutionDir(workDir, taskID string, useWorktree bool) (string, func() error, error) {
+	if !useWorktree {
+		return workDir, nil, nil
+	}
+
+	repoRoot, err := worktree.FindRepoRoot(workDir)
+	if err != nil {
+		return "", nil, err
+	}
+	relPath, err := worktree.NormalizeRepoRelativePath(repoRoot, workDir)
+	if err != nil {
+		return "", nil, err
+	}
+	worktreePath, err := worktree.Create(repoRoot, taskID)
+	if err != nil {
+		return "", nil, err
+	}
+	rollback := func() error {
+		return worktree.Cleanup(repoRoot, worktreePath, worktree.BranchName(taskID))
+	}
+	executionDir, err := worktree.ResolveWorktreeCWD(worktreePath, relPath)
+	if err != nil {
+		return "", rollback, err
+	}
+	return executionDir, rollback, nil
 }
 
 func (s *Service) submitInput(ctx context.Context, taskID, nodeRunID string, payload map[string]interface{}) error {

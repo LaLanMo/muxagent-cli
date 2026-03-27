@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -234,6 +236,101 @@ func TestServicePersistsTaskConfigAlias(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "bugfix", task.ConfigAlias)
 	assert.Equal(t, configPath, task.ConfigPath)
+}
+
+func TestServicePersistsExecutionDirAndExecutesFromWorktree(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, err := taskconfig.EnsureManagedDefaultAssets()
+	require.NoError(t, err)
+
+	cfg := singleAgentTerminalFixture()
+	writeConfigAtPath(t, cfg, managedDefaultTestConfigPath(t))
+
+	repo := initRuntimeGitRepoWithCommit(t, true)
+	workDir := filepath.Join(repo, "packages", "app")
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
+		},
+	}
+	service, err := NewService(workDir, executor)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{
+		Type:        CommandStartTask,
+		Description: "worktree task",
+		ConfigAlias: taskconfig.DefaultAlias,
+		ConfigPath:  managedDefaultTestConfigPath(t),
+		WorkDir:     workDir,
+		UseWorktree: true,
+	})
+	completed := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	task, err := service.store.GetTask(context.Background(), completed.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, workDir, task.WorkDir)
+	assert.NotEqual(t, workDir, task.ExecutionDir)
+	assert.Equal(t, task.ExecutionDir, task.ExecutionWorkDir())
+	assert.FileExists(t, taskstore.DBPath(task.WorkDir))
+	assert.FileExists(t, taskstore.ConfigPath(task.WorkDir, task.ID))
+	assert.NoFileExists(t, taskstore.DBPath(task.ExecutionDir))
+
+	worktreeRoot, err := worktree.FindRepoRoot(task.ExecutionDir)
+	require.NoError(t, err)
+	relPath, err := filepath.Rel(worktreeRoot, task.ExecutionDir)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("packages", "app"), relPath)
+
+	requests := executor.requestsForNode("implement")
+	require.Len(t, requests, 1)
+	assert.Equal(t, task.ExecutionDir, requests[0].WorkDir)
+	assert.Equal(t, task.WorkDir, requests[0].Task.WorkDir)
+	assert.Equal(t, task.ExecutionDir, requests[0].Task.ExecutionDir)
+
+	branchOut, err := exec.Command("git", "-C", repo, "branch", "--list", worktree.BranchName(task.ID)).CombinedOutput()
+	require.NoError(t, err, string(branchOut))
+	assert.Contains(t, strings.TrimSpace(string(branchOut)), worktree.BranchName(task.ID))
+}
+
+func TestServiceWorktreeStartupRollsBackWhenRepoSubdirIsMissingInNewWorktree(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, err := taskconfig.EnsureManagedDefaultAssets()
+	require.NoError(t, err)
+
+	cfg := singleAgentTerminalFixture()
+	writeConfigAtPath(t, cfg, managedDefaultTestConfigPath(t))
+
+	repo := initRuntimeGitRepoWithCommit(t, false)
+	workDir := filepath.Join(repo, "packages", "app")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+
+	service, err := NewService(workDir, &fakeExecutor{})
+	require.NoError(t, err)
+	defer service.Close()
+	service.rootCtx = context.Background()
+
+	err = service.startTask(context.Background(), "missing subdir", taskconfig.DefaultAlias, managedDefaultTestConfigPath(t), workDir, true, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "saved worktree cwd unavailable")
+
+	tasks, err := service.store.ListTasksByWorkDir(context.Background(), workDir)
+	require.NoError(t, err)
+	assert.Empty(t, tasks)
+
+	worktreeList, err := exec.Command("git", "-C", repo, "worktree", "list", "--porcelain").CombinedOutput()
+	require.NoError(t, err, string(worktreeList))
+	assert.NotContains(t, string(worktreeList), filepath.Join(home, ".muxagent", "worktrees"))
+
+	branchOut, err := exec.Command("git", "-C", repo, "branch", "--list", "muxagent/*").CombinedOutput()
+	require.NoError(t, err, string(branchOut))
+	assert.Empty(t, strings.TrimSpace(string(branchOut)))
 }
 
 func TestServiceStartTaskRequiresExplicitConfigIdentity(t *testing.T) {
@@ -1109,6 +1206,35 @@ func startTaskCommand(t *testing.T, service *Service, description string) RunCom
 		ConfigPath:  managedDefaultTestConfigPath(t),
 		WorkDir:     service.workDir,
 	}
+}
+
+func initRuntimeGitRepoWithCommit(t *testing.T, includeSubdir bool) string {
+	t.Helper()
+
+	repo := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(repo)
+	require.NoError(t, err)
+	repo = resolved
+	runRuntimeGit(t, repo, "git", "init")
+	runRuntimeGit(t, repo, "git", "config", "user.email", "test@test.com")
+	runRuntimeGit(t, repo, "git", "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello"), 0o644))
+	if includeSubdir {
+		subdir := filepath.Join(repo, "packages", "app")
+		require.NoError(t, os.MkdirAll(subdir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(subdir, ".keep"), []byte("keep"), 0o644))
+	}
+	runRuntimeGit(t, repo, "git", "add", ".")
+	runRuntimeGit(t, repo, "git", "commit", "-m", "init")
+	return repo
+}
+
+func runRuntimeGit(t *testing.T, dir string, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "command %s %v failed: %s", name, args, string(out))
 }
 
 func waitForEvent(t *testing.T, events <-chan RunEvent, want EventType) RunEvent {

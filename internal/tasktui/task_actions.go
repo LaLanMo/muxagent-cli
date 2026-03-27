@@ -9,6 +9,28 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
 
+func (m Model) defaultNewTaskUseWorktree() bool {
+	return m.worktreeLaunchAvailable && m.rememberedUseWorktree
+}
+
+func (m *Model) toggleNewTaskWorktree() bool {
+	if !m.worktreeLaunchAvailable {
+		return false
+	}
+	m.newTask.useWorktree = !m.newTask.useWorktree
+	return true
+}
+
+func (m *Model) persistNewTaskWorktreePreference() {
+	if !m.worktreeLaunchAvailable {
+		return
+	}
+	m.rememberedUseWorktree = m.newTask.useWorktree
+	if m.saveTaskLaunchPreference != nil {
+		_ = m.saveTaskLaunchPreference(m.newTask.useWorktree)
+	}
+}
+
 func (m *Model) submitNewTask() tea.Cmd {
 	desc := strings.TrimSpace(m.editor.Value())
 	if desc == "" {
@@ -24,14 +46,16 @@ func (m *Model) submitNewTask() tea.Cmd {
 	m.pendingRuntimeCmd = &pendingRuntimeCommand{
 		kind: pendingRuntimeCommandStartTask,
 	}
+	m.persistNewTaskWorktreePreference()
 	m.startupText = "Starting task…"
 	m.errorText = ""
 	m.current = &taskdomain.TaskView{
 		Task: taskdomain.Task{
-			Description: desc,
-			ConfigAlias: entry.Alias,
-			ConfigPath:  entry.Path,
-			WorkDir:     m.workDir,
+			Description:  desc,
+			ConfigAlias:  entry.Alias,
+			ConfigPath:   entry.Path,
+			WorkDir:      m.workDir,
+			ExecutionDir: m.workDir,
 		},
 		Status: taskdomain.TaskStatusRunning,
 	}
@@ -45,6 +69,7 @@ func (m *Model) submitNewTask() tea.Cmd {
 		ConfigAlias: entry.Alias,
 		WorkDir:     m.workDir,
 		ConfigPath:  entry.Path,
+		UseWorktree: m.newTask.useWorktree,
 		Runtime:     m.effectiveLaunchRuntime(),
 	})
 }

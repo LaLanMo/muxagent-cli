@@ -50,7 +50,16 @@ func (m Model) taskListHint() string {
 }
 
 func (m Model) newTaskModalHint() string {
-	return joinHintParts("Ctrl+P prev config", "Ctrl+N next config", "Enter newline", "Tab start", "Esc cancel")
+	parts := []string{"Ctrl+P prev config", "Ctrl+N next config"}
+	if m.worktreeLaunchAvailable {
+		mode := "off"
+		if m.newTask.useWorktree {
+			mode = "on"
+		}
+		parts = append(parts, "Ctrl+T worktree "+mode)
+	}
+	parts = append(parts, "Enter newline", "Tab start", "Esc cancel")
+	return joinHintParts(parts...)
 }
 
 func (m Model) renderTaskListFooter(surface surfaceRect) string {

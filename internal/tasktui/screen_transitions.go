@@ -8,6 +8,7 @@ func (m *Model) openNewTask() tea.Cmd {
 	}
 	m.setScreen(ScreenNewTask)
 	m.focusRegion = FocusRegionComposer
+	m.newTask.useWorktree = m.defaultNewTaskUseWorktree()
 	m.editor.ClearSlot(editorSlotNewTask)
 	m.syncComponents()
 	focusCmd := m.editor.Focus()

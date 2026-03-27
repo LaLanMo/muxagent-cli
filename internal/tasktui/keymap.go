@@ -11,6 +11,7 @@ type appKeyMap struct {
 	down            key.Binding
 	nextFocus       key.Binding
 	toggleDetailTab key.Binding
+	toggleWorktree  key.Binding
 	prevConfig      key.Binding
 	nextConfig      key.Binding
 	cloneConfig     key.Binding
@@ -28,6 +29,7 @@ func newAppKeyMap() appKeyMap {
 		down:            key.NewBinding(key.WithKeys("down")),
 		nextFocus:       key.NewBinding(key.WithKeys("tab")),
 		toggleDetailTab: key.NewBinding(key.WithKeys("shift+tab")),
+		toggleWorktree:  key.NewBinding(key.WithKeys("ctrl+t")),
 		prevConfig:      key.NewBinding(key.WithKeys("ctrl+p")),
 		nextConfig:      key.NewBinding(key.WithKeys("ctrl+n")),
 		cloneConfig:     key.NewBinding(key.WithKeys("n")),

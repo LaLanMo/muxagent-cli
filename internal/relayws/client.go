@@ -44,72 +44,6 @@ var (
 	ErrStaleRelaySession = errors.New("stale relay session")
 )
 
-func canonicalExistingPath(path string) (string, error) {
-	if path == "" {
-		return "", nil
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Clean(resolved), nil
-}
-
-func normalizeRepoRelativePath(repoRoot, cwd string) (string, error) {
-	canonicalRepoRoot, err := canonicalExistingPath(repoRoot)
-	if err != nil {
-		return "", fmt.Errorf("canonicalize repo root: %w", err)
-	}
-	canonicalCWD, err := canonicalExistingPath(cwd)
-	if err != nil {
-		return "", fmt.Errorf("canonicalize cwd: %w", err)
-	}
-	relPath, err := filepath.Rel(canonicalRepoRoot, canonicalCWD)
-	if err != nil {
-		return "", err
-	}
-	relPath = filepath.Clean(relPath)
-	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("cwd %q escapes repo root %q", canonicalCWD, canonicalRepoRoot)
-	}
-	return relPath, nil
-}
-
-func resolveMappedWorktreeCWD(wt *worktree.Mapping) (string, error) {
-	canonicalRoot, err := canonicalExistingPath(wt.WorktreePath)
-	if err != nil {
-		return "", fmt.Errorf("saved worktree path unavailable: %w", err)
-	}
-
-	relPath := filepath.Clean(strings.TrimSpace(wt.RelativeCWD))
-	switch relPath {
-	case "", ".":
-		if info, err := os.Stat(canonicalRoot); err != nil {
-			return "", fmt.Errorf("saved worktree cwd unavailable: %w", err)
-		} else if !info.IsDir() {
-			return "", fmt.Errorf("saved worktree cwd is not a directory: %s", canonicalRoot)
-		}
-		return canonicalRoot, nil
-	}
-	if filepath.IsAbs(relPath) || relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("saved worktree cwd is invalid: %s", wt.RelativeCWD)
-	}
-
-	target := filepath.Join(canonicalRoot, relPath)
-	info, err := os.Stat(target)
-	if err != nil {
-		return "", fmt.Errorf("saved worktree cwd unavailable: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("saved worktree cwd is not a directory: %s", target)
-	}
-	return target, nil
-}
-
 // RuntimeClient is the subset of runtime.Client that the relay needs.
 // Defined here to avoid a circular import with the runtime package.
 type RuntimeClient interface {
@@ -602,16 +536,23 @@ func (c *Client) rpcCreateSession(ctx context.Context, params appwire.CreateSess
 			return nil, fmt.Sprintf("failed to create worktree: %v", err)
 		}
 		// Preserve subdirectory offset within the repo.
-		relPath, err := normalizeRepoRelativePath(repoRoot, cwd)
+		relPath, err := worktree.NormalizeRepoRelativePath(repoRoot, cwd)
 		if err != nil {
 			return nil, fmt.Sprintf("failed to compute relative path: %v", err)
 		}
-		actualCWD = filepath.Join(wtPath, relPath)
+		actualCWD, err = worktree.WorktreeCWDPath(wtPath, relPath)
+		if err != nil {
+			cleanupErr := worktree.Cleanup(repoRoot, wtPath, worktree.BranchName(wtID))
+			if cleanupErr != nil {
+				return nil, fmt.Sprintf("failed to resolve worktree path: %v (cleanup: %v)", err, cleanupErr)
+			}
+			return nil, fmt.Sprintf("failed to resolve worktree path: %v", err)
+		}
 		wtMapping = &worktree.Mapping{
 			WorktreeID:   wtID,
 			WorktreePath: wtPath,
 			RepoRoot:     repoRoot,
-			BranchName:   "muxagent/" + wtID,
+			BranchName:   worktree.BranchName(wtID),
 			RelativeCWD:  relPath,
 		}
 	}
@@ -663,7 +604,7 @@ func (c *Client) rpcLoadSession(ctx context.Context, params appwire.LoadSessionP
 	// If this session was created with a worktree, use that path instead.
 	if c.wtStore != nil {
 		if wt := c.wtStore.Get(sessionID); wt != nil {
-			resolvedCWD, err := resolveMappedWorktreeCWD(wt)
+			resolvedCWD, err := worktree.ResolveMappedCWD(wt)
 			if err != nil {
 				return nil, err.Error()
 			}

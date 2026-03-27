@@ -117,6 +117,13 @@ func (m Model) newTaskSubtitle() string {
 	if runtime := strings.TrimSpace(string(m.effectiveLaunchRuntime())); runtime != "" {
 		subtitle += " · runtime " + runtime
 	}
+	if m.worktreeLaunchAvailable {
+		mode := "off"
+		if m.newTask.useWorktree {
+			mode = "on"
+		}
+		subtitle += " · worktree " + mode
+	}
 	if cfg != nil && len(cfg.Topology.Nodes) > 0 {
 		nodeNames := make([]string, 0, len(cfg.Topology.Nodes))
 		for _, node := range cfg.Topology.Nodes {

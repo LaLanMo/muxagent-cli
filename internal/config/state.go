@@ -29,6 +29,10 @@ type DaemonState struct {
 	LogPath               string `json:"log_path,omitempty"`
 }
 
+type TaskLaunchPreferences struct {
+	UseWorktree bool `json:"use_worktree"`
+}
+
 // SetToken encrypts and stores the token.
 func (s *DaemonState) SetToken(token string) error {
 	localKey, err := localkey.DeriveKey(localKeyInfo)
@@ -91,6 +95,14 @@ func StateLockPath() (string, error) {
 	return filepath.Join(home, ".muxagent", "daemon.state.json.lock"), nil
 }
 
+func TaskLaunchPreferencesPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".muxagent", "task-launch-preferences.json"), nil
+}
+
 func SaveState(state DaemonState) (string, error) {
 	path, err := StatePath()
 	if err != nil {
@@ -102,6 +114,28 @@ func SaveState(state DaemonState) (string, error) {
 	}
 
 	payload, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
+func SaveTaskLaunchPreferences(prefs TaskLaunchPreferences) (string, error) {
+	path, err := TaskLaunchPreferencesPath()
+	if err != nil {
+		return "", err
+	}
+
+	if err := privdir.Ensure(filepath.Dir(path)); err != nil {
+		return "", err
+	}
+
+	payload, err := json.MarshalIndent(prefs, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -130,6 +164,25 @@ func LoadState() (DaemonState, error) {
 	}
 
 	return state, nil
+}
+
+func LoadTaskLaunchPreferences() TaskLaunchPreferences {
+	path, err := TaskLaunchPreferencesPath()
+	if err != nil {
+		return TaskLaunchPreferences{}
+	}
+
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return TaskLaunchPreferences{}
+	}
+
+	var prefs TaskLaunchPreferences
+	if err := json.Unmarshal(payload, &prefs); err != nil {
+		return TaskLaunchPreferences{}
+	}
+
+	return prefs
 }
 
 func ClearState() error {

@@ -20,19 +20,25 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/LaLanMo/muxagent-cli/internal/tasktui"
 	cliversion "github.com/LaLanMo/muxagent-cli/internal/version"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
-type launchFuncWithRuntime func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error
+type taskTUILaunchOptions struct {
+	Runtime            appconfig.RuntimeID
+	WorktreeAvailable  bool
+	DefaultUseWorktree bool
+}
+
+type launchFuncWithOptions func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error
 
 type rootOptions struct {
-	launchTUI launchFuncWithRuntime
+	launchTUI launchFuncWithOptions
 }
 
 func NewRootCmd() *cobra.Command {
 	return newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
-			workDir = taskstore.NormalizeWorkDir(workDir)
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
 			catalog, err := loadTaskConfigCatalog()
 			if err != nil {
 				return err
@@ -46,11 +52,17 @@ func NewRootCmd() *cobra.Command {
 			}
 			defer service.Close()
 			return tasktui.App{
-				Service:               service,
-				WorkDir:               workDir,
-				ConfigCatalog:         catalog,
-				LaunchRuntimeOverride: runtime,
-				Version:               cliversion.CLIString(),
+				Service:                 service,
+				WorkDir:                 workDir,
+				ConfigCatalog:           catalog,
+				LaunchRuntimeOverride:   launch.Runtime,
+				WorktreeLaunchAvailable: launch.WorktreeAvailable,
+				DefaultUseWorktree:      launch.DefaultUseWorktree,
+				SaveTaskLaunchPreference: func(useWorktree bool) error {
+					_, err := appconfig.SaveTaskLaunchPreferences(appconfig.TaskLaunchPreferences{UseWorktree: useWorktree})
+					return err
+				},
+				Version: cliversion.CLIString(),
 			}.Run(ctx)
 		},
 	})
@@ -74,7 +86,17 @@ func newRootCmd(opts rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return opts.launchTUI(cmd.Context(), workDir, runtime)
+			workDir = taskstore.NormalizeWorkDir(workDir)
+			worktreeAvailable := false
+			if _, err := worktree.FindRepoRoot(workDir); err == nil {
+				worktreeAvailable = true
+			}
+			prefs := appconfig.LoadTaskLaunchPreferences()
+			return opts.launchTUI(cmd.Context(), workDir, taskTUILaunchOptions{
+				Runtime:            runtime,
+				WorktreeAvailable:  worktreeAvailable,
+				DefaultUseWorktree: worktreeAvailable && prefs.UseWorktree,
+			})
 		},
 	}
 	rootCmd.SetVersionTemplate("{{.Version}}\n")

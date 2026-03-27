@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -109,7 +110,7 @@ func TestRootLaunchesTaskTUIOnBareInvocation(t *testing.T) {
 		gotWorkDir string
 	)
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
 			called = true
 			gotWorkDir = workDir
 			return nil
@@ -138,8 +139,8 @@ func TestRootRejectsRemovedConfigFlag(t *testing.T) {
 func TestRootPassesRuntimeOverrideToTaskTUI(t *testing.T) {
 	var gotRuntime appconfig.RuntimeID
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
-			gotRuntime = runtime
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			gotRuntime = launch.Runtime
 			return nil
 		},
 	})
@@ -155,7 +156,7 @@ func TestRootPassesRuntimeOverrideToTaskTUI(t *testing.T) {
 
 func TestRootRejectsInvalidRuntime(t *testing.T) {
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
 			return nil
 		},
 	})
@@ -168,7 +169,7 @@ func TestRootRejectsInvalidRuntime(t *testing.T) {
 
 func TestRootPropagatesTaskTUILaunchError(t *testing.T) {
 	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir string, runtime appconfig.RuntimeID) error {
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
 			return errors.New("boom")
 		},
 	})
@@ -180,6 +181,89 @@ func TestRootPropagatesTaskTUILaunchError(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestRootLaunchesTaskTUIWithWorktreeAvailabilityInGitRepo(t *testing.T) {
+	repo := initRootTestGitRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	prevWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(prevWD))
+	})
+
+	var got taskTUILaunchOptions
+	cmd := newRootCmd(rootOptions{
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			got = launch
+			return nil
+		},
+	})
+
+	err = cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, got.WorktreeAvailable)
+	assert.False(t, got.DefaultUseWorktree)
+}
+
+func TestRootLaunchesTaskTUIWithoutWorktreeOutsideGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	prevWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(prevWD))
+	})
+
+	_, err = appconfig.SaveTaskLaunchPreferences(appconfig.TaskLaunchPreferences{UseWorktree: true})
+	require.NoError(t, err)
+
+	var got taskTUILaunchOptions
+	cmd := newRootCmd(rootOptions{
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			got = launch
+			return nil
+		},
+	})
+
+	err = cmd.Execute()
+	require.NoError(t, err)
+	assert.False(t, got.WorktreeAvailable)
+	assert.False(t, got.DefaultUseWorktree)
+}
+
+func TestRootIgnoresMalformedTaskLaunchPreferences(t *testing.T) {
+	repo := initRootTestGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	prefsPath, err := appconfig.TaskLaunchPreferencesPath()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(prefsPath), 0o755))
+	require.NoError(t, os.WriteFile(prefsPath, []byte("{"), 0o600))
+
+	prevWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(prevWD))
+	})
+
+	called := false
+	cmd := newRootCmd(rootOptions{
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			called = true
+			assert.True(t, launch.WorktreeAvailable)
+			assert.False(t, launch.DefaultUseWorktree)
+			return nil
+		},
+	})
+
+	err = cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, called)
 }
 
 func TestLoadTaskConfigCatalogUsesRegistryDefault(t *testing.T) {
@@ -271,4 +355,22 @@ func TestLoadTaskConfigCatalogAllowsBrokenRegistryConfigAtStartup(t *testing.T) 
 	entry, ok := catalog.Entry("broken")
 	require.True(t, ok)
 	assert.Equal(t, filepath.Join(bundleDir, "config.yaml"), entry.Path)
+}
+
+func initRootTestGitRepo(t *testing.T) string {
+	t.Helper()
+
+	repo := t.TempDir()
+	runRootGit(t, repo, "git", "init")
+	runRootGit(t, repo, "git", "config", "user.email", "test@test.com")
+	runRootGit(t, repo, "git", "config", "user.name", "Test")
+	return repo
+}
+
+func runRootGit(t *testing.T, dir string, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "command %s %v failed: %s", name, args, string(out))
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"github.com/stretchr/testify/assert"
@@ -491,6 +492,75 @@ func TestTaskTUICanCreateTasksWithDifferentConfigsInOneSession(t *testing.T) {
 	reviewerCfg, err := taskconfig.Load(taskstore.ConfigPath(workDir, reviewerTask.ID))
 	require.NoError(t, err)
 	assert.Equal(t, appconfig.RuntimeClaudeCode, reviewerCfg.Runtime)
+}
+
+func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	fakeClaudeFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-claude.sh")
+	basePath := os.Getenv("PATH")
+
+	repoRoot := initTaskTUIE2EGitRepo(t, true)
+	workDir := filepath.Join(repoRoot, "packages", "app")
+	homeDir := canonicalPath(t, t.TempDir())
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	fakeClaudePath := filepath.Join(fakeDir, "claude")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+	copyExecutable(t, fakeClaudeFixture, fakeClaudePath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("FAKE_CLAUDE_FLOW", "happy")
+	t.Setenv("FAKE_CLAUDE_STATE_DIR", filepath.Join(workDir, ".fake-claude-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "worktree off", "Ctrl+T worktree off")
+	session.send(t, "\x14")
+	session.resize(t, 141, 40)
+	session.waitForAll(t, 5*time.Second, "worktree on", "Ctrl+T worktree on")
+	session.submitNewTask(t, "Worktree-backed task")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.confirm(t)
+
+	task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
+	require.Len(t, runs, 6)
+	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+	assert.Equal(t, workDir, task.WorkDir)
+	assert.NotEqual(t, workDir, task.ExecutionDir)
+	assert.True(t, strings.HasPrefix(task.ExecutionDir, filepath.Join(homeDir, ".muxagent", "worktrees")+string(os.PathSeparator)))
+	assert.FileExists(t, taskstore.DBPath(task.WorkDir))
+	assert.FileExists(t, taskstore.ConfigPath(task.WorkDir, task.ID))
+	assert.NoFileExists(t, taskstore.DBPath(task.ExecutionDir))
+
+	executionRepoRoot, err := worktree.FindRepoRoot(task.ExecutionDir)
+	require.NoError(t, err)
+	assert.NotEqual(t, repoRoot, executionRepoRoot)
+	relPath, err := filepath.Rel(executionRepoRoot, task.ExecutionDir)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("packages", "app"), relPath)
+
+	branchOut, err := exec.Command("git", "-C", repoRoot, "branch", "--list", worktree.BranchName(task.ID)).CombinedOutput()
+	require.NoError(t, err, string(branchOut))
+	assert.Contains(t, strings.TrimSpace(string(branchOut)), worktree.BranchName(task.ID))
+
+	session.quit(t)
+
+	restarted := startTUISession(t, binaryPath, workDir)
+	restarted.waitForAll(t, 10*time.Second, "done Worktree-backed task", "new task")
+	for i := 0; i < 3; i++ {
+		restarted.send(t, "\x1b[A")
+		restarted.pause(150 * time.Millisecond)
+	}
+	restarted.send(t, "\r")
+	restarted.waitForAll(t, 5*time.Second, "New Task", "worktree on", "Ctrl+T worktree on")
+	restarted.quit(t)
 }
 
 func TestTaskTUIConfigScreenCanCloneSetDefaultAndDeleteConfig(t *testing.T) {
@@ -1023,6 +1093,32 @@ func copyTree(t *testing.T, sourceDir, destDir string) {
 		}
 		return os.WriteFile(target, data, 0o644)
 	}))
+}
+
+func initTaskTUIE2EGitRepo(t *testing.T, includeSubdir bool) string {
+	t.Helper()
+
+	repo := canonicalPath(t, t.TempDir())
+	runTaskTUIE2EGit(t, repo, "git", "init")
+	runTaskTUIE2EGit(t, repo, "git", "config", "user.email", "test@test.com")
+	runTaskTUIE2EGit(t, repo, "git", "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello"), 0o644))
+	if includeSubdir {
+		subdir := filepath.Join(repo, "packages", "app")
+		require.NoError(t, os.MkdirAll(subdir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(subdir, ".keep"), []byte("keep"), 0o644))
+	}
+	runTaskTUIE2EGit(t, repo, "git", "add", ".")
+	runTaskTUIE2EGit(t, repo, "git", "commit", "-m", "init")
+	return repo
+}
+
+func runTaskTUIE2EGit(t *testing.T, dir string, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "command %s %v failed: %s", name, args, string(out))
 }
 
 func (s *tuiSession) Write(p []byte) (int, error) {

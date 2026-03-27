@@ -12,6 +12,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/google/uuid"
 )
 
@@ -85,6 +86,13 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 	if err != nil {
 		return err
 	}
+	executionDir := task.ExecutionWorkDir()
+	if task.ExecutionDir != "" && task.ExecutionDir != task.WorkDir {
+		executionDir, err = worktree.ResolveWorktreeCWD(task.ExecutionDir, ".")
+		if err != nil {
+			return err
+		}
+	}
 	req := taskexecutor.Request{
 		Task:                task,
 		NodeRun:             run,
@@ -92,7 +100,7 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		ClarificationConfig: cfg.Clarification,
 		ConfigPath:          taskstore.ConfigPath(task.WorkDir, task.ID),
 		SchemaPath:          taskstore.SchemaPath(task.WorkDir, task.ID, run.NodeName),
-		WorkDir:             task.WorkDir,
+		WorkDir:             executionDir,
 		ArtifactDir:         artifactDir,
 		Runtime:             cfg.Runtime,
 		Prompt:              prompt,

@@ -57,12 +57,15 @@ const (
 )
 
 type Model struct {
-	service               RuntimeService
-	workDir               string
-	configCatalog         *taskconfig.Catalog
-	selectedConfigAlias   string
-	launchRuntimeOverride appconfig.RuntimeID
-	version               string
+	service                  RuntimeService
+	workDir                  string
+	configCatalog            *taskconfig.Catalog
+	selectedConfigAlias      string
+	launchRuntimeOverride    appconfig.RuntimeID
+	worktreeLaunchAvailable  bool
+	rememberedUseWorktree    bool
+	saveTaskLaunchPreference func(bool) error
+	version                  string
 
 	screen              Screen
 	returnScreen        Screen
@@ -83,6 +86,7 @@ type Model struct {
 	pendingRuntimeCmd   *pendingRuntimeCommand
 	approval            approvalState
 	clarification       clarificationState
+	newTask             newTaskState
 	submittingInput     bool
 	focusRegion         FocusRegion
 	dialog              dialogModel

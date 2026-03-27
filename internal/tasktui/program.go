@@ -24,11 +24,14 @@ type RuntimeService interface {
 }
 
 type App struct {
-	Service               RuntimeService
-	WorkDir               string
-	ConfigCatalog         *taskconfig.Catalog
-	LaunchRuntimeOverride appconfig.RuntimeID
-	Version               string
+	Service                  RuntimeService
+	WorkDir                  string
+	ConfigCatalog            *taskconfig.Catalog
+	LaunchRuntimeOverride    appconfig.RuntimeID
+	WorktreeLaunchAvailable  bool
+	DefaultUseWorktree       bool
+	SaveTaskLaunchPreference func(bool) error
+	Version                  string
 }
 
 func (a App) Run(ctx context.Context) error {
@@ -39,6 +42,11 @@ func (a App) Run(ctx context.Context) error {
 	}()
 
 	model := NewModelWithCatalog(a.Service, a.WorkDir, a.ConfigCatalog, a.LaunchRuntimeOverride, a.Version)
+	model.worktreeLaunchAvailable = a.WorktreeLaunchAvailable
+	model.rememberedUseWorktree = a.WorktreeLaunchAvailable && a.DefaultUseWorktree
+	model.newTask.useWorktree = model.rememberedUseWorktree
+	model.saveTaskLaunchPreference = a.SaveTaskLaunchPreference
+	model.syncComponents()
 	_, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
 	shutdownErr := a.Service.PrepareShutdown(context.Background())
 	cancel()

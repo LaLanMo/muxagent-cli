@@ -67,6 +67,53 @@ func TestFindRepoRoot_NonGitDir(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a git repository")
 }
 
+func TestNormalizeRepoRelativePath_FromRootAndSubdirectory(t *testing.T) {
+	repo := initRepoWithCommit(t)
+	sub := filepath.Join(repo, "packages", "app")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	relRoot, err := NormalizeRepoRelativePath(repo, repo)
+	require.NoError(t, err)
+	assert.Equal(t, ".", relRoot)
+
+	relSub, err := NormalizeRepoRelativePath(repo, sub)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("packages", "app"), relSub)
+}
+
+func TestNormalizeRepoRelativePath_CanonicalizesAliasedPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior is not portable on windows")
+	}
+
+	repo := initRepoWithCommit(t)
+	sub := filepath.Join(repo, "packages", "app")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	aliasRoot := filepath.Join(t.TempDir(), "repo-alias")
+	require.NoError(t, os.Symlink(repo, aliasRoot))
+
+	relPath, err := NormalizeRepoRelativePath(aliasRoot, filepath.Join(aliasRoot, "packages", "app"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("packages", "app"), relPath)
+}
+
+func TestResolveWorktreeCWD_ValidatesRelativeSubdirectory(t *testing.T) {
+	worktreeRoot := t.TempDir()
+	worktreeRoot, err := filepath.EvalSymlinks(worktreeRoot)
+	require.NoError(t, err)
+	subdir := filepath.Join(worktreeRoot, "packages", "app")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	resolved, err := ResolveWorktreeCWD(worktreeRoot, filepath.Join("packages", "app"))
+	require.NoError(t, err)
+	assert.Equal(t, subdir, resolved)
+
+	_, err = ResolveWorktreeCWD(worktreeRoot, filepath.Join("packages", "missing"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "saved worktree cwd unavailable")
+}
+
 func TestCreate_FromRepoRoot(t *testing.T) {
 	repo := initRepoWithCommit(t)
 
@@ -171,6 +218,27 @@ func TestCreate_TightensMuxagentDirectories(t *testing.T) {
 	assertDirPerm(t, muxagentDir, 0o700)
 	assertDirPerm(t, worktreesDir, 0o700)
 	assertDirPerm(t, filepath.Dir(wtPath), 0o700)
+}
+
+func TestCleanup_RemovesWorktreeAndBranch(t *testing.T) {
+	repo := initRepoWithCommit(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	wtPath, err := Create(repo, "cleanup-check")
+	require.NoError(t, err)
+
+	err = Cleanup(repo, wtPath, BranchName("cleanup-check"))
+	require.NoError(t, err)
+
+	_, err = os.Stat(wtPath)
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+
+	cmd := exec.Command("git", "-C", repo, "branch", "--list", BranchName("cleanup-check"))
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(string(out)))
 }
 
 func gitHead(t *testing.T, dir string) string {

@@ -8,13 +8,21 @@ import (
 )
 
 type Task struct {
-	ID          string
-	Description string
-	ConfigAlias string
-	ConfigPath  string
-	WorkDir     string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           string
+	Description  string
+	ConfigAlias  string
+	ConfigPath   string
+	WorkDir      string
+	ExecutionDir string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (t Task) ExecutionWorkDir() string {
+	if t.ExecutionDir != "" {
+		return t.ExecutionDir
+	}
+	return t.WorkDir
 }
 
 type NodeRunStatus string

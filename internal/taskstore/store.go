@@ -26,6 +26,7 @@ const (
 		config_alias TEXT NOT NULL DEFAULT '',
 		config_path TEXT NOT NULL DEFAULT '',
 		work_dir TEXT NOT NULL,
+		execution_dir TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	);`
@@ -114,9 +115,9 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 
 func (s *Store) CreateTask(ctx context.Context, task taskdomain.Task) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tasks (id, description, config_alias, config_path, work_dir, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		task.ID, task.Description, task.ConfigAlias, task.ConfigPath, task.WorkDir, task.CreatedAt.Format(time.RFC3339Nano), task.UpdatedAt.Format(time.RFC3339Nano),
+		INSERT INTO tasks (id, description, config_alias, config_path, work_dir, execution_dir, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		task.ID, task.Description, task.ConfigAlias, task.ConfigPath, task.WorkDir, task.ExecutionWorkDir(), task.CreatedAt.Format(time.RFC3339Nano), task.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	return err
 }
@@ -127,12 +128,12 @@ func (s *Store) UpdateTaskTimestamp(ctx context.Context, taskID string, updatedA
 }
 
 func (s *Store) GetTask(ctx context.Context, taskID string) (taskdomain.Task, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, description, config_alias, config_path, work_dir, created_at, updated_at FROM tasks WHERE id = ?`, taskID)
+	row := s.db.QueryRowContext(ctx, `SELECT id, description, config_alias, config_path, work_dir, execution_dir, created_at, updated_at FROM tasks WHERE id = ?`, taskID)
 	return scanTask(row)
 }
 
 func (s *Store) ListTasksByWorkDir(ctx context.Context, workDir string) ([]taskdomain.Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, description, config_alias, config_path, work_dir, created_at, updated_at FROM tasks WHERE work_dir = ? ORDER BY updated_at DESC, created_at DESC`, workDir)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, description, config_alias, config_path, work_dir, execution_dir, created_at, updated_at FROM tasks WHERE work_dir = ? ORDER BY updated_at DESC, created_at DESC`, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -258,9 +259,10 @@ func scanTask(scanner interface {
 }) (taskdomain.Task, error) {
 	var (
 		task                 taskdomain.Task
+		executionDir         string
 		createdAt, updatedAt string
 	)
-	err := scanner.Scan(&task.ID, &task.Description, &task.ConfigAlias, &task.ConfigPath, &task.WorkDir, &createdAt, &updatedAt)
+	err := scanner.Scan(&task.ID, &task.Description, &task.ConfigAlias, &task.ConfigPath, &task.WorkDir, &executionDir, &createdAt, &updatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return taskdomain.Task{}, err
@@ -271,6 +273,7 @@ func scanTask(scanner interface {
 	if err != nil {
 		return taskdomain.Task{}, err
 	}
+	task.ExecutionDir = executionDir
 	task.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
 	if err != nil {
 		return taskdomain.Task{}, err
@@ -371,10 +374,21 @@ func (s *Store) ensureTaskColumns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if hasConfigPath {
-		return nil
+	if !hasConfigPath {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN config_path TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
 	}
-	_, err = s.db.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN config_path TEXT NOT NULL DEFAULT ''`)
+	hasExecutionDir, err := s.tableHasColumn(ctx, "tasks", "execution_dir")
+	if err != nil {
+		return err
+	}
+	if !hasExecutionDir {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN execution_dir TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE tasks SET execution_dir = work_dir WHERE execution_dir = ''`)
 	return err
 }
 

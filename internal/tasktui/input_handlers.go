@@ -122,6 +122,11 @@ func (m Model) handleNewTaskKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.syncComponents()
 		}
 		return m, nil
+	case keyMatches(msg, m.keys.toggleWorktree):
+		if m.toggleNewTaskWorktree() {
+			m.syncComponents()
+		}
+		return m, nil
 	case keyMatches(msg, m.keys.nextFocus):
 		if strings.TrimSpace(m.editor.Value()) == "" {
 			return m, nil

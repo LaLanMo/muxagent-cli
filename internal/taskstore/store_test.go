@@ -22,13 +22,14 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 
 	now := time.Now().UTC().Round(time.Second)
 	task := taskdomain.Task{
-		ID:          "task-1",
-		Description: "Implement login",
-		ConfigAlias: "bugfix",
-		ConfigPath:  "/tmp/taskconfigs/bugfix.yaml",
-		WorkDir:     "/tmp/project",
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           "task-1",
+		Description:  "Implement login",
+		ConfigAlias:  "bugfix",
+		ConfigPath:   "/tmp/taskconfigs/bugfix.yaml",
+		WorkDir:      "/tmp/project",
+		ExecutionDir: "/tmp/project/.muxagent/worktrees/task-1",
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	require.NoError(t, store.CreateTask(ctx, task))
 
@@ -74,6 +75,7 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 	assert.Equal(t, task.Description, tasks[0].Description)
 	assert.Equal(t, task.ConfigAlias, tasks[0].ConfigAlias)
 	assert.Equal(t, task.ConfigPath, tasks[0].ConfigPath)
+	assert.Equal(t, task.ExecutionDir, tasks[0].ExecutionDir)
 
 	runs, err := store.ListNodeRunsByTask(ctx, task.ID)
 	require.NoError(t, err)
@@ -201,6 +203,55 @@ func TestEnsureSchemaAddsConfigPathColumnForOlderTasksTables(t *testing.T) {
 	hasConfigPath, err := store.tableHasColumn(context.Background(), "tasks", "config_path")
 	require.NoError(t, err)
 	assert.True(t, hasConfigPath)
+}
+
+func TestEnsureSchemaAddsExecutionDirColumnAndBackfillsOlderRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tasks.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE tasks (
+			id TEXT PRIMARY KEY,
+			description TEXT NOT NULL,
+			config_alias TEXT NOT NULL DEFAULT '',
+			config_path TEXT NOT NULL DEFAULT '',
+			work_dir TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO tasks (id, description, config_alias, config_path, work_dir, created_at, updated_at)
+		VALUES ('task-1', 'old row', 'default', '/tmp/config.yaml', '/tmp/project', '2026-03-27T10:00:00Z', '2026-03-27T10:00:00Z');`)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE node_runs (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			node_name TEXT NOT NULL,
+			status TEXT NOT NULL,
+			session_id TEXT,
+			result_json TEXT,
+			clarifications_json TEXT NOT NULL,
+			triggered_by_json TEXT,
+			started_at TEXT NOT NULL,
+			completed_at TEXT
+		);`)
+	require.NoError(t, err)
+
+	store := &Store{db: db}
+	require.NoError(t, store.EnsureSchema(context.Background()))
+
+	hasExecutionDir, err := store.tableHasColumn(context.Background(), "tasks", "execution_dir")
+	require.NoError(t, err)
+	assert.True(t, hasExecutionDir)
+
+	task, err := store.GetTask(context.Background(), "task-1")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/project", task.ExecutionDir)
+	assert.Equal(t, "/tmp/project", task.ExecutionWorkDir())
 }
 
 func TestNormalizeWorkDirResolvesSymlinks(t *testing.T) {

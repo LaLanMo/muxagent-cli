@@ -13,6 +13,10 @@ type clarificationState struct {
 	other    bool
 }
 
+type newTaskState struct {
+	useWorktree bool
+}
+
 type failureState struct {
 	action failureAction
 }

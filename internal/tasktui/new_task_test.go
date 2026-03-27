@@ -116,6 +116,65 @@ func TestNewTaskCyclesToNextTaskConfigViaHotkey(t *testing.T) {
 	assert.Contains(t, view, "runtime claude-code")
 }
 
+func TestNewTaskModalShowsWorktreeModeWhenAvailable(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	model.worktreeLaunchAvailable = true
+	model.rememberedUseWorktree = false
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "worktree off")
+	assert.Contains(t, view, "Ctrl+T worktree off")
+}
+
+func TestNewTaskToggleWorktreeDispatchesAndRemembersSelection(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "./taskflow.yaml", &taskconfig.Config{Runtime: appconfig.RuntimeCodex}, "v0.1.0")
+	model.worktreeLaunchAvailable = true
+	var saved []bool
+	model.saveTaskLaunchPreference = func(useWorktree bool) error {
+		saved = append(saved, useWorktree)
+		return nil
+	}
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+	next, _ = model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	model = next.(Model)
+	model = typeText(t, model, "Implement login")
+
+	model, cmd := submitNewTaskModal(t, model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.True(t, service.dispatched[0].UseWorktree)
+	assert.Equal(t, []bool{true}, saved)
+	assert.True(t, model.rememberedUseWorktree)
+}
+
+func TestNewTaskReopensWithRememberedWorktreePreference(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	model.worktreeLaunchAvailable = true
+	model.rememberedUseWorktree = true
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+	assert.True(t, model.newTask.useWorktree)
+	assert.Contains(t, strippedView(model.View().Content), "worktree on")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = next.(Model)
+	model = openNewTaskModal(t, model)
+	assert.True(t, model.newTask.useWorktree)
+}
+
 func TestModelSubmitsSelectedTaskConfigAlias(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModelWithCatalog(service, "/tmp/project", &taskconfig.Catalog{
