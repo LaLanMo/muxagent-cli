@@ -521,10 +521,10 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	session := startTUISession(t, binaryPath, workDir)
 	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
 	session.send(t, "\r")
-	session.waitForAll(t, 5*time.Second, "New Task", "worktree off", "Ctrl+T worktree off")
+	session.waitForAll(t, 5*time.Second, "New Task", "worktree off", "Ctrl+T worktree on")
 	session.send(t, "\x14")
 	session.resize(t, 141, 40)
-	session.waitForAll(t, 5*time.Second, "worktree on", "Ctrl+T worktree on")
+	session.waitForAll(t, 5*time.Second, "worktree on", "Ctrl+T worktree off")
 	session.submitNewTask(t, "Worktree-backed task")
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
@@ -572,7 +572,7 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	}
 	restarted.send(t, "\r")
 	restarted.resetOutput()
-	restarted.waitForAll(t, 5*time.Second, "New Task", "worktree on", "Ctrl+T worktree on")
+	restarted.waitForAll(t, 5*time.Second, "New Task", "worktree on", "Ctrl+T worktree off")
 	restarted.quit(t)
 }
 
@@ -596,7 +596,7 @@ func TestTaskTUIConfigScreenCanCloneSetDefaultAndDeleteConfig(t *testing.T) {
 	session.waitForAll(t, 5*time.Second, "Clone Task Config", "Source config default")
 	session.send(t, "reviewer")
 	session.send(t, "\r")
-	session.waitForAll(t, 10*time.Second, "reviewer", "runtime Codex")
+	session.waitForAll(t, 10*time.Second, "reviewer", "bundle reviewer", "Codex")
 
 	require.Eventually(t, func() bool {
 		reg, err := taskconfig.LoadRegistry()

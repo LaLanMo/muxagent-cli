@@ -118,11 +118,7 @@ func (m Model) newTaskSubtitle() string {
 		subtitle += " · runtime " + runtime
 	}
 	if m.worktreeLaunchAvailable {
-		mode := "off"
-		if m.newTask.useWorktree {
-			mode = "on"
-		}
-		subtitle += " · worktree " + mode
+		subtitle += " · worktree " + m.newTaskWorktreeStatusLabel()
 	}
 	if cfg != nil && len(cfg.Topology.Nodes) > 0 {
 		nodeNames := make([]string, 0, len(cfg.Topology.Nodes))

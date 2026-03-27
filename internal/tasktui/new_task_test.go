@@ -131,7 +131,7 @@ func TestNewTaskCyclesToNextTaskConfigViaHotkey(t *testing.T) {
 	assert.Contains(t, view, "runtime claude-code")
 }
 
-func TestNewTaskModalShowsWorktreeModeWhenAvailable(t *testing.T) {
+func TestNewTaskModalShowsWorktreeStatusAndToggleActionWhenAvailable(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	model.worktreeLaunchAvailable = true
@@ -143,7 +143,7 @@ func TestNewTaskModalShowsWorktreeModeWhenAvailable(t *testing.T) {
 
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "worktree off")
-	assert.Contains(t, view, "Ctrl+T worktree off")
+	assert.Contains(t, view, "Ctrl+T worktree on")
 }
 
 func TestNewTaskToggleWorktreeDispatchesAndRemembersSelection(t *testing.T) {
@@ -161,6 +161,9 @@ func TestNewTaskToggleWorktreeDispatchesAndRemembersSelection(t *testing.T) {
 	model = openNewTaskModal(t, model)
 	next, _ = model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	model = next.(Model)
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "worktree on")
+	assert.Contains(t, view, "Ctrl+T worktree off")
 	model = typeText(t, model, "Implement login")
 
 	model, cmd := submitNewTaskModal(t, model)
@@ -182,7 +185,9 @@ func TestNewTaskReopensWithRememberedWorktreePreference(t *testing.T) {
 
 	model = openNewTaskModal(t, model)
 	assert.True(t, model.newTask.useWorktree)
-	assert.Contains(t, strippedView(model.View().Content), "worktree on")
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "worktree on")
+	assert.Contains(t, view, "Ctrl+T worktree off")
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = next.(Model)

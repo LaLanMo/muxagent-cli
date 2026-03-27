@@ -52,14 +52,24 @@ func (m Model) taskListHint() string {
 func (m Model) newTaskModalHint() string {
 	parts := []string{"Ctrl+P prev config", "Ctrl+N next config"}
 	if m.worktreeLaunchAvailable {
-		mode := "off"
-		if m.newTask.useWorktree {
-			mode = "on"
-		}
-		parts = append(parts, "Ctrl+T worktree "+mode)
+		parts = append(parts, "Ctrl+T worktree "+m.newTaskWorktreeToggleLabel())
 	}
 	parts = append(parts, "Enter newline", "Tab start", "Esc cancel")
 	return joinHintParts(parts...)
+}
+
+func (m Model) newTaskWorktreeStatusLabel() string {
+	if m.newTask.useWorktree {
+		return "on"
+	}
+	return "off"
+}
+
+func (m Model) newTaskWorktreeToggleLabel() string {
+	if m.newTask.useWorktree {
+		return "off"
+	}
+	return "on"
 }
 
 func (m Model) renderTaskListFooter(surface surfaceRect) string {
