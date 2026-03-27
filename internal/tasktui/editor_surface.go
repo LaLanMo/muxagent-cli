@@ -23,7 +23,8 @@ func (m Model) detailEditorSurfaceSpec(surface panelSurface) editorSurfaceSpec {
 		return spec
 	}
 
-	spec.FieldWidth = max(18, surface.Rect.Width-tuiTheme.Panel.Warning.GetHorizontalFrameSize())
+	availableFieldWidth := max(18, surface.Rect.Width-tuiTheme.Panel.Warning.GetHorizontalFrameSize())
+	spec.FieldWidth = detailFormMeasureWidth(availableFieldWidth)
 	switch m.screen {
 	case ScreenClarification:
 		spec.Rows = 1

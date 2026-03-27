@@ -440,7 +440,7 @@ func TestClarificationFooterDoesNotContainQuestionPanel(t *testing.T) {
 	model.screen = ScreenClarification
 	model.syncComponents()
 
-	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(96)}))
+	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(96, model.activeDetailTab)}))
 	assert.Contains(t, footer, "Ctrl+C quit")
 	assert.Contains(t, footer, "↑↓ select")
 	assert.NotContains(t, footer, "Question 1/1")

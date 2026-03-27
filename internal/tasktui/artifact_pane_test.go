@@ -276,6 +276,54 @@ func TestArtifactTabCyclesViaTab(t *testing.T) {
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 }
 
+func TestArtifactPaneFocusReusesSharedDividerWithoutShiftingPreview(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusRunning,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+
+	findPreviewLine := func(view string) string {
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, "Preview · summary.md") {
+				return line
+			}
+		}
+		t.Fatalf("preview header not found in view:\n%s", view)
+		return ""
+	}
+
+	filesLine := findPreviewLine(strippedView(model.View().Content))
+	filesIndex := strings.Index(filesLine, "Preview · summary.md")
+	require.GreaterOrEqual(t, filesIndex, 0)
+	assert.Equal(t, 2, strings.Count(filesLine[:filesIndex], "│"))
+	assert.True(t, strings.Contains(filesLine[:filesIndex], "│"), "files border should remain present")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = next.(Model)
+	assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
+
+	previewLine := findPreviewLine(strippedView(model.View().Content))
+	previewIndex := strings.Index(previewLine, "Preview · summary.md")
+	require.GreaterOrEqual(t, previewIndex, 0)
+	assert.Equal(t, 2, strings.Count(previewLine[:previewIndex], "│"))
+	assert.Equal(t, filesIndex, previewIndex)
+}
+
 func TestTabHintShowsInFooter(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")
@@ -406,7 +454,7 @@ func TestMarkdownArtifactPreviewFormatsDocumentStructure(t *testing.T) {
 	assert.NotContains(t, view, "```go")
 }
 
-func TestArtifactMarkdownPreviewCapsReadableWidth(t *testing.T) {
+func TestArtifactMarkdownPreviewTracksViewportWidth(t *testing.T) {
 	rendered, err := renderArtifactMarkdown(
 		"# Artifact Preview\n\nThis paragraph should stay within a readable column width even when the viewport is much wider than the markdown surface needs for comfortable reading.",
 		140,
@@ -417,7 +465,9 @@ func TestArtifactMarkdownPreviewCapsReadableWidth(t *testing.T) {
 	for _, line := range strings.Split(rendered, "\n") {
 		maxLineWidth = max(maxLineWidth, ansi.StringWidth(line))
 	}
-	assert.LessOrEqual(t, maxLineWidth, artifactMarkdownWidth(140))
+	assert.Equal(t, 140, artifactMarkdownWidth(140))
+	assert.LessOrEqual(t, maxLineWidth, 140)
+	assert.Greater(t, maxLineWidth, 76)
 }
 
 func TestArtifactMarkdownThemeUsesPrimaryReaderEmphasis(t *testing.T) {

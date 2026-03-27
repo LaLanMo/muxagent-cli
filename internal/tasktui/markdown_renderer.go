@@ -8,11 +8,10 @@ import (
 
 const (
 	artifactMarkdownMinWidth = 20
-	artifactMarkdownMaxWidth = 76
 )
 
 func artifactMarkdownWidth(width int) int {
-	return min(max(artifactMarkdownMinWidth, width), artifactMarkdownMaxWidth)
+	return max(artifactMarkdownMinWidth, width)
 }
 
 func artifactMarkdownRenderer(width int) (*glamour.TermRenderer, error) {

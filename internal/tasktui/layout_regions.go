@@ -113,7 +113,7 @@ func (m Model) computeDetailBodyLayoutWithPanelHeight(frame detailFrameLayout, p
 
 func (m Model) computeDetailLayoutSnapshot() detailLayoutSnapshot {
 	metrics := m.computeScreenMetrics()
-	contentWidth := detailContentWidth(metrics.innerWidth)
+	contentWidth := detailContentWidth(metrics.innerWidth, m.activeDetailTab)
 	header := m.renderDetailHeader(contentWidth)
 	footerHeight := m.detailFooterReservedHeight()
 

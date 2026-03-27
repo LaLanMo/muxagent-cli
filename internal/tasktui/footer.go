@@ -131,8 +131,9 @@ func (m Model) renderFailurePanel(surface panelSurface) string {
 	}
 	fixedHeight := lipgloss.Height(strings.Join(append([]string{}, content...), "\n")) + lipgloss.Height(strings.Join(actionBlock, "\n"))
 	bodyBudget := max(1, innerHeight-fixedHeight)
-	bodyLines := wrapPanelBody(body, innerWidth)
-	bodyLines = truncateWrappedPanelLines(bodyLines, bodyBudget, innerWidth)
+	bodyWidth := detailBodyMeasureWidth(innerWidth)
+	bodyLines := wrapPanelBody(body, bodyWidth)
+	bodyLines = truncateWrappedPanelLines(bodyLines, bodyBudget, bodyWidth)
 	content = append(content, tuiTheme.Panel.Body.Render(strings.Join(bodyLines, "\n")))
 	content = append(content, actionBlock...)
 	panel := panelStyle.Render(strings.Join(content, "\n"))

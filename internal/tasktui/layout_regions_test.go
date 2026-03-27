@@ -67,7 +67,7 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	model.screen = ScreenRunning
 	model.syncComponents()
 
-	contentWidth := detailContentWidth(metrics.innerWidth)
+	contentWidth := detailContentWidth(metrics.innerWidth, model.activeDetailTab)
 	snapshot := model.computeDetailLayoutSnapshot()
 
 	assert.Equal(t, contentWidth, snapshot.ContentWidth)
@@ -123,4 +123,187 @@ func TestFailedDetailPanelUsesContentDrivenHeight(t *testing.T) {
 	assert.Equal(t, snapshot.Surfaces.Panel.MaxHeight, model.computeDetailPanelSurface(snapshot.Frame).MaxHeight)
 	assert.Less(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.MaxHeight)
 	assert.Equal(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.Rect.Height)
+}
+
+func TestArtifactTabUsesFullWidthPreviewSurface(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 180, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Inspect artifact layout", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusRunning,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{
+				NodeRun: taskdomain.NodeRun{
+					ID:        "run-1",
+					TaskID:    "task-1",
+					NodeName:  "implement",
+					Status:    taskdomain.NodeRunRunning,
+					StartedAt: time.Now().UTC(),
+				},
+			},
+		},
+	}
+	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+
+	metrics := model.computeScreenMetrics()
+	snapshot := model.computeDetailLayoutSnapshot()
+	expectedPreview := artifactPanePreviewRect(snapshot.Surfaces.Artifact.Rect.Width, snapshot.Surfaces.Artifact.Rect.Height)
+
+	assert.Equal(t, metrics.innerWidth, snapshot.ContentWidth)
+	assert.Equal(t, expectedPreview.Width, snapshot.Surfaces.Preview.Width)
+	assert.Equal(t, expectedPreview.Height, snapshot.Surfaces.Preview.Height)
+	assert.Equal(t, expectedPreview.Width, model.artifactPreview.Width())
+	assert.Equal(t, expectedPreview.Height, model.artifactPreview.Height())
+}
+
+func TestArtifactPreviewWidthTracksTerminalWidth(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
+
+	buildModel := func(width int) Model {
+		model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+		next, _ := model.Update(tea.WindowSizeMsg{Width: width, Height: 32})
+		model = next.(Model)
+		model.current = &taskdomain.TaskView{
+			Task:          taskdomain.Task{ID: "task-1", Description: "Inspect artifact layout", WorkDir: tempDir},
+			Status:        taskdomain.TaskStatusRunning,
+			ArtifactPaths: []string{artifactPath},
+			NodeRuns: []taskdomain.NodeRunView{
+				{
+					NodeRun: taskdomain.NodeRun{
+						ID:        "run-1",
+						TaskID:    "task-1",
+						NodeName:  "implement",
+						Status:    taskdomain.NodeRunRunning,
+						StartedAt: time.Now().UTC(),
+					},
+				},
+			},
+		}
+		model.screen = ScreenRunning
+		model.activeDetailTab = DetailTabArtifacts
+		model.focusRegion = FocusRegionArtifactFiles
+		model.syncComponents()
+		return model
+	}
+
+	narrow := buildModel(96)
+	wide := buildModel(149)
+	extraWide := buildModel(180)
+
+	assert.Greater(t, wide.artifactPreview.Width(), narrow.artifactPreview.Width())
+	assert.Greater(t, extraWide.artifactPreview.Width(), wide.artifactPreview.Width())
+}
+
+func TestArtifactTabUsesFullWidthAndFullPreviewHeight(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 180, Height: 36})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Inspect wide artifact preview", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusRunning,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{
+				NodeRun: taskdomain.NodeRun{
+					ID:        "run-1",
+					TaskID:    "task-1",
+					NodeName:  "implement",
+					Status:    taskdomain.NodeRunRunning,
+					StartedAt: time.Now().UTC(),
+				},
+			},
+		},
+	}
+	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+
+	snapshot := model.computeDetailLayoutSnapshot()
+	expectedPreview := artifactPanePreviewRect(snapshot.Surfaces.Artifact.Rect.Width, snapshot.Surfaces.Artifact.Rect.Height)
+
+	assert.Equal(t, snapshot.Frame.innerWidth, snapshot.ContentWidth)
+	assert.Equal(t, expectedPreview.Width, snapshot.Surfaces.Preview.Width)
+	assert.Equal(t, expectedPreview.Height, snapshot.Surfaces.Preview.Height)
+	assert.Equal(t, expectedPreview.Width, model.artifactPreview.Width())
+	assert.Equal(t, expectedPreview.Height, model.artifactPreview.Height())
+	assert.Equal(t, snapshot.Surfaces.Artifact.Rect.Height-1, snapshot.Surfaces.Preview.Height)
+}
+
+func TestTimelineDetailUsesFullWidthSurface(t *testing.T) {
+	tempDir := t.TempDir()
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 180, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Inspect wide timeline layout", WorkDir: tempDir},
+		Status: taskdomain.TaskStatusRunning,
+		NodeRuns: []taskdomain.NodeRunView{
+			{
+				NodeRun: taskdomain.NodeRun{
+					ID:        "run-1",
+					TaskID:    "task-1",
+					NodeName:  "implement",
+					Status:    taskdomain.NodeRunRunning,
+					StartedAt: time.Now().UTC(),
+				},
+			},
+		},
+	}
+	model.screen = ScreenRunning
+	model.activeDetailTab = DetailTabTimeline
+	model.focusRegion = FocusRegionDetail
+	model.syncComponents()
+
+	metrics := model.computeScreenMetrics()
+	snapshot := model.computeDetailLayoutSnapshot()
+
+	assert.Equal(t, metrics.innerWidth, snapshot.ContentWidth)
+	assert.Equal(t, metrics.innerWidth, snapshot.Surfaces.Timeline.Width)
+	assert.Equal(t, snapshot.Surfaces.Timeline.Width, model.detailViewport.Width())
+}
+
+func TestWideDetailPanelEditorUsesSoftWidthCap(t *testing.T) {
+	tempDir := t.TempDir()
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 180, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Review wide approval layout", WorkDir: tempDir},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:      taskruntime.InputKindHumanNode,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "approve_plan",
+	}
+	model.screen = ScreenApproval
+	model.approval.choice = 1
+	model.syncComponents()
+
+	snapshot := model.computeDetailLayoutSnapshot()
+	panelInnerWidth := max(18, snapshot.Surfaces.Panel.Rect.Width-tuiTheme.Panel.Warning.GetHorizontalFrameSize())
+
+	assert.Equal(t, detailFormMeasureWidth(panelInnerWidth), snapshot.Editor.FieldWidth)
+	assert.Less(t, snapshot.Editor.FieldWidth, panelInnerWidth)
+	assert.Equal(t, editorFieldInnerWidth(snapshot.Editor.FieldWidth), model.editor.input.Width())
 }

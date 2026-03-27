@@ -28,6 +28,12 @@ func renderOpaquePanelSurface(width int, content string) string {
 		Render(content)
 }
 
+func renderOpaqueMeasuredPanelText(width int, style lipgloss.Style, text string) string {
+	measureWidth := detailBodyMeasureWidth(width)
+	wrapped := strings.Join(wrapPanelBody(text, measureWidth), "\n")
+	return renderOpaquePanelSurface(width, style.Render(wrapped))
+}
+
 func (m Model) buildEditorField(spec editorSurfaceSpec) builtEditorField {
 	width := max(18, spec.FieldWidth)
 	focused := m.focusRegion == FocusRegionComposer && m.activeEditorSlot() != ""
@@ -165,7 +171,7 @@ func (m Model) buildApprovalPanel(surface panelSurface, editorSpec editorSurface
 					Visible: true,
 					Label:   "Feedback",
 				},
-				FieldWidth: innerWidth,
+				FieldWidth: detailFormMeasureWidth(innerWidth),
 			}
 		}
 		input := m.buildEditorField(spec)
@@ -198,8 +204,8 @@ func (m Model) buildClarificationPanel(surface panelSurface, editorSpec editorSu
 	panelStyle := tuiTheme.Panel.Warning.Width(width).MaxHeight(max(1, surface.MaxHeight))
 	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
 	title := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render(fmt.Sprintf("Question %d/%d", m.clarification.question+1, len(m.currentInput.Questions))))
-	body := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Body.Render(question.Question))
-	why := renderOpaquePanelSurface(innerWidth, tuiTheme.Text.Muted.Render(question.WhyItMatters))
+	body := renderOpaqueMeasuredPanelText(innerWidth, tuiTheme.Panel.Body, question.Question)
+	why := renderOpaqueMeasuredPanelText(innerWidth, tuiTheme.Text.Muted, question.WhyItMatters)
 	header := []string{title, body, why, ""}
 
 	items := make([]choiceItem, 0, len(question.Options))
@@ -228,7 +234,7 @@ func (m Model) buildClarificationPanel(surface panelSurface, editorSpec editorSu
 				Visible: true,
 				Label:   "Other",
 			},
-			FieldWidth: innerWidth,
+			FieldWidth: detailFormMeasureWidth(innerWidth),
 			Rows:       1,
 		}
 	}

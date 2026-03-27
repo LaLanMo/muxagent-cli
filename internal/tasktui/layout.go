@@ -11,18 +11,31 @@ import (
 type DetailTab int
 
 const (
-	DetailTabTimeline  DetailTab = iota
+	DetailTabTimeline DetailTab = iota
 	DetailTabArtifacts
 )
 
-func detailContentWidth(innerWidth int) int {
-	if innerWidth <= 80 {
-		return innerWidth
-	}
-	if innerWidth >= 152 {
-		return 152
-	}
+const (
+	detailTitleMaxWidth = 120
+	detailBodyMaxWidth  = 100
+	detailFormMaxWidth  = 96
+)
+
+func detailContentWidth(innerWidth int, activeTab DetailTab) int {
+	_ = activeTab
 	return innerWidth
+}
+
+func detailTitleMeasureWidth(available int) int {
+	return boundedPreferredWidth(available, available, 24, detailTitleMaxWidth)
+}
+
+func detailBodyMeasureWidth(available int) int {
+	return boundedPreferredWidth(available, available, 24, detailBodyMaxWidth)
+}
+
+func detailFormMeasureWidth(available int) int {
+	return boundedPreferredWidth(available, available, 18, detailFormMaxWidth)
 }
 
 func renderCanvas(width, height int, header, body, footer string) string {

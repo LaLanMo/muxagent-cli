@@ -139,15 +139,49 @@ func TestLongTaskDescriptionsKeepDetailFooterVisible(t *testing.T) {
 			view := model.View().Content
 			stripped := strippedView(view)
 			innerWidth, _ := innerSize(tt.width, tt.height)
-			contentWidth := detailContentWidth(innerWidth)
+			contentWidth := detailContentWidth(innerWidth, model.activeDetailTab)
 			header := strippedView(model.renderDetailHeader(contentWidth))
+			headerLines := strings.Split(header, "\n")
 
 			for _, want := range tt.want {
 				assert.Contains(t, stripped, want)
 			}
-			for _, line := range strings.Split(header, "\n") {
+			for _, line := range headerLines {
 				assert.LessOrEqual(t, ansi.StringWidth(line), contentWidth)
 			}
+			require.GreaterOrEqual(t, len(headerLines), 2)
+			assert.LessOrEqual(t, ansi.StringWidth(strings.TrimRight(headerLines[0], " ")), detailTitleMeasureWidth(contentWidth))
+			assert.LessOrEqual(t, ansi.StringWidth(strings.TrimRight(headerLines[1], " ")), detailTitleMeasureWidth(contentWidth))
 		})
 	}
+}
+
+func TestWideDetailHeaderKeepsMeasuredTitleInsideFullWidthFrame(t *testing.T) {
+	tempDir := t.TempDir()
+	longDescription := strings.TrimSpace(strings.Repeat(
+		"Inspect how the detail header behaves when the terminal is intentionally very wide. ",
+		4,
+	))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 180, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: longDescription, WorkDir: tempDir},
+		Status: taskdomain.TaskStatusRunning,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.screen = ScreenRunning
+	model.syncComponents()
+
+	innerWidth, _ := innerSize(180, 32)
+	header := strippedView(model.renderDetailHeader(detailContentWidth(innerWidth, model.activeDetailTab)))
+	headerLines := strings.Split(header, "\n")
+
+	require.GreaterOrEqual(t, len(headerLines), 4)
+	assert.LessOrEqual(t, ansi.StringWidth(strings.TrimRight(headerLines[0], " ")), detailTitleMeasureWidth(innerWidth))
+	assert.LessOrEqual(t, ansi.StringWidth(strings.TrimRight(headerLines[1], " ")), detailTitleMeasureWidth(innerWidth))
+	assert.Equal(t, innerWidth, ansi.StringWidth(headerLines[len(headerLines)-1]))
 }

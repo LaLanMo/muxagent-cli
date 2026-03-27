@@ -19,7 +19,7 @@ func (m Model) renderDetailHeader(width int) string {
 	if m.current == nil {
 		return fitLine(tuiTheme.taskLabel.Render("Task"), width)
 	}
-	title := tuiTheme.taskLabel.Render(clampWrappedText("Task: "+m.current.Task.Description, width, 2))
+	title := tuiTheme.taskLabel.Render(clampWrappedText("Task: "+m.current.Task.Description, detailTitleMeasureWidth(width), 2))
 	dag := m.renderDAG(width)
 	divider := tuiTheme.divider.Render(strings.Repeat("─", max(8, width)))
 	return lipgloss.JoinVertical(lipgloss.Left, title, dag, divider)

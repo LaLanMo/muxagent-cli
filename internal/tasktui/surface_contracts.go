@@ -83,12 +83,8 @@ func (m Model) computeDetailScreenSurfacesWithPanel(frame detailFrameLayout, bod
 		Preview: surfaceRect{Width: body.previewWidth, Height: 0},
 		Footer:  surfaceRect{Width: frame.contentWidth, Height: frame.footerHeight},
 	}
-	if fileLines := m.renderArtifactFileLines(max(18, body.previewWidth-6), artifactVisibleCapacity(len(m.artifactItems))); body.previewWidth > 0 && body.topBodyHeight > 0 {
-		_, previewBlockHeight := artifactPaneLayout(body.topBodyHeight, len(fileLines))
-		surfaces.Preview = surfaceRect{
-			Width:  max(12, body.previewWidth-6),
-			Height: max(1, previewBlockHeight-2),
-		}
+	if body.previewWidth > 0 && body.topBodyHeight > 0 {
+		surfaces.Preview = artifactPanePreviewRect(surfaces.Artifact.Rect.Width, surfaces.Artifact.Rect.Height)
 	}
 	return surfaces
 }

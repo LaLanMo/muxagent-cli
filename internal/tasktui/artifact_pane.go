@@ -38,6 +38,34 @@ func artifactPaneSidebarWidth(totalWidth int) int {
 	return clamp(sidebar, 20, min(40, totalWidth/2))
 }
 
+func artifactPanePreviewRect(totalWidth, totalHeight int) surfaceRect {
+	if totalWidth < 20 || totalHeight < 4 {
+		return surfaceRect{}
+	}
+	sidebarWidth := artifactPaneSidebarWidth(totalWidth)
+	previewWidth := max(12, totalWidth-sidebarWidth-1)
+	return surfaceRect{
+		Width:  max(10, previewWidth-2),
+		Height: max(1, totalHeight-1),
+	}
+}
+
+func (m Model) artifactPaneLineStyle(focused bool) lipgloss.Style {
+	style := tuiTheme.Artifact.Divider
+	if focused {
+		style = style.Foreground(tuiTheme.text)
+	}
+	return style
+}
+
+func (m Model) renderArtifactPaneTitle(title string, focused bool) string {
+	style := tuiTheme.Artifact.BlockTitle
+	if focused {
+		style = style.Foreground(tuiTheme.awaiting)
+	}
+	return style.Render(title)
+}
+
 func (m Model) renderArtifactsPane(surface artifactSurface) string {
 	width := surface.Rect.Width
 	height := surface.Rect.Height
@@ -57,7 +85,7 @@ func (m Model) renderArtifactsPane(surface artifactSurface) string {
 	previewContent := m.renderArtifactPreviewColumn(previewWidth, height)
 
 	// Vertical divider
-	divider := strings.Repeat(tuiTheme.divider.Render("│")+"\n", max(1, height))
+	divider := strings.Repeat(m.artifactPaneLineStyle(m.focusRegion == FocusRegionArtifactPreview).Render("│")+"\n", max(1, height))
 	divider = lipgloss.Place(1, height, lipgloss.Left, lipgloss.Top, divider)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, filesContent, divider, previewContent)
@@ -66,20 +94,21 @@ func (m Model) renderArtifactsPane(surface artifactSurface) string {
 func (m Model) renderArtifactFilesColumn(width, height int, lines []string) string {
 	innerWidth := max(10, width-2)
 	titleText := fmt.Sprintf("Files (%d)", len(m.artifactItems))
-	title := tuiTheme.Artifact.BlockTitle.Render(titleText)
+	title := m.renderArtifactPaneTitle(titleText, m.focusRegion == FocusRegionArtifactFiles)
 
 	bodyHeight := max(1, height-1)
 	body := lipgloss.Place(innerWidth, bodyHeight, lipgloss.Left, lipgloss.Top, strings.Join(lines, "\n"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, title, body)
 
-	style := lipgloss.NewStyle().Width(width).Height(height).PaddingLeft(1)
-	if m.focusRegion == FocusRegionArtifactFiles {
-		style = style.BorderLeft(true).
-			BorderStyle(lipgloss.Border{Left: "│"}).
-			BorderForeground(tuiTheme.halfMuted).
-			Width(width)
-	}
+	style := lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		PaddingLeft(1).
+		BorderLeft(true).
+		BorderStyle(lipgloss.Border{Left: "│"}).
+		BorderForeground(m.artifactPaneLineStyle(m.focusRegion == FocusRegionArtifactFiles).GetForeground()).
+		Width(width)
 	return style.Render(content)
 }
 
@@ -88,7 +117,7 @@ func (m Model) renderArtifactPreviewColumn(width, height int) string {
 	if len(m.artifactItems) > 0 && m.artifactIndex < len(m.artifactItems) {
 		title = fmt.Sprintf("Preview · %s", m.artifactItems[m.artifactIndex].PreviewTitle)
 	}
-	header := tuiTheme.Artifact.BlockTitle.Render(title)
+	header := m.renderArtifactPaneTitle(title, m.focusRegion == FocusRegionArtifactPreview)
 
 	contentHeight := max(1, height-1)
 	innerWidth := max(10, width-2)
@@ -97,32 +126,7 @@ func (m Model) renderArtifactPreviewColumn(width, height int) string {
 	content := lipgloss.JoinVertical(lipgloss.Left, header, bodyContent)
 
 	style := lipgloss.NewStyle().Width(width).Height(height).PaddingLeft(1)
-	if m.focusRegion == FocusRegionArtifactPreview {
-		style = style.BorderLeft(true).
-			BorderStyle(lipgloss.Border{Left: "│"}).
-			BorderForeground(tuiTheme.halfMuted).
-			Width(width)
-	}
 	return style.Render(content)
-}
-
-func artifactPaneLayout(bodyHeight int, fileLineCount int) (fileBlockHeight, previewBlockHeight int) {
-	available := max(0, bodyHeight-1)
-	if available == 0 {
-		return 0, 0
-	}
-	if available < 7 {
-		if available == 1 {
-			return 1, 0
-		}
-		fileBlockHeight = max(1, available/2)
-		previewBlockHeight = max(1, available-fileBlockHeight)
-		return
-	}
-	maxFileHeight := min(6, available-4)
-	fileBlockHeight = clamp(fileLineCount+1, 3, maxFileHeight)
-	previewBlockHeight = max(4, available-fileBlockHeight)
-	return
 }
 
 func artifactVisibleCapacity(total int) int {
