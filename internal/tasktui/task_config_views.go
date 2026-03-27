@@ -38,9 +38,6 @@ func (m Model) renderSelectedTaskConfigMeta(summary taskConfigSummary) string {
 	if summary.BundlePath != "" {
 		parts = append(parts, renderTaskListMetaLine("bundle", summary.BundlePath, true))
 	}
-	if summary.Runtime != "" {
-		parts = append(parts, renderTaskListMetaLine("runtime", summary.Runtime, true))
-	}
 	if summary.LoadErr != "" {
 		parts = append(parts, tuiTheme.Status.Failed.Render("invalid"))
 	}

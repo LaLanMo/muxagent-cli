@@ -96,6 +96,27 @@ func TestTaskConfigScreenCrudLifecycle(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(taskConfigDir, "reviewer"))
 }
 
+func TestTaskConfigHeaderOmitsRuntimeWhileListRowsKeepIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, t.TempDir(), "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model = openTaskConfigScreen(t, model)
+
+	selected, ok := model.selectedManagedTaskConfig()
+	require.True(t, ok)
+
+	headerMeta := strippedView(model.renderSelectedTaskConfigMeta(selected))
+	screen := strippedView(model.View().Content)
+
+	assert.Contains(t, headerMeta, "selected default")
+	assert.Contains(t, headerMeta, "bundle default")
+	assert.NotContains(t, headerMeta, "runtime")
+	assert.Contains(t, screen, "Codex")
+}
+
 func openTaskConfigScreen(t *testing.T, model Model) Model {
 	t.Helper()
 	cmd := model.openTaskConfigs()
