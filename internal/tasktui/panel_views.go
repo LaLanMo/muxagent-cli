@@ -86,15 +86,17 @@ func (m Model) buildNewTaskPanel(innerWidth int) builtPanel {
 	subtitle := renderOpaquePanelSurface(innerWidth, tuiTheme.modalSubtitle.Render(m.newTaskSubtitle()))
 	hint := renderOpaquePanelSurface(innerWidth, renderFooterHintText(m.newTaskModalHint()))
 	blank := renderOpaquePanelSurface(innerWidth, "")
-	view := lipgloss.JoinVertical(
-		lipgloss.Left,
+	lines := []string{
 		title,
 		subtitle,
 		blank,
 		input.View,
-		blank,
-		hint,
-	)
+	}
+	if strings.TrimSpace(m.errorText) != "" {
+		lines = append(lines, blank, renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
+	}
+	lines = append(lines, blank, hint)
+	view := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	prefixHeight := lipgloss.Height(strings.Join([]string{title, subtitle, ""}, "\n"))
 	return builtPanel{
 		View:          view,

@@ -1,6 +1,10 @@
 package tasktui
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+
 	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 )
@@ -66,6 +70,9 @@ func (m *Model) cycleTaskConfig(delta int) bool {
 	if len(entries) <= 1 {
 		return false
 	}
+	if delta == 0 {
+		return false
+	}
 	index := 0
 	for i, entry := range entries {
 		if entry.Alias == m.selectedConfigAlias {
@@ -73,16 +80,26 @@ func (m *Model) cycleTaskConfig(delta int) bool {
 			break
 		}
 	}
-	index = (index + delta) % len(entries)
-	if index < 0 {
-		index += len(entries)
+	step := 1
+	if delta < 0 {
+		step = -1
 	}
-	next := entries[index].Alias
-	if next == m.selectedConfigAlias {
-		return false
+	for attempts := 0; attempts < len(entries)-1; attempts++ {
+		index = (index + step) % len(entries)
+		if index < 0 {
+			index += len(entries)
+		}
+		next := entries[index].Alias
+		if next == m.selectedConfigAlias {
+			continue
+		}
+		if !m.taskConfigIsLaunchable(next) {
+			continue
+		}
+		m.selectedConfigAlias = next
+		return true
 	}
-	m.selectedConfigAlias = next
-	return true
+	return false
 }
 
 func (m Model) effectiveLaunchRuntime() appconfig.RuntimeID {
@@ -102,4 +119,97 @@ func (m Model) effectiveLaunchRuntime() appconfig.RuntimeID {
 		return ""
 	}
 	return runtime
+}
+
+func (m Model) taskConfigSummary(alias string) (taskConfigSummary, bool) {
+	for _, entry := range m.taskConfigs.entries {
+		if entry.Alias == alias {
+			return entry, true
+		}
+	}
+	return taskConfigSummary{}, false
+}
+
+func (m *Model) loadTaskConfigEntry(alias string) (taskconfig.CatalogEntry, bool, error) {
+	for i, entry := range m.configCatalog.Entries {
+		if entry.Alias != alias {
+			continue
+		}
+		if entry.Config != nil {
+			return entry, true, nil
+		}
+		cfg, err := entry.LoadConfig()
+		if err != nil {
+			return taskconfig.CatalogEntry{}, true, err
+		}
+		entry.Config = cfg
+		m.configCatalog.Entries[i] = entry
+		return entry, true, nil
+	}
+	return taskconfig.CatalogEntry{}, false, nil
+}
+
+func (m *Model) taskConfigIsLaunchable(alias string) bool {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return false
+	}
+	if summary, ok := m.taskConfigSummary(alias); ok && strings.TrimSpace(summary.LoadErr) != "" {
+		return false
+	}
+	_, ok, err := m.loadTaskConfigEntry(alias)
+	return ok && err == nil
+}
+
+func (m *Model) firstLaunchableTaskConfigAlias(preferred ...string) string {
+	seen := map[string]struct{}{}
+	candidates := append([]string(nil), preferred...)
+	candidates = append(candidates, m.configCatalog.DefaultAlias)
+	for _, alias := range candidates {
+		alias = strings.TrimSpace(alias)
+		if alias == "" {
+			continue
+		}
+		if _, ok := seen[alias]; ok {
+			continue
+		}
+		seen[alias] = struct{}{}
+		if m.taskConfigIsLaunchable(alias) {
+			return alias
+		}
+	}
+	for _, entry := range m.configCatalog.Entries {
+		if _, ok := seen[entry.Alias]; ok {
+			continue
+		}
+		seen[entry.Alias] = struct{}{}
+		if m.taskConfigIsLaunchable(entry.Alias) {
+			return entry.Alias
+		}
+	}
+	return ""
+}
+
+func (m *Model) launchTaskConfigEntry() (taskconfig.CatalogEntry, error) {
+	alias := strings.TrimSpace(m.selectedConfigAlias)
+	if alias != "" {
+		if summary, ok := m.taskConfigSummary(alias); ok && strings.TrimSpace(summary.LoadErr) != "" {
+			return taskconfig.CatalogEntry{}, fmt.Errorf("task config %q is invalid: %s", alias, summary.LoadErr)
+		}
+		if entry, ok, err := m.loadTaskConfigEntry(alias); err != nil {
+			return taskconfig.CatalogEntry{}, fmt.Errorf("task config %q is invalid: %w", alias, err)
+		} else if ok {
+			return entry, nil
+		}
+	}
+	fallbackAlias := m.firstLaunchableTaskConfigAlias()
+	if fallbackAlias == "" {
+		return taskconfig.CatalogEntry{}, errors.New("no valid task config available")
+	}
+	entry, _, err := m.loadTaskConfigEntry(fallbackAlias)
+	if err != nil {
+		return taskconfig.CatalogEntry{}, fmt.Errorf("task config %q is invalid: %w", fallbackAlias, err)
+	}
+	m.selectedConfigAlias = fallbackAlias
+	return entry, nil
 }

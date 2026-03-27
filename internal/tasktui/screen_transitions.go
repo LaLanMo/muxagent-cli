@@ -7,9 +7,11 @@ func (m *Model) openNewTask() tea.Cmd {
 		m.returnScreen = m.screen
 	}
 	m.setScreen(ScreenNewTask)
+	m.focusRegion = FocusRegionComposer
 	m.editor.ClearSlot(editorSlotNewTask)
 	m.syncComponents()
-	return m.syncInputFocus()
+	focusCmd := m.editor.Focus()
+	return tea.Batch(focusCmd, m.syncInputFocus())
 }
 
 func (m *Model) closeNewTask() {
@@ -42,8 +44,15 @@ func (m *Model) setDetailScreen(screen Screen, resetArtifacts bool) {
 }
 
 func (m *Model) returnToTaskList() tea.Cmd {
+	selectedTaskID := ""
+	if m.current != nil {
+		selectedTaskID = m.current.Task.ID
+	}
 	m.clearActiveTask()
 	m.setScreen(ScreenTaskList)
 	m.syncComponents()
+	if selectedTaskID != "" {
+		selectTaskListTask(&m.taskList, selectedTaskID)
+	}
 	return tea.Batch(m.loadTasksCmd(), m.syncInputFocus())
 }

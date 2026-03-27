@@ -14,6 +14,9 @@ type appKeyMap struct {
 	tabArtifacts key.Binding
 	prevConfig   key.Binding
 	nextConfig   key.Binding
+	cloneConfig  key.Binding
+	renameConfig key.Binding
+	deleteConfig key.Binding
 }
 
 func newAppKeyMap() appKeyMap {
@@ -29,5 +32,8 @@ func newAppKeyMap() appKeyMap {
 		tabArtifacts: key.NewBinding(key.WithKeys("2")),
 		prevConfig:   key.NewBinding(key.WithKeys("ctrl+p")),
 		nextConfig:   key.NewBinding(key.WithKeys("ctrl+n")),
+		cloneConfig:  key.NewBinding(key.WithKeys("n")),
+		renameConfig: key.NewBinding(key.WithKeys("r")),
+		deleteConfig: key.NewBinding(key.WithKeys("x")),
 	}
 }

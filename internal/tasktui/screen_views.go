@@ -12,6 +12,8 @@ func (m Model) renderScreen() string {
 func (m Model) renderBaseScreen() string {
 	width, height := m.viewportSize()
 	switch m.screen {
+	case ScreenTaskConfigs:
+		return m.renderTaskConfigListScreen(width, height)
 	case ScreenNewTask:
 		return m.renderNewTaskScreen(width, height)
 	case ScreenRunning, ScreenApproval, ScreenClarification, ScreenFailed, ScreenComplete:
@@ -41,6 +43,20 @@ func (m Model) renderTaskListScreen(width, height int) string {
 	bodySurface := m.computeTaskListBodySurface(layout)
 	body := lipgloss.Place(bodySurface.Width, bodySurface.Height, lipgloss.Left, lipgloss.Top, m.taskList.View())
 	return renderCanvasLayout(layout.screenMetrics, layout.bodyHeight, header, body, footer)
+}
+
+func (m Model) renderTaskConfigListScreen(width, height int) string {
+	metrics := m.computeScreenMetrics()
+	header := m.renderTaskConfigListHeader(metrics.innerWidth)
+	footer := m.renderTaskConfigListFooter(surfaceRect{Width: metrics.innerWidth})
+	layout := m.computeTaskListScreenLayout(header, footer)
+	bodySurface := m.computeTaskListBodySurface(layout)
+	body := lipgloss.Place(bodySurface.Width, bodySurface.Height, lipgloss.Left, lipgloss.Top, m.configList.View())
+	page := renderCanvasLayout(layout.screenMetrics, layout.bodyHeight, header, body, footer)
+	if overlay := m.renderTaskConfigOverlay(metrics.innerWidth, metrics.innerHeight, page); overlay != "" {
+		return overlay
+	}
+	return page
 }
 
 func (m Model) renderNewTaskScreen(width, height int) string {

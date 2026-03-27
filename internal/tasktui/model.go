@@ -2,6 +2,7 @@ package tasktui
 
 import (
 	"image/color"
+	"strings"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/viewport"
@@ -17,6 +18,7 @@ type Screen int
 
 const (
 	ScreenTaskList Screen = iota
+	ScreenTaskConfigs
 	ScreenNewTask
 	ScreenRunning
 	ScreenApproval
@@ -38,11 +40,20 @@ type taskOpenedMsg struct {
 	err   error
 }
 
+type taskConfigCatalogLoadedMsg struct {
+	catalog            *taskconfig.Catalog
+	entries            []taskConfigSummary
+	selectedAlias      string
+	taskSelectionAlias string
+	err                error
+}
+
 type taskListAction int
 
 const (
 	taskListActionNone taskListAction = iota
 	taskListActionNewTask
+	taskListActionManageConfigs
 )
 
 type Model struct {
@@ -83,9 +94,11 @@ type Model struct {
 
 	keys            appKeyMap
 	taskList        list.Model
+	configList      list.Model
 	editor          EditorController
 	detailViewport  viewport.Model
 	artifactPreview viewport.Model
+	taskConfigs     taskConfigManagerState
 }
 
 func NewModel(service RuntimeService, workDir, configPath string, launchConfig *taskconfig.Config, version string) Model {
@@ -120,6 +133,7 @@ func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.
 		returnScreen:          ScreenTaskList,
 		keys:                  newAppKeyMap(),
 		taskList:              newTaskListModel(),
+		configList:            newTaskConfigListModel(),
 		editor: newEditorController(EditorSpec{
 			Placeholder: "Describe your task...",
 			CharLimit:   512,
@@ -163,6 +177,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.autoScrollDetail = true
 		m.syncComponents()
 		return m, m.syncInputFocus()
+	case taskConfigCatalogLoadedMsg:
+		if msg.err != nil {
+			m.taskConfigs.pending = false
+			m.taskConfigs.errorText = msg.err.Error()
+			m.syncComponents()
+			return m, nil
+		}
+		m.taskConfigs.pending = false
+		m.taskConfigs.errorText = ""
+		m.configCatalog = configCatalogOrDefault(msg.catalog)
+		m.taskConfigs.entries = append([]taskConfigSummary(nil), msg.entries...)
+		m.taskConfigs.selectedAlias = msg.selectedAlias
+		desiredAlias := strings.TrimSpace(msg.taskSelectionAlias)
+		if desiredAlias == "" {
+			desiredAlias = firstNonEmpty(m.selectedConfigAlias, m.configCatalog.DefaultAlias)
+		}
+		if !m.taskConfigIsLaunchable(desiredAlias) {
+			desiredAlias = m.firstLaunchableTaskConfigAlias(desiredAlias)
+		}
+		if desiredAlias == "" {
+			desiredAlias = m.configCatalog.DefaultAlias
+		}
+		m.selectedConfigAlias = desiredAlias
+		m.syncComponents()
+		return m, nil
 	case taskruntime.RunEvent:
 		m.handleEvent(msg)
 		m.syncComponents()

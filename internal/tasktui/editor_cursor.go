@@ -27,6 +27,8 @@ func (m Model) editorCursor() *tea.Cursor {
 
 func (m Model) editorCursorOffset() (int, int, bool) {
 	switch m.screen {
+	case ScreenTaskConfigs:
+		return m.taskConfigFormEditorCursorOffset()
 	case ScreenNewTask:
 		return m.newTaskEditorCursorOffset()
 	case ScreenApproval:
@@ -36,6 +38,22 @@ func (m Model) editorCursorOffset() (int, int, bool) {
 	default:
 		return 0, 0, false
 	}
+}
+
+func (m Model) taskConfigFormEditorCursorOffset() (int, int, bool) {
+	if m.taskConfigs.form == nil {
+		return 0, 0, false
+	}
+	metrics := m.computeScreenMetrics()
+	modalWidth := m.taskConfigFormModalWidth(metrics.innerWidth)
+	panel := m.buildTaskConfigFormPanel(modalWidth)
+	if !panel.HasEditor {
+		return 0, 0, false
+	}
+	modal := tuiTheme.modal.Width(modalWidth).Render(panel.View)
+	modalX := tuiTheme.canvas.GetPaddingLeft() + max(0, (metrics.innerWidth-lipgloss.Width(modal))/2)
+	modalY := tuiTheme.canvas.GetPaddingTop() + max(0, (metrics.innerHeight-lipgloss.Height(modal))/2)
+	return modalX + panel.EditorOffsetX, modalY + panel.EditorOffsetY, true
 }
 
 func (m Model) newTaskEditorCursorOffset() (int, int, bool) {

@@ -424,10 +424,14 @@ func TestTaskTUICanCreateTasksWithDifferentConfigsInOneSession(t *testing.T) {
 	session.waitForAll(t, 5*time.Second, "new task", "done Default config task")
 
 	session.send(t, "\x1b[A")
+	session.pause(150 * time.Millisecond)
+	session.send(t, "\x1b[A")
+	session.pause(150 * time.Millisecond)
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "config default")
 	session.send(t, "\x0e")
-	session.waitForAll(t, 5*time.Second, "config reviewer")
+	session.resize(t, 140, 40)
+	session.waitForAll(t, 5*time.Second, "reviewer", "runtime claude-code")
 	session.submitNewTask(t, "Reviewer config task")
 	session.waitForAll(t, 10*time.Second, "Task completed successfully")
 	session.quit(t)
@@ -458,6 +462,68 @@ func TestTaskTUICanCreateTasksWithDifferentConfigsInOneSession(t *testing.T) {
 	assert.Equal(t, appconfig.RuntimeClaudeCode, reviewerCfg.Runtime)
 }
 
+func TestTaskTUIConfigScreenCanCloneSetDefaultAndDeleteConfig(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.waitForAll(t, 10*time.Second, "new task", "task configs")
+	session.send(t, "\x1b[B")
+	session.send(t, "\r")
+	session.waitForAll(t, 10*time.Second, "Task Configs", "default")
+
+	session.send(t, "n")
+	session.waitForAll(t, 5*time.Second, "Clone Task Config", "Source config default")
+	session.send(t, "reviewer")
+	session.send(t, "\r")
+	session.waitForAll(t, 10*time.Second, "reviewer", "runtime Codex")
+
+	require.Eventually(t, func() bool {
+		reg, err := taskconfig.LoadRegistry()
+		if err != nil {
+			return false
+		}
+		_, ok := registryEntry(reg.Configs, "reviewer")
+		return ok && reg.DefaultAlias == taskconfig.DefaultAlias
+	}, 5*time.Second, 100*time.Millisecond)
+
+	session.send(t, "\r")
+	require.Eventually(t, func() bool {
+		reg, err := taskconfig.LoadRegistry()
+		if err != nil {
+			return false
+		}
+		return reg.DefaultAlias == "reviewer"
+	}, 5*time.Second, 100*time.Millisecond)
+
+	session.send(t, "x")
+	session.waitForAll(t, 5*time.Second, "Delete Task Config", "Existing tasks")
+	session.send(t, "\r")
+	require.Eventually(t, func() bool {
+		reg, err := taskconfig.LoadRegistry()
+		if err != nil {
+			return false
+		}
+		_, ok := registryEntry(reg.Configs, "reviewer")
+		return !ok && reg.DefaultAlias == taskconfig.DefaultAlias
+	}, 5*time.Second, 100*time.Millisecond)
+
+	taskConfigDir, err := taskconfig.TaskConfigDir()
+	require.NoError(t, err)
+	assert.NoDirExists(t, filepath.Join(taskConfigDir, "reviewer"))
+	session.waitForAll(t, 5*time.Second, "Task Configs", "default")
+
+	session.send(t, "\x1b")
+	session.waitForAll(t, 5*time.Second, "new task", "task configs")
+	session.forceClose()
+}
+
 func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
@@ -485,7 +551,9 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	session.send(t, "\x1b")
 	session.resetOutput()
 	session.waitForAll(t, 5*time.Second, "new task", "running Stay on list")
-	session.waitForAll(t, 10*time.Second, "new task", "Stay on list", "awaiting approval")
+	waitForPersistedTask(t, workDir, taskdomain.TaskStatusAwaitingUser)
+	session.resize(t, 140, 40)
+	session.waitForAll(t, 5*time.Second, "new task", "Stay on list", "awaiting approval")
 
 	output := session.output()
 	assert.NotContains(t, output, "Approve this plan?")
@@ -957,11 +1025,13 @@ func (s *tuiSession) confirm(t *testing.T) {
 
 func (s *tuiSession) submitNewTask(t *testing.T, description string) {
 	t.Helper()
-	s.send(t, description)
+	time.Sleep(150 * time.Millisecond)
+	for _, r := range description {
+		s.send(t, string(r))
+		time.Sleep(10 * time.Millisecond)
+	}
 	time.Sleep(100 * time.Millisecond)
 	s.send(t, "\t")
-	time.Sleep(100 * time.Millisecond)
-	s.send(t, "\r")
 }
 
 func (s *tuiSession) waitForAll(t *testing.T, timeout time.Duration, needles ...string) string {
@@ -1026,7 +1096,13 @@ func (s *tuiSession) quit(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if s.cmd.ProcessState == nil || !s.cmd.ProcessState.Exited() {
-		s.send(t, "\x03")
+		if strings.Contains(s.output(), "Quit muxagent?") {
+			s.send(t, "\t")
+			time.Sleep(100 * time.Millisecond)
+			s.send(t, "\r")
+		} else {
+			s.send(t, "\x03")
+		}
 	}
 	select {
 	case err := <-s.exitCh:
@@ -1156,6 +1232,15 @@ func loadTaskRecords(workDir string) ([]taskdomain.Task, error) {
 	}
 	defer store.Close()
 	return store.ListTasksByWorkDir(context.Background(), workDir)
+}
+
+func registryEntry(entries []taskconfig.RegistryEntry, alias string) (taskconfig.RegistryEntry, bool) {
+	for _, entry := range entries {
+		if entry.Alias == alias {
+			return entry, true
+		}
+	}
+	return taskconfig.RegistryEntry{}, false
 }
 
 func assertNodeRunCounts(t *testing.T, runs []taskdomain.NodeRun, want map[string]int) {

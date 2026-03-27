@@ -44,6 +44,15 @@ func (m Model) detailEditorSurfaceSpec(surface panelSurface) editorSurfaceSpec {
 
 func (m Model) currentEditorBindingSpec() editorBindingSpec {
 	switch m.screen {
+	case ScreenTaskConfigs:
+		if form := m.taskConfigs.form; form != nil {
+			return editorBindingSpec{
+				Visible:     true,
+				Slot:        form.Slot,
+				Placeholder: form.Placeholder,
+				Label:       form.Label,
+			}
+		}
 	case ScreenNewTask:
 		return editorBindingSpec{
 			Visible:     true,
@@ -83,6 +92,10 @@ func (m Model) currentEditorSurfaceSpec() editorSurfaceSpec {
 	}
 
 	switch m.screen {
+	case ScreenTaskConfigs:
+		metrics := m.computeScreenMetrics()
+		spec.FieldWidth = clamp(metrics.innerWidth-8, 24, 64)
+		spec.Rows = 1
 	case ScreenNewTask:
 		metrics := m.computeScreenMetrics()
 		header := m.renderAppHeader(metrics.innerWidth)

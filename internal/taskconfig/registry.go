@@ -203,6 +203,7 @@ func normalizeRegistry(reg Registry) (Registry, error) {
 		Configs:      make([]RegistryEntry, 0, len(reg.Configs)),
 	}
 	seen := map[string]struct{}{}
+	seenPaths := map[string]struct{}{}
 	for _, entry := range reg.Configs {
 		alias := strings.TrimSpace(entry.Alias)
 		if alias == "" {
@@ -216,6 +217,14 @@ func normalizeRegistry(reg Registry) (Registry, error) {
 		if err != nil {
 			return Registry{}, fmt.Errorf("task config %q: %w", alias, err)
 		}
+		if alias == builtinDefaultAlias {
+			path = managedDefaultBundleDir
+		}
+		pathKey := canonicalRegistryBundlePathKey(path)
+		if _, exists := seenPaths[pathKey]; exists {
+			return Registry{}, fmt.Errorf("task config path %q is duplicated", path)
+		}
+		seenPaths[pathKey] = struct{}{}
 		result.Configs = append(result.Configs, RegistryEntry{
 			Alias: alias,
 			Path:  path,
@@ -314,7 +323,16 @@ func EnsureExplicitDefaultRegistryEntry() error {
 	if reg.DefaultAlias == "" {
 		reg.DefaultAlias = builtinDefaultAlias
 	}
-	if _, ok := registryEntryByAlias(reg.Configs, builtinDefaultAlias); !ok {
+	if entry, ok := registryEntryByAlias(reg.Configs, builtinDefaultAlias); ok {
+		if entry.Path != managedDefaultBundleDir {
+			for i := range reg.Configs {
+				if reg.Configs[i].Alias == builtinDefaultAlias {
+					reg.Configs[i].Path = managedDefaultBundleDir
+					break
+				}
+			}
+		}
+	} else {
 		reg.Configs = append(reg.Configs, RegistryEntry{
 			Alias: builtinDefaultAlias,
 			Path:  managedDefaultBundleDir,
@@ -334,6 +352,10 @@ func registryEntryByAlias(entries []RegistryEntry, alias string) (RegistryEntry,
 		}
 	}
 	return RegistryEntry{}, false
+}
+
+func canonicalRegistryBundlePathKey(path string) string {
+	return strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
 }
 
 func ensureManagedAssetFile(destPath, assetPath string) error {

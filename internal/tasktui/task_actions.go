@@ -14,6 +14,12 @@ func (m *Model) submitNewTask() tea.Cmd {
 	if desc == "" {
 		return nil
 	}
+	entry, err := m.launchTaskConfigEntry()
+	if err != nil {
+		m.errorText = err.Error()
+		m.syncComponents()
+		return nil
+	}
 	m.clearActiveTask()
 	m.pendingRuntimeCmd = &pendingRuntimeCommand{
 		kind: pendingRuntimeCommandStartTask,
@@ -23,22 +29,22 @@ func (m *Model) submitNewTask() tea.Cmd {
 	m.current = &taskdomain.TaskView{
 		Task: taskdomain.Task{
 			Description: desc,
-			ConfigAlias: m.selectedTaskConfigAlias(),
-			ConfigPath:  m.selectedTaskConfigPath(),
+			ConfigAlias: entry.Alias,
+			ConfigPath:  entry.Path,
 			WorkDir:     m.workDir,
 		},
 		Status: taskdomain.TaskStatusRunning,
 	}
-	m.currentConfig = m.selectedTaskConfig()
+	m.currentConfig = entry.Config
 	m.currentInput = nil
 	m.setDetailScreen(ScreenRunning, true)
 	m.syncComponents()
 	return m.dispatchCmd(taskruntime.RunCommand{
 		Type:        taskruntime.CommandStartTask,
 		Description: desc,
-		ConfigAlias: m.selectedTaskConfigAlias(),
+		ConfigAlias: entry.Alias,
 		WorkDir:     m.workDir,
-		ConfigPath:  m.selectedTaskConfigPath(),
+		ConfigPath:  entry.Path,
 		Runtime:     m.effectiveLaunchRuntime(),
 	})
 }

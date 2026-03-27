@@ -19,6 +19,9 @@ func (m Model) activeEditorSeedValue(slot string) string {
 	case editorSlotNewTask:
 		return ""
 	default:
+		if form := m.taskConfigs.form; form != nil && form.Slot == slot {
+			return form.SeedValue
+		}
 		if m.screen == ScreenClarification {
 			question := m.currentClarificationQuestion()
 			if question != nil {

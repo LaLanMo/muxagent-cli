@@ -52,13 +52,57 @@ func typeText(t *testing.T, model Model, value string) Model {
 
 func openNewTaskModal(t *testing.T, model Model) Model {
 	t.Helper()
-	if len(model.tasks) > 0 {
+	for i := 0; i < 4; i++ {
+		if item, ok := selectedTaskListItem(model.taskList); ok && item.action == taskListActionNewTask {
+			break
+		}
 		next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 		model = next.(Model)
 	}
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.Equal(t, ScreenNewTask, model.screen)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			next, _ := model.Update(msg)
+			model = next.(Model)
+		}
+	}
+	return model
+}
+
+func openTaskConfigScreenFromList(t *testing.T, model Model) Model {
+	t.Helper()
+	for i := 0; i < 4; i++ {
+		if item, ok := selectedTaskListItem(model.taskList); ok && item.action == taskListActionManageConfigs {
+			break
+		}
+		next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = next.(Model)
+	}
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.Equal(t, ScreenTaskConfigs, model.screen)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			next, _ := model.Update(msg)
+			model = next.(Model)
+		}
+	}
+	return model
+}
+
+func openFirstTaskFromList(t *testing.T, model Model) Model {
+	t.Helper()
+	for i := 0; i < 8; i++ {
+		if item, ok := selectedTaskListItem(model.taskList); ok && item.action == taskListActionNone {
+			break
+		}
+		next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = next.(Model)
+	}
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
 	if cmd != nil {
 		if msg := cmd(); msg != nil {
 			next, _ := model.Update(msg)

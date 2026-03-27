@@ -475,6 +475,10 @@ func TestBackToTaskListStopsFollowingTask(t *testing.T) {
 	}
 	assert.Equal(t, ScreenTaskList, model.screen)
 	assert.Empty(t, model.activeTaskID)
+	selected, ok := selectedTaskListItem(model.taskList)
+	require.True(t, ok)
+	assert.Equal(t, taskListActionNone, selected.action)
+	assert.Equal(t, "task-1", selected.view.Task.ID)
 
 	completedView := taskdomain.TaskView{
 		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},

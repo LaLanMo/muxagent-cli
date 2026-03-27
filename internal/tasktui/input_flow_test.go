@@ -44,11 +44,7 @@ func TestModelOpensAwaitingTaskIntoApprovalScreen(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	model = next.(Model)
 
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(Model)
-	msg := cmd()
-	next, _ = model.Update(msg)
-	model = next.(Model)
+	model = openFirstTaskFromList(t, model)
 
 	assert.Equal(t, ScreenApproval, model.screen)
 	assert.Contains(t, strippedView(model.View().Content), "Approve this plan?")
@@ -141,11 +137,7 @@ func TestModelOpensAwaitingTaskIntoClarificationScreen(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	model = next.(Model)
 
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(Model)
-	msg := cmd()
-	next, _ = model.Update(msg)
-	model = next.(Model)
+	model = openFirstTaskFromList(t, model)
 
 	assert.Equal(t, ScreenClarification, model.screen)
 	assert.Equal(t, FocusRegionChoices, model.focusRegion)

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/list"
+
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 )
@@ -154,4 +156,48 @@ func shortenPath(path, workDir string) string {
 		path = strings.TrimPrefix(path, home+"/")
 	}
 	return path
+}
+
+func selectedTaskListItem(model list.Model) (taskListItem, bool) {
+	if item, ok := model.SelectedItem().(taskListItem); ok {
+		return item, true
+	}
+	items := model.Items()
+	if len(items) == 0 {
+		return taskListItem{}, false
+	}
+	index := clamp(model.Index(), 0, len(items)-1)
+	item, ok := items[index].(taskListItem)
+	return item, ok
+}
+
+func selectTaskListTask(model *list.Model, taskID string) bool {
+	if model == nil || strings.TrimSpace(taskID) == "" {
+		return false
+	}
+	items := model.Items()
+	for i, item := range items {
+		entry, ok := item.(taskListItem)
+		if !ok || entry.action != taskListActionNone {
+			continue
+		}
+		if entry.view.Task.ID == taskID {
+			model.Select(i)
+			return true
+		}
+	}
+	return false
+}
+
+func selectedTaskConfigListItem(model list.Model) (taskConfigListItem, bool) {
+	if item, ok := model.SelectedItem().(taskConfigListItem); ok {
+		return item, true
+	}
+	items := model.Items()
+	if len(items) == 0 {
+		return taskConfigListItem{}, false
+	}
+	index := clamp(model.Index(), 0, len(items)-1)
+	item, ok := items[index].(taskConfigListItem)
+	return item, ok
 }

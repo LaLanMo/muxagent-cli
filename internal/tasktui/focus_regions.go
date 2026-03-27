@@ -39,6 +39,11 @@ func (m Model) artifactTabActive() bool {
 
 func (m Model) availableFocusRegions() []FocusRegion {
 	switch m.screen {
+	case ScreenTaskConfigs:
+		if m.taskConfigs.form != nil {
+			return []FocusRegion{FocusRegionComposer}
+		}
+		return nil
 	case ScreenNewTask:
 		return []FocusRegion{FocusRegionComposer}
 	case ScreenApproval:
@@ -86,6 +91,11 @@ func (m Model) defaultFocusRegion() FocusRegion {
 		return FocusRegionArtifactFiles
 	}
 	switch m.screen {
+	case ScreenTaskConfigs:
+		if m.taskConfigs.form != nil {
+			return FocusRegionComposer
+		}
+		return FocusRegionNone
 	case ScreenNewTask:
 		return FocusRegionComposer
 	case ScreenApproval:

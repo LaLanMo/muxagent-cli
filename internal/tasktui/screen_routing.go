@@ -59,6 +59,8 @@ func (m Model) handleScreenKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case ScreenTaskList:
 		return m.handleTaskListKey(msg)
+	case ScreenTaskConfigs:
+		return m.handleTaskConfigListKey(msg)
 	case ScreenNewTask:
 		return m.handleNewTaskKey(msg)
 	case ScreenApproval:
