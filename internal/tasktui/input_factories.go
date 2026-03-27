@@ -37,7 +37,6 @@ func newStyledTextArea(placeholder string) textarea.Model {
 	input.SetStyles(styles)
 	input.Prompt = ""
 	input.Placeholder = placeholder
-	input.CharLimit = 512
 	input.ShowLineNumbers = false
 	input.SetVirtualCursor(false)
 	input.SetHeight(1)

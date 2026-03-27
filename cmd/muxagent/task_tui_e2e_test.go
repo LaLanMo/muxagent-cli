@@ -33,6 +33,11 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
 	fakeClaudeFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-claude.sh")
 	basePath := os.Getenv("PATH")
+	longDescription := strings.TrimSpace(strings.Repeat(
+		"Long end-to-end task descriptions should persist without truncation through planning, approval, implementation, and storage. ",
+		6,
+	))
+	require.Greater(t, len(longDescription), 512)
 
 	tests := []struct {
 		name              string
@@ -83,6 +88,32 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 						assertHumanAuditArtifact(t, run)
 					}
 				}
+			},
+		},
+		{
+			name:        "long description persists end to end",
+			flow:        "happy",
+			description: longDescription,
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.submitNewTask(t, longDescription)
+				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+				session.confirm(t)
+			},
+			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 6)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"upsert_plan":  1,
+					"review_plan":  1,
+					"approve_plan": 1,
+					"implement":    1,
+					"verify":       1,
+					"done":         1,
+				})
 			},
 		},
 		{

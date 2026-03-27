@@ -148,12 +148,19 @@ func TestStartTaskCommandErrorReturnsToComposerAndPreservesInput(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
 	model = openNewTaskModal(t, model)
-	model = typeText(t, model, "Broken config")
+	longDescription := strings.TrimSpace(strings.Repeat(
+		"Broken config command-error regression coverage should preserve every character across the running-to-composer bounce. ",
+		6,
+	))
+	require.Greater(t, len(longDescription), 512)
+	model = typeText(t, model, longDescription)
 
 	model, cmd := submitNewTaskModal(t, model)
 	require.NotNil(t, cmd)
 	require.Nil(t, cmd())
 	require.Equal(t, ScreenRunning, model.screen)
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, longDescription, service.dispatched[0].Description)
 
 	next, _ = model.Update(taskruntime.RunEvent{
 		Type:  taskruntime.EventCommandError,
@@ -162,7 +169,7 @@ func TestStartTaskCommandErrorReturnsToComposerAndPreservesInput(t *testing.T) {
 	model = next.(Model)
 
 	assert.Equal(t, ScreenNewTask, model.screen)
-	assert.Equal(t, "Broken config", model.editor.Value())
+	assert.Equal(t, longDescription, model.editor.Value())
 	assert.Equal(t, "invalid task config", model.errorText)
 	assert.Nil(t, model.current)
 	assert.Empty(t, model.activeTaskID)

@@ -136,7 +136,6 @@ func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.
 		configList:            newTaskConfigListModel(),
 		editor: newEditorController(EditorSpec{
 			Placeholder: "Describe your task...",
-			CharLimit:   512,
 			Rows:        6,
 		}),
 		detailViewport:   newDetailViewport(),

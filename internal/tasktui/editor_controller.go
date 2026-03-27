@@ -11,7 +11,6 @@ import (
 
 type EditorSpec struct {
 	Placeholder string
-	CharLimit   int
 	Rows        int
 }
 
@@ -25,9 +24,6 @@ type EditorController struct {
 func newEditorController(spec EditorSpec) EditorController {
 	spec = normalizeEditorSpec(spec)
 	input := newStyledTextArea(spec.Placeholder)
-	if spec.CharLimit > 0 {
-		input.CharLimit = spec.CharLimit
-	}
 	input.SetHeight(spec.Rows)
 	return EditorController{
 		input: input,
