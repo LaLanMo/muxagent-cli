@@ -92,7 +92,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 						assert.Equal(t, taskdomain.NodeRunDone, run.Status)
 						assert.Empty(t, run.SessionID)
 						assert.Equal(t, true, run.Result["approved"])
-						assertHumanAuditArtifact(t, run)
+						assertHumanAuditArtifact(t, task, runs, run)
 					}
 				}
 			},
@@ -241,7 +241,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 						rejections++
 						assert.Equal(t, "Need more detail", run.Result["feedback"])
 					}
-					assertHumanAuditArtifact(t, run)
+					assertHumanAuditArtifact(t, task, runs, run)
 				}
 				assert.Equal(t, 1, rejections)
 				assert.Equal(t, 1, approvals)
@@ -281,7 +281,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 						assert.Equal(t, "thread-upsert_plan-1", run.SessionID)
 					}
 					if run.NodeName == "approve_plan" {
-						assertHumanAuditArtifact(t, run)
+						assertHumanAuditArtifact(t, task, runs, run)
 					}
 					assert.Equal(t, task.ID, run.TaskID)
 				}
@@ -317,7 +317,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				for _, run := range runs {
 					if run.NodeName != "review_plan" {
 						if run.NodeName == "approve_plan" {
-							assertHumanAuditArtifact(t, run)
+							assertHumanAuditArtifact(t, task, runs, run)
 						}
 						continue
 					}
@@ -538,7 +538,7 @@ func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
 	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 
 	upsertRun := requireNodeRunByName(t, runs, "upsert_plan")
-	inputPath := findArtifactPathByBase(t, taskdomain.ArtifactPaths(upsertRun.Result), "input.md")
+	inputPath := mustRunAuditPath(t, workDir, taskdomain.Task{ID: view.Task.ID, WorkDir: workDir}, runs, upsertRun, "input.md")
 	inputBytes, err := os.ReadFile(inputPath)
 	require.NoError(t, err)
 
@@ -546,6 +546,7 @@ func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
 	capturedPromptBytes, err := os.ReadFile(capturedPromptPath)
 	require.NoError(t, err)
 	assert.Equal(t, string(capturedPromptBytes), string(inputBytes))
+	assertArtifactPathsExcludeRuntimeAudit(t, view.ArtifactPaths)
 
 	templatePath := filepath.Join(moduleRoot, "internal", "taskconfig", "defaults", "prompts", "upsert_plan.md")
 	assertPromptContainsLiteralTemplateLines(t, string(inputBytes), templatePath)
@@ -555,6 +556,11 @@ func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
 	assert.NotContains(t, string(inputBytes), "# Input")
 	assert.NotContains(t, string(inputBytes), "## Prompt")
 	assert.NotContains(t, string(inputBytes), "{{")
+
+	reviewPromptBytes, err := os.ReadFile(filepath.Join(stateDir, "02-review_plan.prompt.txt"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(reviewPromptBytes), "input.md")
+	assert.NotContains(t, string(reviewPromptBytes), "output.json")
 
 	session.quit(t)
 }
@@ -1540,12 +1546,14 @@ func assertNodeRunCounts(t *testing.T, runs []taskdomain.NodeRun, want map[strin
 	assert.Equal(t, want, got)
 }
 
-func assertHumanAuditArtifact(t *testing.T, run taskdomain.NodeRun) {
+func assertHumanAuditArtifact(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun) {
 	t.Helper()
 	paths := taskdomain.ArtifactPaths(run.Result)
-	require.Len(t, paths, 2)
+	require.Empty(t, paths)
+	inputPath := mustRunAuditPath(t, task.WorkDir, task, runs, run, "input.md")
+	outputPath := mustRunAuditPath(t, task.WorkDir, task, runs, run, "output.json")
 	var names []string
-	for _, path := range paths {
+	for _, path := range []string{inputPath, outputPath} {
 		assert.FileExists(t, path)
 		names = append(names, filepath.Base(path))
 	}
@@ -1575,6 +1583,15 @@ func findArtifactPathByBase(t *testing.T, paths []string, base string) string {
 	return ""
 }
 
+func assertArtifactPathsExcludeRuntimeAudit(t *testing.T, paths []string) {
+	t.Helper()
+	for _, path := range paths {
+		base := filepath.Base(path)
+		assert.NotEqual(t, "input.md", base)
+		assert.NotEqual(t, "output.json", base)
+	}
+}
+
 func assertPromptContainsLiteralTemplateLines(t *testing.T, input, templatePath string) {
 	t.Helper()
 	templateBytes, err := os.ReadFile(templatePath)
@@ -1588,6 +1605,30 @@ func assertPromptContainsLiteralTemplateLines(t *testing.T, input, templatePath 
 		}
 		assert.Contains(t, input, line)
 	}
+}
+
+func mustRunAuditPath(t *testing.T, workDir string, task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun, name string) string {
+	t.Helper()
+	sequence := nodeRunSequenceForTest(t, runs, run.ID)
+	return filepath.Join(taskstore.ArtifactRunDir(workDir, task.ID, sequence, run.NodeName), name)
+}
+
+func nodeRunSequenceForTest(t *testing.T, runs []taskdomain.NodeRun, runID string) int {
+	t.Helper()
+	sorted := append([]taskdomain.NodeRun(nil), runs...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].StartedAt.Equal(sorted[j].StartedAt) {
+			return sorted[i].ID < sorted[j].ID
+		}
+		return sorted[i].StartedAt.Before(sorted[j].StartedAt)
+	})
+	for i, run := range sorted {
+		if run.ID == runID {
+			return i + 1
+		}
+	}
+	t.Fatalf("node run %q not found", runID)
+	return 0
 }
 
 func assertArtifactDirs(t *testing.T, task taskdomain.Task, want []string) {

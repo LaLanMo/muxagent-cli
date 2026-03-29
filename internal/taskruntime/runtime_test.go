@@ -95,10 +95,10 @@ func TestServiceAgentRunPersistsPromptInputArtifact(t *testing.T) {
 	require.Equal(t, taskdomain.NodeRunDone, implementRun.Status)
 
 	artifactPaths := taskdomain.ArtifactPaths(implementRun.Result)
-	require.Len(t, artifactPaths, 2)
-	inputPath := findArtifactPathByBase(t, artifactPaths, inputArtifactName)
+	require.Len(t, artifactPaths, 1)
 	implPath := filepath.Join(requests[0].ArtifactDir, findArtifactPathByBase(t, artifactPaths, "impl.md"))
-	outputPath := filepath.Join(requests[0].ArtifactDir, outputArtifactName)
+	inputPath := mustRunArtifactPathForRun(t, completed.TaskView.Task, runs, implementRun, inputArtifactName)
+	outputPath := mustRunArtifactPathForRun(t, completed.TaskView.Task, runs, implementRun, outputArtifactName)
 	assert.FileExists(t, inputPath)
 	assert.FileExists(t, implPath)
 	assert.FileExists(t, outputPath)
@@ -106,7 +106,7 @@ func TestServiceAgentRunPersistsPromptInputArtifact(t *testing.T) {
 	assert.Equal(t, taskexecutor.AppendOutputContract(requests[0]), input)
 	assert.NotContains(t, input, "## Prompt")
 	assert.NotContains(t, input, "# Input")
-	assert.Contains(t, completed.TaskView.ArtifactPaths, inputPath)
+	assert.NotContains(t, completed.TaskView.ArtifactPaths, inputPath)
 	assert.Contains(t, completed.TaskView.ArtifactPaths, "impl.md")
 }
 
@@ -147,7 +147,18 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	upsertRequests := executor.requestsForNode("upsert_plan")
 	require.Len(t, upsertRequests, 1)
 	expectedInputPrefix := taskexecutor.AppendOutputContract(upsertRequests[0])
-	requestInputPath := findArtifactPathByBase(t, requested.InputRequest.ArtifactPaths, inputArtifactName)
+	task, err := service.store.GetTask(context.Background(), requested.TaskID)
+	require.NoError(t, err)
+	beforeRuns, err := service.store.ListNodeRunsByTask(context.Background(), requested.TaskID)
+	require.NoError(t, err)
+	var requestedRun taskdomain.NodeRun
+	for _, run := range beforeRuns {
+		if run.ID == requested.NodeRunID {
+			requestedRun = run
+			break
+		}
+	}
+	requestInputPath := mustRunArtifactPathForRun(t, task, beforeRuns, requestedRun, inputArtifactName)
 	requestInput := readTestFile(t, requestInputPath)
 	assert.True(t, strings.HasPrefix(requestInput, expectedInputPrefix))
 	assert.NotContains(t, requestInput, "## Prompt")
@@ -156,10 +167,8 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	assert.Contains(t, requestInput, "Need a choice")
 	assert.Contains(t, requestInput, "Why it matters: Impacts plan")
 	assert.Contains(t, requestInput, "Answer: pending")
-
-	beforeRuns, err := service.store.ListNodeRunsByTask(context.Background(), requested.TaskID)
-	require.NoError(t, err)
 	assert.Len(t, beforeRuns, 1)
+	assert.NotContains(t, requested.InputRequest.ArtifactPaths, requestInputPath)
 
 	service.Dispatch(RunCommand{
 		Type:      CommandSubmitInput,
@@ -188,8 +197,9 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 			count++
 			assert.Len(t, run.Clarifications, 1)
 			artifactPaths := taskdomain.ArtifactPaths(run.Result)
-			inputPath := findArtifactPathByBase(t, artifactPaths, inputArtifactName)
-			assert.Contains(t, artifactPaths, inputPath)
+			assert.Len(t, artifactPaths, 1)
+			inputPath := mustRunArtifactPathForRun(t, task, afterRuns, run, inputArtifactName)
+			assert.NotContains(t, artifactPaths, inputPath)
 			input := readTestFile(t, inputPath)
 			assert.True(t, strings.HasPrefix(input, expectedInputPrefix))
 			assert.NotContains(t, input, "## Prompt")
@@ -534,9 +544,11 @@ func TestServiceHumanNodeSubmissionCreatesAuditArtifactAndFeedsNextPrompt(t *tes
 	}
 	require.Equal(t, taskdomain.NodeRunDone, approvalRun.Status)
 	artifactPaths := taskdomain.ArtifactPaths(approvalRun.Result)
-	require.Len(t, artifactPaths, 2)
-	outputPath := findArtifactPathByBase(t, artifactPaths, outputArtifactName)
-	inputPath := findArtifactPathByBase(t, artifactPaths, inputArtifactName)
+	require.Empty(t, artifactPaths)
+	task, err := service.store.GetTask(context.Background(), firstApproval.TaskID)
+	require.NoError(t, err)
+	outputPath := mustRunArtifactPathForRun(t, task, runs, approvalRun, outputArtifactName)
+	inputPath := mustRunArtifactPathForRun(t, task, runs, approvalRun, inputArtifactName)
 	assert.FileExists(t, outputPath)
 	assert.FileExists(t, inputPath)
 	assert.Equal(t, false, approvalRun.Result["approved"])
@@ -559,13 +571,13 @@ func TestServiceHumanNodeSubmissionCreatesAuditArtifactAndFeedsNextPrompt(t *tes
 
 	upsertPrompts := executor.requestsForNode("upsert_plan")
 	require.Len(t, upsertPrompts, 2)
-	assert.Contains(t, upsertPrompts[1].Prompt, outputPath)
-	assert.Contains(t, upsertPrompts[1].Prompt, inputPath)
+	assert.NotContains(t, upsertPrompts[1].Prompt, outputPath)
+	assert.NotContains(t, upsertPrompts[1].Prompt, inputPath)
 
 	view, _, err := service.LoadTaskView(context.Background(), firstApproval.TaskID)
 	require.NoError(t, err)
-	assert.Contains(t, view.ArtifactPaths, outputPath)
-	assert.Contains(t, view.ArtifactPaths, inputPath)
+	assert.NotContains(t, view.ArtifactPaths, outputPath)
+	assert.NotContains(t, view.ArtifactPaths, inputPath)
 }
 
 func TestServicePublishesProgressAndPersistsSessionIDBeforeCompletion(t *testing.T) {
@@ -795,10 +807,21 @@ func TestServiceRejectsInvalidClarificationPayload(t *testing.T) {
 			service.Dispatch(startTaskCommand(t, service, "clarify"))
 			event := waitForEvent(t, service.Events(), EventInputRequested)
 			require.Equal(t, InputKindClarification, event.InputRequest.Kind)
-			inputPath := findArtifactPathByBase(t, event.InputRequest.ArtifactPaths, inputArtifactName)
+			task, err := service.store.GetTask(context.Background(), event.TaskID)
+			require.NoError(t, err)
+			runs, err := service.store.ListNodeRunsByTask(context.Background(), event.TaskID)
+			require.NoError(t, err)
+			var eventRun taskdomain.NodeRun
+			for _, run := range runs {
+				if run.ID == event.NodeRunID {
+					eventRun = run
+					break
+				}
+			}
+			inputPath := mustRunArtifactPathForRun(t, task, runs, eventRun, inputArtifactName)
 			beforeInput := readTestFile(t, inputPath)
 
-			err := service.submitInput(context.Background(), event.TaskID, event.NodeRunID, tc.payload)
+			err = service.submitInput(context.Background(), event.TaskID, event.NodeRunID, tc.payload)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
 
@@ -1484,6 +1507,13 @@ func findArtifactPathByBase(t *testing.T, paths []string, base string) string {
 	}
 	t.Fatalf("artifact %q not found in %v", base, paths)
 	return ""
+}
+
+func mustRunArtifactPathForRun(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun, name string) string {
+	t.Helper()
+	path, err := runArtifactPathForExistingRun(task, runs, run, name)
+	require.NoError(t, err)
+	return path
 }
 
 func readTestFile(t *testing.T, path string) string {

@@ -77,8 +77,7 @@ func materializeHumanNodeArtifact(task taskdomain.Task, run taskdomain.NodeRun, 
 	if err != nil {
 		return nil, err
 	}
-	inputPath, err := writeHumanInputArtifact(task, run, runs, payload, submittedAt)
-	if err != nil {
+	if _, err := writeHumanInputArtifact(task, run, runs, payload, submittedAt); err != nil {
 		return nil, err
 	}
 	envelope := map[string]interface{}{
@@ -97,7 +96,7 @@ func materializeHumanNodeArtifact(task taskdomain.Task, run taskdomain.NodeRun, 
 	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 		return nil, err
 	}
-	return appendArtifactPaths(payload, outputPath, inputPath), nil
+	return cloneMap(payload), nil
 }
 
 func cloneMap(src map[string]interface{}) map[string]interface{} {
@@ -109,39 +108,6 @@ func cloneMap(src map[string]interface{}) map[string]interface{} {
 		dst[key] = value
 	}
 	return dst
-}
-
-func appendArtifactPaths(result map[string]interface{}, paths ...string) map[string]interface{} {
-	out := cloneMap(result)
-	existing := taskdomain.ArtifactPaths(out)
-	merged := make([]string, 0, len(existing)+len(paths))
-	seen := make(map[string]struct{}, len(existing)+len(paths))
-	for _, path := range existing {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		merged = append(merged, path)
-	}
-	for _, path := range paths {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		merged = append(merged, path)
-	}
-	if len(merged) > 0 {
-		out["file_paths"] = merged
-	}
-	return out
 }
 
 func writeHumanInputArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []taskdomain.NodeRun, payload map[string]interface{}, submittedAt time.Time) (string, error) {

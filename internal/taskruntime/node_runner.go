@@ -106,8 +106,7 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		Prompt:              prompt,
 		ResultSchema:        cfg.NodeDefinitions[run.NodeName].ResultSchema,
 	}
-	inputPath, err := ensureAgentInputArtifact(task, run, runs, taskexecutor.AppendOutputContract(req))
-	if err != nil {
+	if _, err := ensureAgentInputArtifact(task, run, runs, taskexecutor.AppendOutputContract(req)); err != nil {
 		return err
 	}
 	var progressErr error
@@ -165,12 +164,10 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		}
 		storedResult := cloneMap(result.Result)
 		if len(run.Clarifications) > 0 {
-			inputPath, err = writeClarificationInputArtifact(task, run, runs)
-			if err != nil {
+			if _, err := writeClarificationInputArtifact(task, run, runs); err != nil {
 				return err
 			}
 		}
-		storedResult = appendArtifactPaths(storedResult, inputPath)
 		now := time.Now().UTC()
 		run.Result = storedResult
 		run.Status = taskdomain.NodeRunDone
