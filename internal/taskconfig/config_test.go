@@ -91,8 +91,8 @@ node_definitions:
 
 func TestLoadBuiltinConfigs(t *testing.T) {
 	tests := []struct {
-		name      string
-		builtinID string
+		name         string
+		builtinID    string
 		entry        string
 		nodeCount    int
 		hasApproval  bool
@@ -140,6 +140,15 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 			assert.Equal(t, NodeTypeTerminal, cfg.NodeDefinitions["done"].Type)
 		})
 	}
+}
+
+func TestLoadBuiltinAutonomousDisablesClarification(t *testing.T) {
+	cfg, err := LoadBuiltin(BuiltinIDAutonomous)
+	require.NoError(t, err)
+
+	assert.Zero(t, cfg.NodeDefinitions["upsert_plan"].MaxClarificationRounds)
+	assert.Zero(t, cfg.NodeDefinitions["implement"].MaxClarificationRounds)
+	assert.Zero(t, cfg.NodeDefinitions["verify"].MaxClarificationRounds)
 }
 
 func TestLoadRejectsInvalidConfigs_TableDriven(t *testing.T) {

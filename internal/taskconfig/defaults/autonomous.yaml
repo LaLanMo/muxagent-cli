@@ -46,7 +46,6 @@ topology:
 node_definitions:
   upsert_plan:
     system_prompt: ./prompts/upsert_plan.md
-    max_clarification_rounds: 3
     result_schema:
       type: object
       additionalProperties: false
@@ -74,7 +73,6 @@ node_definitions:
             type: string
   implement:
     system_prompt: ./prompts/implement.md
-    max_clarification_rounds: 3
     result_schema:
       type: object
       additionalProperties: false
@@ -87,7 +85,6 @@ node_definitions:
             type: string
   verify:
     system_prompt: ./prompts/verify.md
-    max_clarification_rounds: 3
     result_schema:
       type: object
       additionalProperties: false
@@ -103,4 +100,3 @@ node_definitions:
             type: string
   done:
     type: terminal
-
