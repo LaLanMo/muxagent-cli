@@ -104,22 +104,19 @@ func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list
 }
 
 func renderTaskListTitleBlock(view taskdomain.TaskView, marker, statusText string, statusStyle lipgloss.Style, contentWidth int) string {
-	titleLines := strings.Split(view.Task.Description, "\n")
-	if len(titleLines) == 0 {
-		titleLines = []string{""}
-	}
 	titleStyle := tuiTheme.Text.Body
 	prefixText := marker + statusText + " "
 	prefixWidth := ansi.StringWidth(prefixText)
 	descriptionWidth := max(1, contentWidth-prefixWidth)
-	rendered := make([]string, 0, len(titleLines))
-	first := statusStyle.Render(marker+statusText) + " " + titleStyle.Render(ansi.Truncate(titleLines[0], descriptionWidth, "…"))
-	rendered = append(rendered, fitLine(first, contentWidth))
-	indent := strings.Repeat(" ", prefixWidth)
-	for _, line := range titleLines[1:] {
-		rendered = append(rendered, fitLine(indent+titleStyle.Render(ansi.Truncate(line, descriptionWidth, "…")), contentWidth))
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, rendered...)
+	title := statusStyle.Render(marker+statusText) + " " + titleStyle.Render(ansi.Truncate(taskListPrimaryDescription(view.Task.Description), descriptionWidth, "…"))
+	return fitLine(title, contentWidth)
+}
+
+func taskListPrimaryDescription(description string) string {
+	description = strings.ReplaceAll(description, "\r\n", "\n")
+	description = strings.ReplaceAll(description, "\r", "\n")
+	first, _, _ := strings.Cut(description, "\n")
+	return first
 }
 
 func taskListRowStyle(entry taskListItem, selected bool, rowWidth int) lipgloss.Style {

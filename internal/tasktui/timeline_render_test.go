@@ -240,7 +240,7 @@ func TestTaskListDelegateUsesNeutralTitleStyleForRunningTasks(t *testing.T) {
 	assert.NotContains(t, raw, tuiTheme.runningText.Render("running task"))
 }
 
-func TestTaskListDelegateHangingIndentsMultilineDescriptions(t *testing.T) {
+func TestTaskListDelegateShowsOnlyFirstLineOfMultilineDescriptions(t *testing.T) {
 	delegate := taskListDelegate{}
 	model := newTaskListModel()
 	model.SetSize(72, 8)
@@ -259,17 +259,8 @@ func TestTaskListDelegateHangingIndentsMultilineDescriptions(t *testing.T) {
 	delegate.Render(&buf, model, 0, model.Items()[0])
 	lines := strings.Split(strings.TrimSuffix(ansi.Strip(buf.String()), "\n"), "\n")
 
-	require.Len(t, lines, 3)
+	require.Len(t, lines, 2)
 	assert.Contains(t, lines[0], "❯ running first line")
-	firstDescriptionColumn := strings.Index(lines[0], "first line")
-	secondDescriptionColumn := strings.Index(lines[1], "second line")
-	require.NotEqual(t, -1, firstDescriptionColumn)
-	require.NotEqual(t, -1, secondDescriptionColumn)
-	assert.Equal(
-		t,
-		ansi.StringWidth(lines[0][:firstDescriptionColumn]),
-		ansi.StringWidth(lines[1][:secondDescriptionColumn]),
-	)
-	assert.Equal(t, strings.Repeat(" ", secondDescriptionColumn), lines[1][:secondDescriptionColumn])
-	assert.Contains(t, lines[2], "at implement")
+	assert.NotContains(t, ansi.Strip(buf.String()), "second line")
+	assert.Contains(t, lines[1], "at implement")
 }

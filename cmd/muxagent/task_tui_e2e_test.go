@@ -834,6 +834,42 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	session.quit(t)
 }
 
+func TestTaskTUIListShowsOnlyFirstLineOfMultilineDescriptions(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("TERM", "xterm-256color")
+
+	store, err := taskstore.Open(workDir)
+	require.NoError(t, err)
+
+	task := taskdomain.Task{
+		ID:          "task-1",
+		Description: "first line\nsecond line",
+		WorkDir:     workDir,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, store.CreateTask(context.Background(), task))
+	require.NoError(t, store.Close())
+
+	configPath := writeOverrideConfig(t, workDir, "multiline.yaml", singleAgentTerminalConfig(appconfig.RuntimeCodex))
+	installConfigBundle(t, configPath, filepath.Dir(taskstore.ConfigPath(workDir, task.ID)))
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.waitForAll(t, 10*time.Second, "running first line", "new task", "Enter select")
+
+	output := session.output()
+	assert.NotContains(t, output, "second line")
+	assert.Contains(t, output, "Ctrl+C quit")
+
+	session.quit(t)
+}
+
 func TestTaskTUISmallTerminalArtifactTabSwitching(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)

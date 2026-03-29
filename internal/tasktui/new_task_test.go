@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -86,6 +87,36 @@ func TestTaskListCompactHeaderShowsCwdWithoutConfigOrRuntime(t *testing.T) {
 	assert.Contains(t, header, "cwd /tmp")
 	assert.NotContains(t, header, "config")
 	assert.NotContains(t, header, "runtime")
+}
+
+func TestTaskListScreenUsesFirstLineForMultilineDescriptions(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	model = next.(Model)
+
+	next, _ = model.Update(tasksLoadedMsg{
+		tasks: []taskdomain.TaskView{
+			{
+				Task:            taskdomain.Task{ID: "task-1", Description: "first line\nsecond line"},
+				Status:          taskdomain.TaskStatusFailed,
+				CurrentNodeName: "review_plan",
+				CurrentIssue: &taskdomain.TaskIssue{
+					Kind:       taskdomain.TaskIssueBlockedStep,
+					NodeName:   "review_plan",
+					OccurredAt: time.Now().UTC(),
+				},
+			},
+		},
+	})
+	model = next.(Model)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "blocked first line")
+	assert.NotContains(t, view, "second line")
+	assert.Contains(t, view, "blocked at review_plan")
+	assert.Contains(t, view, "Enter select")
+	assert.Contains(t, view, "Ctrl+C quit")
 }
 
 func TestModelSubmitsNewTaskCommand(t *testing.T) {
