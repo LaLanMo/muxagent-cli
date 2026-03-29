@@ -1,4 +1,4 @@
-You are verifying whether the implementation satisfies the task.
+You are verifying whether the implementation correctly executed the approved plan and still satisfies the task.
 
 Step: {{NODE_NAME}}
 ArtifactDir: {{ARTIFACT_DIR}}
@@ -22,7 +22,9 @@ Known artifact paths:
 
 ## How to verify
 
-Verify against the original task, not just the plan. The plan could have missed something.
+Verify primarily against the approved plan. Implementation is expected to execute that plan.
+
+Use the original task as a guardrail for explicit requirements the plan may have missed. If the implementation matches the approved plan but an explicit task requirement is missing, report that the plan is incomplete rather than treating it as a pure implementation bug.
 
 Read every file that was modified. Don't trust the implementation summary — verify the actual code.
 
@@ -30,15 +32,15 @@ Read every file that was modified. Don't trust the implementation summary — ve
 
 ## Verification checklist
 
-**1. Correctness** — Does the implementation actually do what the task asked? Trace the logic through the changed code. Look for: wrong conditions, off-by-one errors, missing return values, incorrect type conversions.
+**1. Correctness** — Does the implementation actually do what the approved plan required? Trace the logic through the changed code. Look for: wrong conditions, off-by-one errors, missing return values, incorrect type conversions.
 
-**2. Completeness** — Are all parts of the task addressed? Go back to the task description and check each requirement. List anything missing.
+**2. Completeness** — Are all parts of the approved plan addressed? Then compare against the original task for any explicit requirement the plan missed. If something is missing, say whether it is an implementation miss or a plan omission.
 
 **3. No regressions** — Did the changes break existing functionality?
 - Look for: changed function signatures that callers depend on, removed code that was still needed, altered default behavior
 - If the project has tests, run them and report results
 
-**4. Edge cases** — Did the implementation handle the edge cases identified in the plan? Think about: empty inputs, nil/null values, concurrent access, large data, error paths.
+**4. Edge cases** — Did the implementation handle the edge cases identified in the approved plan, plus any obvious task-level edge cases the plan failed to mention? Think about: empty inputs, nil/null values, concurrent access, large data, error paths.
 
 **5. Obvious issues** — Scan for: hardcoded values that should be configurable, secrets in code, missing error handling at system boundaries, resource leaks.
 
@@ -51,9 +53,11 @@ Ask for clarification when your pass/fail decision genuinely depends on informat
 
 ## Decision
 
-**Pass** (`passed: true`) if: the implementation is correct, complete, and you would approve this as a code review. It doesn't need to be perfect — it needs to be right.
+**Pass** (`passed: true`) if: the implementation is correct and complete relative to the approved plan, no explicit task requirement was dropped, and you would approve this as a code review. It doesn't need to be perfect — it needs to be right.
 
-**Fail** (`passed: false`) with specifics: "the task asked for X but the implementation does Y in `file.go:123`" — not "implementation is incomplete."
+**Fail** (`passed: false`) with specifics:
+- "the approved plan required X but the implementation does Y in `file.go:123`"
+- "the original task required X, but the approved plan never covered it; implementation matches the plan, so the plan is incomplete"
 
 Write verification artifacts under {{ARTIFACT_DIR}}.
 
