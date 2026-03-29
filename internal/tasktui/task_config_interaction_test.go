@@ -3,7 +3,6 @@ package tasktui
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,7 +21,7 @@ func TestTaskConfigScreenCrudViaKeyFlow(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
 	model = next.(Model)
 	model = openTaskConfigScreenFromList(t, model)
-	assert.Equal(t, 1, strings.Count(strippedView(model.View().Content), "bundle default"))
+	assert.Contains(t, strippedView(model.View().Content), "default")
 
 	model, _ = pressTaskConfigKey(t, model, tea.KeyPressMsg{Text: "n", Code: 'n'})
 	model = typeText(t, model, "reviewer")
@@ -31,7 +30,6 @@ func TestTaskConfigScreenCrudViaKeyFlow(t *testing.T) {
 	assert.Equal(t, "reviewer", model.taskConfigs.selectedAlias)
 	assert.Equal(t, "reviewer", model.selectedConfigAlias)
 	require.True(t, hasTaskConfigEntry(model.taskConfigs.entries, "reviewer"))
-	assert.Equal(t, 1, strings.Count(strippedView(model.View().Content), "bundle reviewer"))
 
 	model, _ = pressTaskConfigKey(t, model, tea.KeyPressMsg{Text: "r", Code: 'r'})
 	model = clearTaskConfigEditorText(t, model)
@@ -53,13 +51,9 @@ func TestTaskConfigScreenCrudViaKeyFlow(t *testing.T) {
 	assert.Equal(t, taskconfig.DefaultAlias, model.configCatalog.DefaultAlias)
 	assert.Equal(t, taskconfig.DefaultAlias, model.selectedConfigAlias)
 	assert.False(t, hasTaskConfigEntry(model.taskConfigs.entries, "deep-review"))
-
-	taskConfigDir, err := taskconfig.TaskConfigDir()
-	require.NoError(t, err)
-	assert.NoDirExists(t, filepath.Join(taskConfigDir, "reviewer"))
 }
 
-func TestTaskConfigScreenEnterOnDefaultShowsStatusAndContextualHint(t *testing.T) {
+func TestTaskConfigScreenEnterOnBuiltinDefaultShowsStatusAndContextualHint(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -70,13 +64,13 @@ func TestTaskConfigScreenEnterOnDefaultShowsStatusAndContextualHint(t *testing.T
 
 	require.Equal(t, taskconfig.DefaultAlias, model.configCatalog.DefaultAlias)
 	assert.Contains(t, strippedView(model.View().Content), "default selected")
+	assert.NotContains(t, strippedView(model.View().Content), "r rename")
+	assert.NotContains(t, strippedView(model.View().Content), "x delete")
 
 	model, cmd := pressTaskConfigKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.Nil(t, cmd)
 	assert.Equal(t, taskconfig.DefaultAlias, model.configCatalog.DefaultAlias)
 	assert.Equal(t, `config "default" is already the default`, model.taskConfigs.statusText)
-	assert.Contains(t, strippedView(model.View().Content), `config "default" is already the default`)
-	assert.NotContains(t, strippedView(model.View().Content), "Enter set default")
 }
 
 func TestTaskConfigScreenRejectsInvalidConfigAsDefaultViaEnter(t *testing.T) {
@@ -90,7 +84,6 @@ func TestTaskConfigScreenRejectsInvalidConfigAsDefaultViaEnter(t *testing.T) {
 	_, err = taskconfig.SaveRegistry(taskconfig.Registry{
 		DefaultAlias: taskconfig.DefaultAlias,
 		Configs: []taskconfig.RegistryEntry{
-			{Alias: taskconfig.DefaultAlias, Path: taskconfig.DefaultAlias},
 			{Alias: "broken", Path: "broken"},
 		},
 	})
@@ -101,7 +94,9 @@ func TestTaskConfigScreenRejectsInvalidConfigAsDefaultViaEnter(t *testing.T) {
 	model = next.(Model)
 	model = openTaskConfigScreenFromList(t, model)
 
-	model, _ = pressTaskConfigKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	for i := 0; i < 3; i++ {
+		model, _ = pressTaskConfigKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
 	selected, ok := selectedTaskConfigListItem(model.configList)
 	require.True(t, ok)
 	require.Equal(t, "broken", selected.summary.Alias)
@@ -111,7 +106,24 @@ func TestTaskConfigScreenRejectsInvalidConfigAsDefaultViaEnter(t *testing.T) {
 	assert.Equal(t, taskconfig.DefaultAlias, model.configCatalog.DefaultAlias)
 	assert.Equal(t, taskconfig.DefaultAlias, model.selectedConfigAlias)
 	assert.Contains(t, model.taskConfigs.errorText, `config "broken" is invalid`)
-	assert.NotContains(t, strippedView(model.View().Content), "Enter set default")
+}
+
+func TestTaskConfigScreenBuiltinRowsCannotBeRenamedOrDeleted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, t.TempDir(), "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	model = openTaskConfigScreenFromList(t, model)
+
+	model, cmd := pressTaskConfigKey(t, model, tea.KeyPressMsg{Text: "r", Code: 'r'})
+	require.Nil(t, cmd)
+	assert.Contains(t, model.taskConfigs.errorText, `config "default" cannot be renamed`)
+
+	model, cmd = pressTaskConfigKey(t, model, tea.KeyPressMsg{Text: "x", Code: 'x'})
+	require.Nil(t, cmd)
+	assert.Contains(t, model.taskConfigs.errorText, `config "default" cannot be deleted`)
 }
 
 func TestTaskConfigFormShowsEditorCursor(t *testing.T) {
@@ -136,11 +148,34 @@ func TestNewTaskSkipsInvalidConfigsWhenCyclingAndRejectsBrokenSelection(t *testi
 
 	taskConfigDir, err := taskconfig.TaskConfigDir()
 	require.NoError(t, err)
-
-	reviewerSource, err := taskconfig.EnsureManagedDefaultAssets()
-	require.NoError(t, err)
 	reviewerDir := filepath.Join(taskConfigDir, "reviewer")
-	require.NoError(t, copyTreeForTest(filepath.Dir(reviewerSource), reviewerDir))
+	require.NoError(t, os.MkdirAll(reviewerDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(reviewerDir, "config.yaml"), []byte(`version: 1
+runtime: codex
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompt.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(reviewerDir, "prompt.md"), []byte("# prompt"), 0o644))
 
 	brokenDir := filepath.Join(taskConfigDir, "broken")
 	require.NoError(t, os.MkdirAll(brokenDir, 0o755))
@@ -192,28 +227,4 @@ func clearTaskConfigEditorText(t *testing.T, model Model) Model {
 		model = next.(Model)
 	}
 	return model
-}
-
-func copyTreeForTest(sourceDir, destDir string) error {
-	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(sourceDir, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(destDir, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o644)
-	})
 }

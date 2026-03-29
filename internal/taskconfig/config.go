@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,16 +18,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed defaults/default_config.yaml defaults/prompts/*.md
+//go:embed defaults
 var defaultsFS embed.FS
 
 const (
-	defaultConfigAsset = "defaults/default_config.yaml"
+	defaultConfigAsset = "defaults/default.yaml"
 	defaultPromptsDir  = "defaults/prompts"
 )
 
 type Config struct {
 	Version         int                       `yaml:"version" json:"version"`
+	Description     string                    `yaml:"description,omitempty" json:"description,omitempty"`
 	Runtime         appconfig.RuntimeID       `yaml:"runtime" json:"runtime"`
 	Clarification   ClarificationConfig       `yaml:"clarification" json:"clarification"`
 	Topology        Topology                  `yaml:"topology" json:"topology"`
@@ -165,6 +167,7 @@ type MaterializedConfig struct {
 
 type rawConfig struct {
 	Version         *int                         `yaml:"version"`
+	Description     *string                      `yaml:"description"`
 	Runtime         *appconfig.RuntimeID         `yaml:"runtime"`
 	Clarification   *rawClarificationConfig      `yaml:"clarification"`
 	Topology        *rawTopology                 `yaml:"topology"`
@@ -198,15 +201,23 @@ type rawNodeDefinition struct {
 }
 
 func LoadDefault() (*Config, error) {
-	data, err := defaultsFS.ReadFile(defaultConfigAsset)
+	return loadEmbeddedConfig(defaultConfigAsset)
+}
+
+func LoadBuiltin(builtinID string) (*Config, error) {
+	return loadEmbeddedBuiltinConfig(builtinID)
+}
+
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	return parse(data)
 }
 
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+func loadEmbeddedConfig(assetPath string) (*Config, error) {
+	data, err := defaultsFS.ReadFile(assetPath)
 	if err != nil {
 		return nil, err
 	}
@@ -552,6 +563,9 @@ func (raw *rawConfig) toConfig() Config {
 	if raw.Version != nil {
 		cfg.Version = *raw.Version
 	}
+	if raw.Description != nil {
+		cfg.Description = *raw.Description
+	}
 	if raw.Runtime != nil {
 		cfg.Runtime = *raw.Runtime
 	}
@@ -852,9 +866,9 @@ func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverrid
 	}
 
 	var (
-		cfg       *Config
-		sourceDir string
-		promptFS  fs.FS
+		cfg        *Config
+		bundleRoot string
+		promptFS   fs.FS
 	)
 	if overridePath == "" {
 		var err error
@@ -862,7 +876,7 @@ func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverrid
 		if err != nil {
 			return nil, err
 		}
-		sourceDir = defaultPromptsDir
+		bundleRoot = path.Dir(defaultConfigAsset)
 		promptFS = defaultsFS
 	} else {
 		var err error
@@ -870,8 +884,8 @@ func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverrid
 		if err != nil {
 			return nil, err
 		}
-		sourceDir = filepath.Dir(overridePath)
-		promptFS = os.DirFS(sourceDir)
+		bundleRoot = filepath.Dir(overridePath)
+		promptFS = os.DirFS(bundleRoot)
 	}
 
 	cfgCopy, err := deepCopy(cfg)
@@ -889,25 +903,38 @@ func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverrid
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	seenPromptDestinations := map[string]string{}
 	for _, name := range names {
 		def := cfgCopy.NodeDefinitions[name]
 		if def.Type == NodeTypeHuman || def.Type == NodeTypeTerminal {
 			continue
 		}
-		sourcePromptPath := def.SystemPrompt
-		promptBytes, err := readPrompt(promptFS, sourceDir, sourcePromptPath, overridePath == "")
+		sourcePromptPath, err := normalizeBundlePromptPath(def.SystemPrompt)
+		if err != nil {
+			return nil, fmt.Errorf("resolve system prompt for %q: %w", name, err)
+		}
+		materializedPromptPath := materializedPromptRelativePath(sourcePromptPath)
+		destinationKey := strings.ToLower(materializedPromptPath)
+		if owner, exists := seenPromptDestinations[destinationKey]; exists {
+			return nil, fmt.Errorf("system prompts for %q and %q both materialize to %q", owner, name, materializedPromptPath)
+		}
+		seenPromptDestinations[destinationKey] = name
+
+		promptBytes, err := readPrompt(promptFS, bundleRoot, sourcePromptPath, overridePath == "")
 		if err != nil {
 			return nil, fmt.Errorf("read system prompt for %q: %w", name, err)
 		}
-		destName := filepath.Base(sourcePromptPath)
-		if destName == "." || destName == "/" || destName == "" {
-			destName = name + ".md"
+		destPromptPath, err := promptMaterializationPath(promptDir, materializedPromptPath)
+		if err != nil {
+			return nil, fmt.Errorf("materialize system prompt for %q: %w", name, err)
 		}
-		destPromptPath := filepath.Join(promptDir, destName)
+		if err := os.MkdirAll(filepath.Dir(destPromptPath), 0o755); err != nil {
+			return nil, err
+		}
 		if err := os.WriteFile(destPromptPath, promptBytes, 0o644); err != nil {
 			return nil, err
 		}
-		def.SystemPrompt = "./prompts/" + destName
+		def.SystemPrompt = "./prompts/" + filepath.ToSlash(materializedPromptPath)
 		cfgCopy.NodeDefinitions[name] = def
 	}
 
@@ -946,13 +973,9 @@ func ResolveRuntime(override appconfig.RuntimeID, cfg *Config) (appconfig.Runtim
 
 func readPrompt(fsys fs.FS, sourceDir, path string, embedded bool) ([]byte, error) {
 	if embedded {
-		return fs.ReadFile(fsys, filepath.ToSlash(filepath.Join(sourceDir, filepath.Base(path))))
+		return fs.ReadFile(fsys, filepath.ToSlash(filepath.Join(sourceDir, path)))
 	}
-	clean := path
-	if strings.HasPrefix(clean, "./") {
-		clean = clean[2:]
-	}
-	return fs.ReadFile(fsys, clean)
+	return fs.ReadFile(fsys, filepath.ToSlash(path))
 }
 
 func deepCopy(cfg *Config) (*Config, error) {
@@ -978,4 +1001,42 @@ func ReadPromptText(configPath string, def NodeDefinition) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func normalizeBundlePromptPath(raw string) (string, error) {
+	clean := strings.TrimSpace(raw)
+	if clean == "" {
+		return "", errors.New("path is required")
+	}
+	if filepath.IsAbs(clean) {
+		return "", errors.New("path must be relative to the config bundle")
+	}
+	clean = filepath.ToSlash(filepath.Clean(clean))
+	clean = strings.TrimPrefix(clean, "./")
+	if clean == "." || clean == "" {
+		return "", errors.New("path is required")
+	}
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", errors.New("path must stay within the config bundle")
+	}
+	return clean, nil
+}
+
+func promptMaterializationPath(promptDir, relativePath string) (string, error) {
+	destPath := filepath.Join(promptDir, filepath.FromSlash(relativePath))
+	rel, err := filepath.Rel(promptDir, destPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("path must stay within the prompt directory")
+	}
+	return destPath, nil
+}
+
+func materializedPromptRelativePath(bundlePromptPath string) string {
+	if stripped, ok := strings.CutPrefix(bundlePromptPath, "prompts/"); ok {
+		return stripped
+	}
+	return bundlePromptPath
 }

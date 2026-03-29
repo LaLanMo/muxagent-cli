@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskConfigScreenLoadsCatalogAndHealth(t *testing.T) {
+func TestTaskConfigScreenLoadsBuiltinsAndBrokenConfigHealth(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -24,7 +24,6 @@ func TestTaskConfigScreenLoadsCatalogAndHealth(t *testing.T) {
 	_, err = taskconfig.SaveRegistry(taskconfig.Registry{
 		DefaultAlias: taskconfig.DefaultAlias,
 		Configs: []taskconfig.RegistryEntry{
-			{Alias: taskconfig.DefaultAlias, Path: taskconfig.DefaultAlias},
 			{Alias: "broken", Path: "broken"},
 		},
 	})
@@ -34,19 +33,19 @@ func TestTaskConfigScreenLoadsCatalogAndHealth(t *testing.T) {
 	model = openTaskConfigScreen(t, model)
 
 	require.Equal(t, ScreenTaskConfigs, model.screen)
-	require.Len(t, model.taskConfigs.entries, 2)
+	require.Len(t, model.taskConfigs.entries, 4)
 
-	var broken taskConfigSummary
-	for _, entry := range model.taskConfigs.entries {
-		if entry.Alias == "broken" {
-			broken = entry
-		}
-	}
+	assert.Equal(t, "default", model.taskConfigs.entries[0].Alias)
+	assert.Equal(t, "plan-only", model.taskConfigs.entries[1].Alias)
+	assert.Equal(t, "autonomous", model.taskConfigs.entries[2].Alias)
+
+	broken := model.taskConfigs.entries[3]
 	assert.Equal(t, "broken", broken.Alias)
+	assert.False(t, broken.Builtin)
 	assert.NotEmpty(t, broken.LoadErr)
 }
 
-func TestTaskConfigScreenCrudLifecycle(t *testing.T) {
+func TestTaskConfigScreenCrudLifecycleForUserClone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -90,13 +89,9 @@ func TestTaskConfigScreenCrudLifecycle(t *testing.T) {
 	assert.Equal(t, taskconfig.DefaultAlias, model.configCatalog.DefaultAlias)
 	assert.Equal(t, taskconfig.DefaultAlias, model.selectedConfigAlias)
 	assert.False(t, hasTaskConfigEntry(model.taskConfigs.entries, "deep-review"))
-
-	taskConfigDir, err := taskconfig.TaskConfigDir()
-	require.NoError(t, err)
-	assert.NoDirExists(t, filepath.Join(taskConfigDir, "reviewer"))
 }
 
-func TestTaskConfigHeaderOmitsRuntimeWhileListRowsKeepIt(t *testing.T) {
+func TestTaskConfigHeaderPrioritizesModeIntent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -112,9 +107,10 @@ func TestTaskConfigHeaderOmitsRuntimeWhileListRowsKeepIt(t *testing.T) {
 	screen := strippedView(model.View().Content)
 
 	assert.Contains(t, headerMeta, "selected default")
-	assert.Contains(t, headerMeta, "bundle default")
-	assert.NotContains(t, headerMeta, "runtime")
-	assert.Contains(t, screen, "Codex")
+	assert.Contains(t, headerMeta, "owner builtin")
+	assert.Contains(t, headerMeta, "mode Human-gated workflow")
+	assert.Contains(t, screen, "plan-only")
+	assert.Contains(t, screen, "builtin")
 }
 
 func openTaskConfigScreen(t *testing.T, model Model) Model {

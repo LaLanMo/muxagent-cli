@@ -52,6 +52,27 @@ starting the daemon.
 - `muxagent update` - Update `muxagent`.
 - `muxagent --runtime claude-code` - Launch the task-first TUI with Claude Code for new tasks. Bare `muxagent` still defaults to Codex.
 
+## Built-in Task Configs
+
+The task-first TUI seeds three built-in task configs:
+
+- `default` - safest general-purpose software engineering flow. It plans, reviews, pauses for human approval, implements, and verifies.
+- `plan-only` - read-only planning flow. It loops between planning and review, then stops after a reviewed plan.
+- `autonomous` - faster software engineering flow. It keeps planning, review, implementation, and verification, but removes the manual approval step.
+
+Built-in configs are different from runtime selection:
+
+- a built-in config chooses the workflow graph, bundled prompts, and product intent
+- runtime selection chooses which coding runtime executes agent nodes, for example `codex` or `claude-code`
+
+Built-in configs are stored as task config bundles under `~/.muxagent/taskconfigs`.
+They appear first in the config screen. You can clone them, but you cannot rename
+or delete the built-in rows themselves.
+
+If you already have a user config named `plan-only` or `autonomous`, MuxAgent
+preserves it and installs the built-in config under a fallback alias such as
+`builtin-plan-only`. Existing bundle files are never overwritten.
+
 ## Experimental Task Config Semantics
 
 The task-first TUI uses `edge` as its only control-flow primitive.

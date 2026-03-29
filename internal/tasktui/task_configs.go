@@ -16,39 +16,45 @@ func configCatalogOrDefault(catalog *taskconfig.Catalog) *taskconfig.Catalog {
 		}
 		return catalog
 	}
-	defaultPath, err := taskconfig.DefaultConfigPath()
-	if err != nil {
-		defaultPath = ""
+	loaded, err := taskconfig.LoadCatalog()
+	if err == nil && loaded != nil && len(loaded.Entries) > 0 {
+		return loaded
 	}
-	cfg, err := taskconfig.LoadDefault()
-	if err != nil {
-		cfg = &taskconfig.Config{}
+	fallback, err := taskconfig.EmbeddedBuiltinCatalog()
+	if err == nil && fallback != nil && len(fallback.Entries) > 0 {
+		return fallback
 	}
 	return &taskconfig.Catalog{
 		DefaultAlias: taskconfig.DefaultAlias,
-		Entries: []taskconfig.CatalogEntry{{
-			Alias:  taskconfig.DefaultAlias,
-			Path:   defaultPath,
-			Config: cfg,
-		}},
 	}
 }
 
 func (m Model) selectedTaskConfigEntry() taskconfig.CatalogEntry {
 	if entry, ok := m.configCatalog.Entry(m.selectedConfigAlias); ok {
+		if entry.Config == nil && strings.TrimSpace(entry.Path) != "" {
+			if cfg, err := entry.LoadConfig(); err == nil {
+				entry.Config = cfg
+			}
+		}
 		return entry
 	}
 	entry, err := m.configCatalog.DefaultEntry()
 	if err == nil {
+		if entry.Config == nil && strings.TrimSpace(entry.Path) != "" {
+			if cfg, loadErr := entry.LoadConfig(); loadErr == nil {
+				entry.Config = cfg
+			}
+		}
 		return entry
 	}
-	defaultPath, pathErr := taskconfig.DefaultConfigPath()
-	if pathErr != nil {
-		defaultPath = ""
+	fallback, err := taskconfig.EmbeddedBuiltinCatalog()
+	if err == nil {
+		if entry, ok := fallback.Entry(taskconfig.DefaultAlias); ok {
+			return entry
+		}
 	}
 	return taskconfig.CatalogEntry{
 		Alias:  taskconfig.DefaultAlias,
-		Path:   defaultPath,
 		Config: &taskconfig.Config{},
 	}
 }

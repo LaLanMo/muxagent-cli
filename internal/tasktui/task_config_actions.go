@@ -73,6 +73,8 @@ func buildTaskConfigSummaries(catalog *taskconfig.Catalog, reg taskconfig.Regist
 			Alias:      entry.Alias,
 			ConfigPath: entry.Path,
 			IsDefault:  entry.Alias == catalog.DefaultAlias,
+			BuiltinID:  entry.BuiltinID,
+			Builtin:    entry.Builtin,
 		}
 		for _, regEntry := range reg.Configs {
 			if regEntry.Alias == entry.Alias {
@@ -86,6 +88,7 @@ func buildTaskConfigSummaries(catalog *taskconfig.Catalog, reg taskconfig.Regist
 		} else {
 			entry.Config = cfg
 			summary.Runtime = runtimeDisplayLabel(cfg.Runtime)
+			summary.Description = cfg.Description
 			for _, node := range cfg.Topology.Nodes {
 				summary.NodeNames = append(summary.NodeNames, node.Name)
 			}
@@ -156,8 +159,8 @@ func (m *Model) openRenameTaskConfigForm() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	if selected.Alias == taskconfig.DefaultAlias {
-		m.taskConfigs.errorText = fmt.Sprintf("config %q cannot be renamed", taskconfig.DefaultAlias)
+	if selected.Builtin {
+		m.taskConfigs.errorText = fmt.Sprintf("config %q cannot be renamed", selected.Alias)
 		m.syncComponents()
 		return nil
 	}
@@ -186,8 +189,8 @@ func (m *Model) openDeleteTaskConfigConfirm() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	if selected.Alias == taskconfig.DefaultAlias {
-		m.taskConfigs.errorText = fmt.Sprintf("config %q cannot be deleted", taskconfig.DefaultAlias)
+	if selected.Builtin {
+		m.taskConfigs.errorText = fmt.Sprintf("config %q cannot be deleted", selected.Alias)
 		m.syncComponents()
 		return nil
 	}

@@ -66,9 +66,6 @@ func RenameConfigAlias(currentAlias, nextAlias string) (*Catalog, error) {
 	if nextAlias == "" {
 		return nil, errors.New("new task config alias is required")
 	}
-	if currentAlias == DefaultAlias && currentAlias != nextAlias {
-		return nil, fmt.Errorf("task config alias %q cannot be renamed", DefaultAlias)
-	}
 	if currentAlias == nextAlias {
 		return LoadCatalog()
 	}
@@ -84,11 +81,34 @@ func RenameConfigAlias(currentAlias, nextAlias string) (*Catalog, error) {
 	if _, ok := registryEntryByAlias(reg.Configs, nextAlias); ok {
 		return nil, fmt.Errorf("task config alias %q already exists", nextAlias)
 	}
+	entry := reg.Configs[index]
+	if isBuiltinEntry(entry) {
+		return nil, fmt.Errorf("task config alias %q cannot be renamed", currentAlias)
+	}
+
+	rollback := func() {}
+	if entry.Path == managedDefaultBundleDir {
+		taskConfigDir, err := TaskConfigDir()
+		if err != nil {
+			return nil, err
+		}
+		oldDir := filepath.Join(taskConfigDir, filepath.FromSlash(entry.Path))
+		nextPath := nextAvailableBundlePath(registryWithoutIndex(reg, index), nextAlias)
+		newDir := filepath.Join(taskConfigDir, filepath.FromSlash(nextPath))
+		if err := os.Rename(oldDir, newDir); err != nil {
+			return nil, err
+		}
+		rollback = func() {
+			_ = os.Rename(newDir, oldDir)
+		}
+		reg.Configs[index].Path = nextPath
+	}
 	reg.Configs[index].Alias = nextAlias
 	if reg.DefaultAlias == currentAlias {
 		reg.DefaultAlias = nextAlias
 	}
 	if _, err := SaveRegistry(reg); err != nil {
+		rollback()
 		return nil, err
 	}
 	return LoadCatalog()
@@ -118,9 +138,6 @@ func DeleteConfig(alias string) (*Catalog, error) {
 	if alias == "" {
 		return nil, errors.New("task config alias is required")
 	}
-	if alias == DefaultAlias {
-		return nil, fmt.Errorf("task config alias %q cannot be deleted", DefaultAlias)
-	}
 
 	reg, err := LoadRegistry()
 	if err != nil {
@@ -131,6 +148,9 @@ func DeleteConfig(alias string) (*Catalog, error) {
 		return nil, fmt.Errorf("task config alias %q does not exist", alias)
 	}
 	entry := reg.Configs[index]
+	if isBuiltinEntry(entry) {
+		return nil, fmt.Errorf("task config alias %q cannot be deleted", alias)
+	}
 	reg.Configs = append(reg.Configs[:index], reg.Configs[index+1:]...)
 	if reg.DefaultAlias == alias {
 		reg.DefaultAlias = DefaultAlias
@@ -193,6 +213,24 @@ func nextAvailableBundlePath(reg Registry, alias string) string {
 	candidate := base
 	for suffix := 2; ; suffix++ {
 		if _, exists := seen[canonicalRegistryBundlePathKey(candidate)]; !exists {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", base, suffix)
+	}
+}
+
+func nextAvailableAlias(reg Registry, base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "config"
+	}
+	seen := map[string]struct{}{}
+	for _, entry := range reg.Configs {
+		seen[entry.Alias] = struct{}{}
+	}
+	candidate := base
+	for suffix := 2; ; suffix++ {
+		if _, exists := seen[candidate]; !exists {
 			return candidate
 		}
 		candidate = fmt.Sprintf("%s-%d", base, suffix)
@@ -275,4 +313,16 @@ func validateManagedConfigPath(configPath string) error {
 		return fmt.Errorf("source task config path %q must be inside a managed taskconfig bundle", configPath)
 	}
 	return nil
+}
+
+func registryWithoutIndex(reg Registry, index int) Registry {
+	if index < 0 || index >= len(reg.Configs) {
+		return reg
+	}
+	clone := Registry{
+		DefaultAlias: reg.DefaultAlias,
+		Configs:      append([]RegistryEntry(nil), reg.Configs...),
+	}
+	clone.Configs = append(clone.Configs[:index], clone.Configs[index+1:]...)
+	return clone
 }

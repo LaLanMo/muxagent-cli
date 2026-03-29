@@ -1,13 +1,16 @@
 package tasktui
 
 type taskConfigSummary struct {
-	Alias      string
-	BundlePath string
-	ConfigPath string
-	IsDefault  bool
-	Runtime    string
-	NodeNames  []string
-	LoadErr    string
+	Alias                 string
+	BundlePath            string
+	ConfigPath            string
+	IsDefault             bool
+	Runtime               string
+	NodeNames             []string
+	LoadErr               string
+	BuiltinID             string
+	Builtin               bool
+	Description           string
 }
 
 type taskConfigFormMode int

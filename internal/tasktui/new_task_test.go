@@ -75,6 +75,7 @@ func TestTaskListHeaderShowsVersionRevisionCwdAndConfig(t *testing.T) {
 }
 
 func TestTaskListCompactHeaderShowsCwdAndConfigWithoutRuntime(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 24})

@@ -21,8 +21,9 @@ func completedArtifactPaths(runs []taskdomain.NodeRun) []string {
 }
 
 func buildPrompt(task taskdomain.Task, cfg *taskconfig.Config, configPath string, runs []taskdomain.NodeRun, run taskdomain.NodeRun, artifactDir string) (string, error) {
+	iteration := runIteration(runs, run)
 	if shouldResumeClarificationThread(run) {
-		return buildClarificationResumePrompt(task, run, artifactDir)
+		return buildClarificationResumePrompt(task, run, artifactDir, iteration)
 	}
 	def := cfg.NodeDefinitions[run.NodeName]
 	template, err := taskconfig.ReadPromptText(configPath, def)
@@ -35,7 +36,7 @@ func buildPrompt(task taskdomain.Task, cfg *taskconfig.Config, configPath string
 	clarificationHistory := summarizeClarificationHistory(run.Clarifications)
 	replacer := strings.NewReplacer(
 		"{{NODE_NAME}}", run.NodeName,
-		"{{CURRENT_ITERATION}}", fmt.Sprintf("%d", runIteration(runs, run)),
+		"{{CURRENT_ITERATION}}", fmt.Sprintf("%d", iteration),
 		"{{TASK_DESCRIPTION}}", task.Description,
 		"{{WORKFLOW_HISTORY}}", workflowHistory,
 		"{{ARTIFACT_PATHS}}", joinLines(artifactPaths),
@@ -56,14 +57,9 @@ func shouldResumeClarificationThread(run taskdomain.NodeRun) bool {
 	return run.Clarifications[len(run.Clarifications)-1].Response != nil
 }
 
-func buildClarificationResumePrompt(task taskdomain.Task, run taskdomain.NodeRun, artifactDir string) (string, error) {
+func buildClarificationResumePrompt(task taskdomain.Task, run taskdomain.NodeRun, artifactDir string, iteration int) (string, error) {
 	latest := run.Clarifications[len(run.Clarifications)-1]
-	lines := []string{
-		fmt.Sprintf("Continue the same %s step for this task: %s", run.NodeName, task.Description),
-		"",
-		"You asked the user for clarification in this same thread. The user has now replied.",
-		"",
-	}
+	lines := []string{buildPromptHeader(run.NodeName, artifactDir, iteration), "", "Mission", "Resume this same step after the user answered your clarification request.", "", "Task", task.Description, "", "Relevant History", "Continue in the existing session or thread for this node run.", "Workflow history for this follow-up lives in the thread context above.", "", "New clarification exchange"}
 	for qi, question := range latest.Request.Questions {
 		lines = append(lines, fmt.Sprintf("Q: %s", question.Question))
 		if len(question.Options) > 0 {
@@ -85,11 +81,30 @@ func buildClarificationResumePrompt(task taskdomain.Task, run taskdomain.NodeRun
 		lines = append(lines, "")
 	}
 	lines = append(lines,
-		fmt.Sprintf("Continue writing this step's artifacts under: %s", artifactDir),
-		"Stay in the existing thread context and continue the step from where you paused.",
+		"Pass Bar",
+		"Stay in the same thread context and continue from where this node paused.",
+		"Use the new clarification answers instead of restating the previous question.",
 		"Return the next structured output for this same step.",
+		"",
+		"Evidence To Inspect",
+		"Use the existing thread context, the current node artifacts, and the answers above before deciding on any next action.",
+		"",
+		"Produce",
+		fmt.Sprintf("Continue writing this step's artifacts under %s.", artifactDir),
+		"Return the next structured output for this same step.",
+		"",
+		"Ask For Clarification Only When",
+		"The user's latest response still leaves a genuinely blocking decision unresolved.",
 	)
 	return strings.Join(lines, "\n"), nil
+}
+
+func buildPromptHeader(nodeName, artifactDir string, iteration int) string {
+	return strings.Join([]string{
+		fmt.Sprintf("Step: %s", nodeName),
+		fmt.Sprintf("ArtifactDir: %s", artifactDir),
+		fmt.Sprintf("Iteration: %d", iteration),
+	}, "\n")
 }
 
 func summarizeWorkflowHistory(runs []taskdomain.NodeRun) string {

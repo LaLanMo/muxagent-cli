@@ -10,271 +10,168 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadCatalogWithoutRegistryReturnsBuiltinDefault(t *testing.T) {
+func TestLoadCatalogSeedsBuiltinModesAndRegistryMetadata(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	catalog, err := LoadCatalog()
 	require.NoError(t, err)
-	require.Len(t, catalog.Entries, 1)
-	assert.Equal(t, builtinDefaultAlias, catalog.DefaultAlias)
-	assert.Equal(t, builtinDefaultAlias, catalog.Entries[0].Alias)
-	defaultPath, err := DefaultConfigPath()
-	require.NoError(t, err)
-	assert.Equal(t, defaultPath, catalog.Entries[0].Path)
-	assert.FileExists(t, catalog.Entries[0].Path)
-	assert.FileExists(t, filepath.Join(filepath.Dir(defaultPath), "prompts", "upsert_plan.md"))
+	require.Len(t, catalog.Entries, 3)
+	assert.Equal(t, DefaultAlias, catalog.DefaultAlias)
 
-	reg, err := LoadRegistry()
-	require.NoError(t, err)
-	require.Len(t, reg.Configs, 1)
-	assert.Equal(t, builtinDefaultAlias, reg.DefaultAlias)
-	assert.Equal(t, builtinDefaultAlias, reg.Configs[0].Alias)
-	assert.Equal(t, managedDefaultBundleDir, reg.Configs[0].Path)
-}
-
-func TestLoadCatalogIncludesRegistryEntries(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	taskConfigDir, err := TaskConfigDir()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(taskConfigDir, 0o755))
-
-	bundleDir := filepath.Join(taskConfigDir, "bugfix")
-	require.NoError(t, os.MkdirAll(bundleDir, 0o755))
-	configPath := filepath.Join(bundleDir, managedConfigFile)
-	require.NoError(t, os.WriteFile(configPath, []byte(`
-version: 1
-runtime: claude-code
-clarification:
-  max_questions: 4
-  max_options_per_question: 4
-  min_options_per_question: 2
-topology:
-  max_iterations: 1
-  entry: start
-  nodes:
-    - name: start
-    - name: done
-  edges:
-    - from: start
-      to: done
-node_definitions:
-  start:
-    system_prompt: ./prompt.md
-    result_schema:
-      type: object
-      additionalProperties: false
-      required: []
-      properties: {}
-  done:
-    type: terminal
-    result_schema:
-      type: object
-      additionalProperties: false
-      required: []
-      properties: {}
-`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "prompt.md"), []byte("# prompt"), 0o644))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "default_alias": "bugfix",
-  "configs": [
-    { "alias": "default", "path": "default" },
-    { "alias": "bugfix", "path": "bugfix" }
-  ]
-}`), 0o600))
-
-	catalog, err := LoadCatalog()
-	require.NoError(t, err)
-	require.Len(t, catalog.Entries, 2)
-	assert.Equal(t, "bugfix", catalog.DefaultAlias)
-
-	entry, ok := catalog.Entry("bugfix")
-	require.True(t, ok)
-	assert.Equal(t, configPath, entry.Path)
-}
-
-func TestLoadCatalogAllowsBrokenUserConfigFiles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	taskConfigDir, err := TaskConfigDir()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(taskConfigDir, 0o755))
-	bundleDir := filepath.Join(taskConfigDir, "broken")
-	require.NoError(t, os.MkdirAll(bundleDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, managedConfigFile), []byte("version: ["), 0o644))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "default_alias": "broken",
-  "configs": [
-    { "alias": "default", "path": "default" },
-    { "alias": "broken", "path": "broken" }
-  ]
-}`), 0o600))
-
-	catalog, err := LoadCatalog()
-	require.NoError(t, err)
-	entry, ok := catalog.Entry("broken")
-	require.True(t, ok)
-	assert.Equal(t, filepath.Join(bundleDir, managedConfigFile), entry.Path)
-	assert.Nil(t, entry.Config)
-}
-
-func TestLoadCatalogFallsBackToDefaultWhenRegistryDefaultAliasIsMissing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "default_alias": "missing",
-  "configs": [
-    { "alias": "default", "path": "default" },
-    { "alias": "reviewer", "path": "reviewer" }
-  ]
-}`), 0o600))
-
-	catalog, err := LoadCatalog()
-	require.NoError(t, err)
-	assert.Equal(t, builtinDefaultAlias, catalog.DefaultAlias)
-}
-
-func TestLoadCatalogRepairsManagedDefaultRegistryPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "default_alias": "default",
-  "configs": [
-    { "alias": "default", "path": "custom-default" },
-    { "alias": "reviewer", "path": "reviewer" }
-  ]
-}`), 0o600))
-
-	catalog, err := LoadCatalog()
-	require.NoError(t, err)
-	entry, ok := catalog.Entry(DefaultAlias)
-	require.True(t, ok)
-
-	defaultPath, err := DefaultConfigPath()
-	require.NoError(t, err)
-	assert.Equal(t, defaultPath, entry.Path)
-
-	reg, err := LoadRegistry()
-	require.NoError(t, err)
-	defEntry, ok := registryEntryByAlias(reg.Configs, DefaultAlias)
-	require.True(t, ok)
-	assert.Equal(t, managedDefaultBundleDir, defEntry.Path)
-}
-
-func TestLoadRegistryRejectsInvalidPaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "configs": [
-    { "alias": "oops", "path": "../outside" }
-  ]
-}`), 0o600))
-
-	_, err = LoadRegistry()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must stay within taskconfigs directory")
-}
-
-func TestLoadRegistryRejectsYAMLFilePaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "configs": [
-    { "alias": "oops", "path": "oops/config.yaml" }
-  ]
-}`), 0o600))
-
-	_, err = LoadRegistry()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "path must point to a bundle directory")
-}
-
-func TestLoadRegistryRejectsDuplicateBundlePaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "configs": [
-    { "alias": "alpha", "path": "shared" },
-    { "alias": "beta", "path": "shared" }
-  ]
-}`), 0o600))
-
-	_, err = LoadRegistry()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `task config path "shared" is duplicated`)
-}
-
-func TestLoadRegistryRejectsCaseInsensitiveDuplicateBundlePaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	regPath, err := RegistryPath()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
-	require.NoError(t, os.WriteFile(regPath, []byte(`{
-  "configs": [
-    { "alias": "alpha", "path": "Reviewer" },
-    { "alias": "beta", "path": "reviewer" }
-  ]
-}`), 0o600))
-
-	_, err = LoadRegistry()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `task config path "reviewer" is duplicated`)
-}
-
-func TestSaveRegistryNormalizesOrdering(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	path, err := SaveRegistry(Registry{
-		DefaultAlias: "beta",
-		Configs: []RegistryEntry{
-			{Alias: builtinDefaultAlias, Path: managedDefaultBundleDir},
-			{Alias: "beta", Path: "b"},
-			{Alias: "alpha", Path: "a"},
-		},
-	})
-	require.NoError(t, err)
-	assert.FileExists(t, path)
+	assert.Equal(t, DefaultAlias, catalog.Entries[0].Alias)
+	assert.Equal(t, BuiltinIDDefault, catalog.Entries[0].BuiltinID)
+	assert.True(t, catalog.Entries[0].Builtin)
+	assert.Equal(t, BuiltinIDPlanOnly, catalog.Entries[1].BuiltinID)
+	assert.Equal(t, BuiltinIDAutonomous, catalog.Entries[2].BuiltinID)
+	for _, entry := range catalog.Entries {
+		cfg, err := entry.LoadConfig()
+		require.NoError(t, err)
+		assert.NotEmpty(t, cfg.Description)
+		assert.FileExists(t, entry.Path)
+	}
 
 	reg, err := LoadRegistry()
 	require.NoError(t, err)
 	require.Len(t, reg.Configs, 3)
-	assert.Equal(t, "alpha", reg.Configs[0].Alias)
-	assert.Equal(t, "beta", reg.Configs[1].Alias)
-	assert.Equal(t, builtinDefaultAlias, reg.Configs[2].Alias)
-	assert.Equal(t, "beta", reg.DefaultAlias)
+	assert.Equal(t, DefaultAlias, reg.DefaultAlias)
+
+	defaultEntry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDDefault)
+	require.True(t, ok)
+	assert.Equal(t, DefaultAlias, defaultEntry.Alias)
+	assert.Equal(t, managedDefaultBundleDir, defaultEntry.Path)
+
+	planOnlyEntry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDPlanOnly)
+	require.True(t, ok)
+	assert.Equal(t, "builtin/plan-only", planOnlyEntry.Path)
+
+	autonomousEntry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDAutonomous)
+	require.True(t, ok)
+	assert.Equal(t, "builtin/autonomous", autonomousEntry.Path)
 }
 
-func TestCloneConfigCreatesUniqueBundleAndRegistryEntry(t *testing.T) {
+func TestLoadCatalogKeepsBuiltinsFirstAndAllowsBrokenUserBundles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	taskConfigDir, err := TaskConfigDir()
+	require.NoError(t, err)
+	brokenDir := filepath.Join(taskConfigDir, "broken")
+	require.NoError(t, os.MkdirAll(brokenDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(brokenDir, managedConfigFile), []byte("version: ["), 0o644))
+	_, err = SaveRegistry(Registry{
+		DefaultAlias: DefaultAlias,
+		Configs: []RegistryEntry{
+			{Alias: "broken", Path: "broken"},
+		},
+	})
+	require.NoError(t, err)
+
+	catalog, err := LoadCatalog()
+	require.NoError(t, err)
+	require.Len(t, catalog.Entries, 4)
+
+	assert.Equal(t, BuiltinIDDefault, catalog.Entries[0].BuiltinID)
+	assert.Equal(t, BuiltinIDPlanOnly, catalog.Entries[1].BuiltinID)
+	assert.Equal(t, BuiltinIDAutonomous, catalog.Entries[2].BuiltinID)
+	assert.Equal(t, "broken", catalog.Entries[3].Alias)
+	assert.False(t, catalog.Entries[3].Builtin)
+	assert.Equal(t, filepath.Join(brokenDir, managedConfigFile), catalog.Entries[3].Path)
+}
+
+func TestLoadCatalogClassifiesMissingLegacyDefaultRowAsBuiltin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	_, err := SaveRegistry(Registry{
+		DefaultAlias: DefaultAlias,
+		Configs: []RegistryEntry{
+			{Alias: DefaultAlias, Path: managedDefaultBundleDir},
+		},
+	})
+	require.NoError(t, err)
+
+	catalog, err := LoadCatalog()
+	require.NoError(t, err)
+	defaultEntry, ok := catalog.Entry(DefaultAlias)
+	require.True(t, ok)
+	assert.True(t, defaultEntry.Builtin)
+	assert.Equal(t, BuiltinIDDefault, defaultEntry.BuiltinID)
+
+	reg, err := LoadRegistry()
+	require.NoError(t, err)
+	entry, ok := registryEntryByAlias(reg.Configs, DefaultAlias)
+	require.True(t, ok)
+	assert.Equal(t, BuiltinIDDefault, entry.BuiltinID)
+}
+
+func TestLoadCatalogStampsLegacyDefaultAsBuiltinAndPreservesCustomFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := writeSimpleUserBundle(t, managedDefaultBundleDir, "custom-default")
+	promptPath := filepath.Join(filepath.Dir(configPath), "prompt.md")
+	require.NoError(t, os.WriteFile(promptPath, []byte("# custom default prompt"), 0o644))
+	_, err := SaveRegistry(Registry{
+		DefaultAlias: DefaultAlias,
+		Configs: []RegistryEntry{
+			{Alias: DefaultAlias, Path: managedDefaultBundleDir},
+		},
+	})
+	require.NoError(t, err)
+
+	catalog, err := LoadCatalog()
+	require.NoError(t, err)
+	require.Len(t, catalog.Entries, 3)
+
+	defaultEntry, ok := catalog.Entry(DefaultAlias)
+	require.True(t, ok)
+	assert.True(t, defaultEntry.Builtin)
+	data, err := os.ReadFile(promptPath)
+	require.NoError(t, err)
+	assert.Equal(t, "# custom default prompt", string(data))
+
+	reg, err := LoadRegistry()
+	require.NoError(t, err)
+	entry, ok := registryEntryByAlias(reg.Configs, DefaultAlias)
+	require.True(t, ok)
+	assert.Equal(t, BuiltinIDDefault, entry.BuiltinID)
+}
+
+func TestLoadCatalogFallsBackWhenBuiltinAliasIsAlreadyUserOwned(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeSimpleUserBundle(t, "plan-only-user", "plan-only")
+	_, err := SaveRegistry(Registry{
+		DefaultAlias: DefaultAlias,
+		Configs: []RegistryEntry{
+			{Alias: "plan-only", Path: "plan-only-user"},
+		},
+	})
+	require.NoError(t, err)
+
+	catalog, err := LoadCatalog()
+	require.NoError(t, err)
+
+	builtinEntry, ok := catalog.Entry("builtin-plan-only")
+	require.True(t, ok)
+	assert.True(t, builtinEntry.Builtin)
+	assert.Equal(t, BuiltinIDPlanOnly, builtinEntry.BuiltinID)
+
+	userEntry, ok := catalog.Entry("plan-only")
+	require.True(t, ok)
+	assert.False(t, userEntry.Builtin)
+
+	reg, err := LoadRegistry()
+	require.NoError(t, err)
+	builtinRow, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDPlanOnly)
+	require.True(t, ok)
+	assert.Equal(t, "builtin-plan-only", builtinRow.Alias)
+	assert.Equal(t, "builtin/plan-only", builtinRow.Path)
+}
+
+func TestCloneConfigCreatesUserOwnedCopyFromBuiltin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -287,34 +184,14 @@ func TestCloneConfigCreatesUniqueBundleAndRegistryEntry(t *testing.T) {
 	require.NoError(t, err)
 	entry, ok := cloned.Entry("Review Copy")
 	require.True(t, ok)
+	assert.False(t, entry.Builtin)
 	assert.Equal(t, "review-copy", mustBundlePathForConfigPath(t, entry.Path))
-	assert.FileExists(t, entry.Path)
-	assert.FileExists(t, filepath.Join(filepath.Dir(entry.Path), "prompts", "upsert_plan.md"))
-
-	_, err = CloneConfig("Review Copy!", source.Path)
-	require.NoError(t, err)
 
 	reg, err := LoadRegistry()
 	require.NoError(t, err)
-	require.Len(t, reg.Configs, 3)
-	first, ok := registryEntryByAlias(reg.Configs, "Review Copy")
+	row, ok := registryEntryByAlias(reg.Configs, "Review Copy")
 	require.True(t, ok)
-	assert.Equal(t, "review-copy", first.Path)
-	second, ok := registryEntryByAlias(reg.Configs, "Review Copy!")
-	require.True(t, ok)
-	assert.Equal(t, "review-copy-2", second.Path)
-}
-
-func TestCloneConfigRejectsNonManagedSourcePaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	randomPath := filepath.Join(t.TempDir(), "random.yaml")
-	require.NoError(t, os.WriteFile(randomPath, []byte("version: 1"), 0o644))
-
-	_, err := CloneConfig("review-copy", randomPath)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must point to config.yaml")
+	assert.Empty(t, row.BuiltinID)
 }
 
 func TestCloneConfigCleansUpPartialBundleOnCopyFailure(t *testing.T) {
@@ -349,37 +226,40 @@ func TestCloneConfigCleansUpPartialBundleOnCopyFailure(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestRenameConfigAliasUpdatesDefaultAliasWithoutMovingBundle(t *testing.T) {
+func TestRenameConfigAliasMovesCanonicalUserDefaultAndReleasesBuiltinDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	configPath := writeManagedBundle(t, "reviewer")
+	writeSimpleUserBundle(t, managedDefaultBundleDir, "custom-default")
 	_, err := SaveRegistry(Registry{
-		DefaultAlias: "reviewer",
+		DefaultAlias: DefaultAlias,
 		Configs: []RegistryEntry{
 			{Alias: DefaultAlias, Path: managedDefaultBundleDir},
-			{Alias: "reviewer", Path: "reviewer"},
 		},
 	})
 	require.NoError(t, err)
 
-	catalog, err := RenameConfigAlias("reviewer", "deep-review")
+	catalog, err := RenameConfigAlias(DefaultAlias, "deep-review")
 	require.NoError(t, err)
 	assert.Equal(t, "deep-review", catalog.DefaultAlias)
 
-	entry, ok := catalog.Entry("deep-review")
+	renamedEntry, ok := catalog.Entry("deep-review")
 	require.True(t, ok)
-	assert.Equal(t, configPath, entry.Path)
-	assert.Equal(t, "reviewer", mustBundlePathForConfigPath(t, entry.Path))
+	assert.False(t, renamedEntry.Builtin)
+	assert.Equal(t, "deep-review", mustBundlePathForConfigPath(t, renamedEntry.Path))
+	assert.FileExists(t, renamedEntry.Path)
+
+	defaultEntry, ok := catalog.Entry(DefaultAlias)
+	require.True(t, ok)
+	assert.True(t, defaultEntry.Builtin)
+	assert.FileExists(t, defaultEntry.Path)
 
 	reg, err := LoadRegistry()
 	require.NoError(t, err)
 	assert.Equal(t, "deep-review", reg.DefaultAlias)
-	_, ok = registryEntryByAlias(reg.Configs, "deep-review")
-	assert.True(t, ok)
 }
 
-func TestRenameConfigAliasRejectsManagedDefault(t *testing.T) {
+func TestRenameBuiltinConfigRejected(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -395,11 +275,10 @@ func TestSetDefaultConfigUpdatesRegistry(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	writeManagedBundle(t, "reviewer")
+	writeSimpleUserBundle(t, "reviewer", "reviewer")
 	_, err := SaveRegistry(Registry{
 		DefaultAlias: DefaultAlias,
 		Configs: []RegistryEntry{
-			{Alias: DefaultAlias, Path: managedDefaultBundleDir},
 			{Alias: "reviewer", Path: "reviewer"},
 		},
 	})
@@ -414,65 +293,132 @@ func TestSetDefaultConfigUpdatesRegistry(t *testing.T) {
 	assert.Equal(t, "reviewer", reg.DefaultAlias)
 }
 
-func TestDeleteConfigRemovesRegistryEntryAndBundle(t *testing.T) {
+func TestDeleteConfigReleasesCustomDefaultAndRestoresBuiltinDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	configPath := writeManagedBundle(t, "reviewer")
+	writeSimpleUserBundle(t, managedDefaultBundleDir, "custom-default")
 	_, err := SaveRegistry(Registry{
-		DefaultAlias: "reviewer",
+		DefaultAlias: DefaultAlias,
 		Configs: []RegistryEntry{
 			{Alias: DefaultAlias, Path: managedDefaultBundleDir},
-			{Alias: "reviewer", Path: "reviewer"},
 		},
 	})
 	require.NoError(t, err)
 
-	catalog, err := DeleteConfig("reviewer")
+	catalog, err := DeleteConfig(DefaultAlias)
 	require.NoError(t, err)
 	assert.Equal(t, DefaultAlias, catalog.DefaultAlias)
-	_, ok := catalog.Entry("reviewer")
-	assert.False(t, ok)
-	assert.NoFileExists(t, filepath.Dir(configPath))
+
+	defaultEntry, ok := catalog.Entry(DefaultAlias)
+	require.True(t, ok)
+	assert.True(t, defaultEntry.Builtin)
+	assert.FileExists(t, defaultEntry.Path)
 
 	reg, err := LoadRegistry()
 	require.NoError(t, err)
-	assert.Equal(t, DefaultAlias, reg.DefaultAlias)
-	require.Len(t, reg.Configs, 1)
+	entry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDDefault)
+	require.True(t, ok)
+	assert.Equal(t, DefaultAlias, entry.Alias)
 }
 
-func TestDeleteConfigRejectsManagedDefault(t *testing.T) {
+func TestDeleteBuiltinConfigRejected(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	_, err := LoadCatalog()
 	require.NoError(t, err)
 
-	_, err = DeleteConfig(DefaultAlias)
+	_, err = DeleteConfig(BuiltinIDAutonomous)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `task config alias "default" cannot be deleted`)
+	assert.Contains(t, err.Error(), `task config alias "autonomous" cannot be deleted`)
+}
+
+func TestLoadRegistryRejectsInvalidPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	regPath, err := RegistryPath()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
+	require.NoError(t, os.WriteFile(regPath, []byte(`{
+  "configs": [
+    { "alias": "oops", "path": "../outside" }
+  ]
+}`), 0o600))
+
+	_, err = LoadRegistry()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must stay within taskconfigs directory")
+}
+
+func TestLoadRegistryRejectsDuplicateBundlePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	regPath, err := RegistryPath()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0o755))
+	require.NoError(t, os.WriteFile(regPath, []byte(`{
+  "configs": [
+    { "alias": "alpha", "path": "shared" },
+    { "alias": "beta", "path": "shared" }
+  ]
+}`), 0o600))
+
+	_, err = LoadRegistry()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `task config path "shared" is duplicated`)
 }
 
 func TestBundlePathForConfigPathReturnsRelativeBundlePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	configPath := writeManagedBundle(t, "reviewer")
+	configPath := writeSimpleUserBundle(t, "reviewer", "reviewer")
 	bundlePath, err := BundlePathForConfigPath(configPath)
 	require.NoError(t, err)
 	assert.Equal(t, "reviewer", bundlePath)
 }
 
-func writeManagedBundle(t *testing.T, bundlePath string) string {
+func writeSimpleUserBundle(t *testing.T, bundlePath, alias string) string {
 	t.Helper()
-	defaultConfigPath, err := EnsureManagedDefaultAssets()
-	require.NoError(t, err)
 	taskConfigDir, err := TaskConfigDir()
 	require.NoError(t, err)
-
 	destDir := filepath.Join(taskConfigDir, filepath.FromSlash(bundlePath))
-	require.NoError(t, copyDir(filepath.Dir(defaultConfigPath), destDir))
+	require.NoError(t, os.MkdirAll(destDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(destDir, managedConfigFile), []byte(simpleUserConfigYAML(alias)), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(destDir, "prompt.md"), []byte("# prompt"), 0o644))
 	return filepath.Join(destDir, managedConfigFile)
+}
+
+func simpleUserConfigYAML(alias string) string {
+	return `version: 1
+runtime: codex
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompt.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required: []
+      properties: {}
+  done:
+    type: terminal
+`
 }
 
 func mustBundlePathForConfigPath(t *testing.T, configPath string) string {

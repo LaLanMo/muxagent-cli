@@ -1,0 +1,63 @@
+version: 1
+description: "Read-only planning loop: plan and review, no implementation."
+runtime: codex
+
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+
+topology:
+  max_iterations: 5
+  entry: upsert_plan
+  nodes:
+    - name: upsert_plan
+      max_iterations: 5
+    - name: review_plan
+    - name: done
+  edges:
+    - from: upsert_plan
+      to: review_plan
+    - from: review_plan
+      to: upsert_plan
+      when:
+        field: passed
+        equals: false
+    - from: review_plan
+      to: done
+      when:
+        field: passed
+        equals: true
+
+node_definitions:
+  upsert_plan:
+    system_prompt: ./prompts/upsert_plan.md
+    max_clarification_rounds: 3
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - file_paths
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+  review_plan:
+    system_prompt: ./prompts/review_plan.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - passed
+        - file_paths
+      properties:
+        passed:
+          type: boolean
+        file_paths:
+          type: array
+          items:
+            type: string
+  done:
+    type: terminal
+

@@ -29,6 +29,11 @@ if [ -z "$session_id" ]; then
 fi
 
 detect_node_name() {
+  node=$(printf '%s\n' "$prompt" | sed -n 's/^Step: //p' | head -n 1)
+  if [ -n "$node" ]; then
+    printf '%s' "$node"
+    return
+  fi
   case "$prompt" in
     *"same upsert_plan step"*) echo "upsert_plan" ;;
     *"Iteration "*" of planning."*) echo "upsert_plan" ;;
@@ -41,6 +46,11 @@ detect_node_name() {
 }
 
 artifact_dir() {
+  dir=$(printf '%s\n' "$prompt" | sed -n 's/^ArtifactDir: //p' | head -n 1)
+  if [ -n "$dir" ]; then
+    printf '%s' "$dir"
+    return
+  fi
   dir=$(printf '%s\n' "$prompt" | sed -n 's/.* under \(\/[^ ]*\).*/\1/p' | head -n 1)
   if [ -z "$dir" ]; then
     dir=$(printf '%s\n' "$prompt" | sed -n 's/.*under: \(\/[^ ]*\).*/\1/p' | head -n 1)
@@ -110,6 +120,8 @@ case "$node_name" in
   verify)
     passed=true
     if [ "$flow" = "verify-fail" ]; then
+      passed=false
+    elif [ "$flow" = "verify-fail-once" ] && [ "$count" -eq 1 ]; then
       passed=false
     fi
     write_result "verify-${count}.md" "\"passed\":${passed}"

@@ -34,9 +34,13 @@ func (m Model) renderTaskConfigListHeader(width int) string {
 func (m Model) renderSelectedTaskConfigMeta(summary taskConfigSummary) string {
 	parts := []string{
 		renderTaskListMetaLine("selected", summary.Alias, true),
+		renderTaskListMetaLine("owner", summary.ownershipLabel(), false),
 	}
-	if summary.BundlePath != "" {
-		parts = append(parts, renderTaskListMetaLine("bundle", summary.BundlePath, true))
+	if summary.Description != "" {
+		parts = append(parts, renderTaskListMetaLine("mode", summary.Description, false))
+	}
+	if summary.Runtime != "" {
+		parts = append(parts, renderTaskListMetaLine("runtime", summary.Runtime, false))
 	}
 	if summary.LoadErr != "" {
 		parts = append(parts, tuiTheme.Status.Failed.Render("invalid"))
@@ -74,7 +78,11 @@ func (m Model) taskConfigListHint() string {
 			parts = append(parts, "Enter set default")
 		}
 	}
-	parts = append(parts, "n clone", "r rename", "x delete", "Esc back")
+	parts = append(parts, "n clone")
+	if selected, ok := m.selectedManagedTaskConfig(); ok && !selected.Builtin {
+		parts = append(parts, "r rename", "x delete")
+	}
+	parts = append(parts, "Esc back")
 	return joinHintParts(parts...)
 }
 

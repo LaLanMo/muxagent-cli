@@ -103,6 +103,8 @@ JSON
     passed=true
     if [ "$flow" = "verify-fail" ]; then
       passed=false
+    elif [ "$flow" = "verify-fail-once" ] && [ "$count" -eq 1 ]; then
+      passed=false
     fi
     write_result "verify-${count}.md" "\"passed\":${passed}"
     ;;

@@ -137,10 +137,13 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	assert.Equal(t, upsertRequests[0].NodeRun.ID+"-session", upsertRequests[1].NodeRun.SessionID)
 	require.Len(t, upsertRequests[1].NodeRun.Clarifications, 1)
 	require.NotNil(t, upsertRequests[1].NodeRun.Clarifications[0].Response)
-	assert.Contains(t, upsertRequests[1].Prompt, "You asked the user for clarification in this same thread.")
-	assert.Contains(t, upsertRequests[1].Prompt, "Options offered:")
+	assert.Contains(t, upsertRequests[1].Prompt, "Step: upsert_plan")
+	assert.Contains(t, upsertRequests[1].Prompt, "ArtifactDir:")
+	assert.Contains(t, upsertRequests[1].Prompt, "Iteration: 1")
+	assert.Contains(t, upsertRequests[1].Prompt, "Mission")
+	assert.Contains(t, upsertRequests[1].Prompt, "Q: Need a choice")
 	assert.Contains(t, upsertRequests[1].Prompt, "User selected:")
-	assert.Contains(t, upsertRequests[1].Prompt, "Stay in the existing thread context")
+	assert.Contains(t, upsertRequests[1].Prompt, "Stay in the same thread context")
 }
 
 func TestServicePersistsRuntimeOverrideIntoClarificationResume(t *testing.T) {

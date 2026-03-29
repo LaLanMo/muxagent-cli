@@ -21,6 +21,125 @@ func TestLoadDefaultConfig(t *testing.T) {
 	assert.Equal(t, NodeTypeHuman, cfg.NodeDefinitions["approve_plan"].Type)
 	assert.Equal(t, NodeTypeAgent, cfg.NodeDefinitions["verify"].Type)
 	assert.Equal(t, NodeTypeTerminal, cfg.NodeDefinitions["done"].Type)
+	assert.NotEmpty(t, cfg.Description)
+}
+
+func TestDescriptionFieldParsedFromYAML(t *testing.T) {
+	cfgPath := writeConfigFile(t, `
+version: 1
+description: "A custom workflow for code reviews."
+runtime: codex
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompt.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, "A custom workflow for code reviews.", cfg.Description)
+}
+
+func TestDescriptionFieldIsOptional(t *testing.T) {
+	cfgPath := writeConfigFile(t, `
+version: 1
+runtime: codex
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompt.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Description)
+}
+
+func TestLoadBuiltinConfigs(t *testing.T) {
+	tests := []struct {
+		name      string
+		builtinID string
+		entry        string
+		nodeCount    int
+		hasApproval  bool
+		hasImplement bool
+	}{
+		{
+			name:         "default",
+			builtinID:    BuiltinIDDefault,
+			entry:        "upsert_plan",
+			nodeCount:    6,
+			hasApproval:  true,
+			hasImplement: true,
+		},
+		{
+			name:         "plan-only",
+			builtinID:    BuiltinIDPlanOnly,
+			entry:        "upsert_plan",
+			nodeCount:    3,
+			hasApproval:  false,
+			hasImplement: false,
+		},
+		{
+			name:         "autonomous",
+			builtinID:    BuiltinIDAutonomous,
+			entry:        "upsert_plan",
+			nodeCount:    5,
+			hasApproval:  false,
+			hasImplement: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadBuiltin(tt.builtinID)
+			require.NoError(t, err)
+
+			assert.Equal(t, 1, cfg.Version)
+			assert.Equal(t, appconfig.RuntimeCodex, cfg.Runtime)
+			assert.Equal(t, tt.entry, cfg.Topology.Entry)
+			assert.Len(t, cfg.Topology.Nodes, tt.nodeCount)
+			_, hasApproval := cfg.NodeDefinitions["approve_plan"]
+			assert.Equal(t, tt.hasApproval, hasApproval)
+			_, hasImplement := cfg.NodeDefinitions["implement"]
+			assert.Equal(t, tt.hasImplement, hasImplement)
+			assert.Equal(t, NodeTypeTerminal, cfg.NodeDefinitions["done"].Type)
+		})
+	}
 }
 
 func TestLoadRejectsInvalidConfigs_TableDriven(t *testing.T) {
@@ -478,6 +597,128 @@ func TestMaterializeWritesConfigAndPrompts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "runtime: codex")
 	assert.Contains(t, string(data), "./prompts/upsert_plan.md")
+}
+
+func TestMaterializePreservesBundleRelativePromptSubpaths(t *testing.T) {
+	workDir := t.TempDir()
+	cfgPath := writeConfigFile(t, `
+version: 1
+runtime: codex
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompts/nested/start.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+	sourcePromptDir := filepath.Join(filepath.Dir(cfgPath), "prompts", "nested")
+	require.NoError(t, os.MkdirAll(sourcePromptDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sourcePromptDir, "start.md"), []byte("# nested prompt"), 0o644))
+
+	materialized, err := Materialize(workDir, "task-nested", cfgPath)
+	require.NoError(t, err)
+
+	assert.FileExists(t, filepath.Join(materialized.PromptDir, "nested", "start.md"))
+	assert.NoFileExists(t, filepath.Join(materialized.PromptDir, "prompts", "nested", "start.md"))
+	data, err := os.ReadFile(materialized.ConfigPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "./prompts/nested/start.md")
+}
+
+func TestMaterializeRejectsPromptPathsOutsideBundle(t *testing.T) {
+	workDir := t.TempDir()
+	cfgPath := writeConfigFile(t, `
+version: 1
+runtime: codex
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ../shared.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+
+	_, err := Materialize(workDir, "task-invalid-prompt", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must stay within the config bundle")
+}
+
+func TestMaterializeRejectsPromptPathCollisions(t *testing.T) {
+	workDir := t.TempDir()
+	cfgPath := writeConfigFile(t, `
+version: 1
+runtime: codex
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 2
+  entry: first
+  nodes:
+    - name: first
+    - name: second
+    - name: done
+  edges:
+    - from: first
+      to: second
+    - from: second
+      to: done
+node_definitions:
+  first:
+    system_prompt: ./prompts/plan.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  second:
+    system_prompt: ./prompts/review/../plan.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+	promptDir := filepath.Join(filepath.Dir(cfgPath), "prompts")
+	require.NoError(t, os.MkdirAll(promptDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(promptDir, "plan.md"), []byte("# shared prompt"), 0o644))
+
+	_, err := Materialize(workDir, "task-colliding-prompts", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "both materialize to")
 }
 
 func TestTaskRuntimeSelection(t *testing.T) {

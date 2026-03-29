@@ -120,33 +120,45 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 		{
 			name: "upsert_plan",
 			contains: []string{
-				"You are planning how to complete this task.",
-				"Workflow history (oldest first):",
-				"Iteration {{CURRENT_ITERATION}} of planning.",
+				"Step: {{NODE_NAME}}",
+				"ArtifactDir: {{ARTIFACT_DIR}}",
+				"Iteration: {{CURRENT_ITERATION}}",
+				"How to plan",
+				"Plan artifacts",
+				"file_paths",
 			},
 		},
 		{
 			name: "review_plan",
 			contains: []string{
-				"You are reviewing a plan before it goes to human approval.",
-				"Workflow history (oldest first):",
+				"Step: {{NODE_NAME}}",
+				"ArtifactDir: {{ARTIFACT_DIR}}",
+				"Iteration: {{CURRENT_ITERATION}}",
 				"Review checklist",
+				"Pass bar",
+				"passed",
 			},
 		},
 		{
 			name: "implement",
 			contains: []string{
-				"You are implementing an approved plan.",
-				"Workflow history (oldest first):",
+				"Step: {{NODE_NAME}}",
+				"ArtifactDir: {{ARTIFACT_DIR}}",
+				"Iteration: {{CURRENT_ITERATION}}",
+				"Execute it",
 				"Summary artifact",
+				"file_paths",
 			},
 		},
 		{
 			name: "verify",
 			contains: []string{
-				"You are verifying whether the implementation satisfies the task.",
-				"Workflow history (oldest first):",
+				"Step: {{NODE_NAME}}",
+				"ArtifactDir: {{ARTIFACT_DIR}}",
+				"Iteration: {{CURRENT_ITERATION}}",
 				"Verification checklist",
+				"Verify against the original task",
+				"passed",
 			},
 		},
 	}
@@ -164,4 +176,47 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildClarificationResumePromptUsesStableHeader(t *testing.T) {
+	run := taskdomain.NodeRun{
+		NodeName:  "upsert_plan",
+		SessionID: "thread-upsert_plan-1",
+		Clarifications: []taskdomain.ClarificationExchange{{
+			Request: taskdomain.ClarificationRequest{
+				Questions: []taskdomain.ClarificationQuestion{
+					{
+						Question:     "Which path should we take?",
+						WhyItMatters: "The plan changes based on this choice.",
+						Options: []taskdomain.ClarificationOption{
+							{Label: "A", Description: "Option A"},
+							{Label: "B", Description: "Option B"},
+						},
+					},
+				},
+			},
+			Response: &taskdomain.ClarificationResponse{
+				Answers: []taskdomain.ClarificationAnswer{
+					{Selected: "A"},
+				},
+			},
+		}},
+	}
+
+	prompt, err := buildClarificationResumePrompt(
+		taskdomain.Task{Description: "Implement login"},
+		run,
+		"/tmp/task-artifacts/upsert-plan",
+		2,
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, prompt, "Step: upsert_plan")
+	assert.Contains(t, prompt, "ArtifactDir: /tmp/task-artifacts/upsert-plan")
+	assert.Contains(t, prompt, "Iteration: 2")
+	assert.Contains(t, prompt, "Mission")
+	assert.Contains(t, prompt, "New clarification exchange")
+	assert.Contains(t, prompt, "User selected:")
+	assert.Contains(t, prompt, "Pass Bar")
+	assert.Contains(t, prompt, "Produce")
 }

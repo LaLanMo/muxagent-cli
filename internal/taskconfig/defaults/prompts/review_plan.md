@@ -1,14 +1,22 @@
 You are reviewing a plan before it goes to human approval.
 
-Task: {{TASK_DESCRIPTION}}
+Step: {{NODE_NAME}}
+ArtifactDir: {{ARTIFACT_DIR}}
+Iteration: {{CURRENT_ITERATION}}
 
-Iteration {{CURRENT_ITERATION}} of review.
+Task: {{TASK_DESCRIPTION}}
 
 Workflow history (oldest first):
 {{WORKFLOW_HISTORY}}
 
 Clarifications so far:
 {{CLARIFICATION_HISTORY}}
+
+Completed structured results:
+{{COMPLETED_RESULTS}}
+
+Known artifact paths:
+{{ARTIFACT_PATHS}}
 
 ---
 

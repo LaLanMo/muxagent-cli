@@ -39,16 +39,21 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 		6,
 	))
 	require.Greater(t, len(longDescription), 512)
+	defaultPromptFiles := []string{"implement.md", "review_plan.md", "upsert_plan.md", "verify.md"}
+	defaultSchemaFiles := []string{"implement.json", "review_plan.json", "upsert_plan.json", "verify.json"}
 
 	tests := []struct {
-		name              string
-		flow              string
-		description       string
-		cliArgs           []string
-		configPath        func(t *testing.T, workDir string) string
-		drive             func(t *testing.T, session *tuiSession)
-		expectedArtifacts []string
-		verify            func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView)
+		name                string
+		flow                string
+		description         string
+		cliArgs             []string
+		configPath          func(t *testing.T, workDir string) string
+		drive               func(t *testing.T, session *tuiSession)
+		expectedArtifacts   []string
+		expectedPrompts     []string
+		expectedSchemas     []string
+		requirePromptHeader bool
+		verify              func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView)
 	}{
 		{
 			name:        "happy path",
@@ -62,7 +67,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
-			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			requirePromptHeader: true,
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
 				require.Len(t, runs, 6)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -92,6 +98,72 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			},
 		},
 		{
+			name:        "plan only stops after reviewed planning",
+			flow:        "happy",
+			description: "Design the rollout plan",
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "plan-only")
+				session.submitNewTask(t, "Design the rollout plan")
+				session.waitForAll(t, 10*time.Second, "Task completed successfully")
+			},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan"},
+			expectedPrompts:     []string{"review_plan.md", "upsert_plan.md"},
+			expectedSchemas:     []string{"review_plan.json", "upsert_plan.json"},
+			requirePromptHeader: true,
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 3)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"upsert_plan": 1,
+					"review_plan": 1,
+					"done":        1,
+				})
+				for _, run := range runs {
+					assert.NotEqual(t, "approve_plan", run.NodeName)
+					assert.NotEqual(t, "implement", run.NodeName)
+					assert.NotEqual(t, "verify", run.NodeName)
+				}
+			},
+		},
+		{
+			name:        "autonomous loops on failed verify without human approval",
+			flow:        "verify-fail-once",
+			description: "Fix the flaky flow autonomously",
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "plan-only")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "autonomous")
+				session.submitNewTask(t, "Fix the flaky flow autonomously")
+				session.waitForAll(t, 10*time.Second, "Task completed successfully")
+			},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-implement", "04-verify", "05-implement", "06-verify"},
+			expectedPrompts:     defaultPromptFiles,
+			expectedSchemas:     defaultSchemaFiles,
+			requirePromptHeader: true,
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 7)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"upsert_plan": 1,
+					"review_plan": 1,
+					"implement":   2,
+					"verify":      2,
+					"done":        1,
+				})
+				for _, run := range runs {
+					assert.NotEqual(t, "approve_plan", run.NodeName)
+				}
+			},
+		},
+		{
 			name:        "long description persists end to end",
 			flow:        "happy",
 			description: longDescription,
@@ -103,7 +175,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
-			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			requirePromptHeader: true,
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
 				require.Len(t, runs, 6)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -226,7 +299,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
-			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-upsert_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-upsert_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
+			requirePromptHeader: true,
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
 				require.Len(t, runs, 8)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -282,7 +356,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
-			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-upsert_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-upsert_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
+			requirePromptHeader: false,
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
 				require.Len(t, runs, 8)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -311,7 +386,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 10*time.Second, "Task failed", "Retry step")
 				session.send(t, "\r")
 			},
-			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-implement", "06-verify"},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-implement", "06-verify"},
+			requirePromptHeader: true,
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
 				require.Len(t, runs, 7)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -359,7 +435,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
-			expectedArtifacts: []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			requirePromptHeader: true,
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
 				require.Len(t, runs, 6)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -408,7 +485,16 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			assert.FileExists(t, taskstore.DBPath(workDir))
 			assert.FileExists(t, taskstore.ConfigPath(workDir, task.ID))
 			assertArtifactDirs(t, task, tt.expectedArtifacts)
-			assertPromptFiles(t, workDir, task.ID)
+			expectedPrompts := tt.expectedPrompts
+			if len(expectedPrompts) == 0 {
+				expectedPrompts = defaultPromptFiles
+			}
+			expectedSchemas := tt.expectedSchemas
+			if len(expectedSchemas) == 0 {
+				expectedSchemas = defaultSchemaFiles
+			}
+			assertPromptFiles(t, workDir, task.ID, expectedPrompts, tt.requirePromptHeader)
+			assertSchemaFiles(t, task, expectedSchemas)
 			tt.verify(t, task, runs, view)
 
 			session.quit(t)
@@ -461,7 +547,7 @@ func TestTaskTUICanCreateTasksWithDifferentConfigsInOneSession(t *testing.T) {
 	session.pause(150 * time.Millisecond)
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "config default")
-	session.send(t, "\x0e")
+	session.send(t, "\x10")
 	session.resize(t, 140, 40)
 	session.waitForAll(t, 5*time.Second, "reviewer", "runtime claude-code")
 	session.submitNewTask(t, "Reviewer config task")
@@ -590,13 +676,13 @@ func TestTaskTUIConfigScreenCanCloneSetDefaultAndDeleteConfig(t *testing.T) {
 	session.waitForAll(t, 10*time.Second, "new task", "task configs")
 	session.send(t, "\x1b[B")
 	session.send(t, "\r")
-	session.waitForAll(t, 10*time.Second, "Task Configs", "default")
+	session.waitForAll(t, 10*time.Second, "Task Configs", "Default")
 
 	session.send(t, "n")
 	session.waitForAll(t, 5*time.Second, "Clone Task Config", "Source config default")
 	session.send(t, "reviewer")
 	session.send(t, "\r")
-	session.waitForAll(t, 10*time.Second, "reviewer", "bundle reviewer", "Codex")
+	session.waitForAll(t, 10*time.Second, "reviewer", "custom", "Codex")
 
 	require.Eventually(t, func() bool {
 		reg, err := taskconfig.LoadRegistry()
@@ -631,7 +717,7 @@ func TestTaskTUIConfigScreenCanCloneSetDefaultAndDeleteConfig(t *testing.T) {
 	taskConfigDir, err := taskconfig.TaskConfigDir()
 	require.NoError(t, err)
 	assert.NoDirExists(t, filepath.Join(taskConfigDir, "reviewer"))
-	session.waitForAll(t, 5*time.Second, "Task Configs", "default")
+	session.waitForAll(t, 5*time.Second, "Task Configs", "Default")
 
 	session.send(t, "\x1b")
 	session.waitForAll(t, 5*time.Second, "new task", "task configs")
@@ -1421,18 +1507,53 @@ func assertArtifactDirs(t *testing.T, task taskdomain.Task, want []string) {
 	for _, name := range names {
 		assert.NoFileExists(t, filepath.Join(artifactRoot, name, "result_schema.json"))
 	}
-	schemaRoot := filepath.Join(taskstore.TaskDir(task.WorkDir, task.ID), "schemas")
-	for _, nodeName := range []string{"upsert_plan", "review_plan", "implement", "verify"} {
-		assert.FileExists(t, filepath.Join(schemaRoot, nodeName+".json"))
-	}
 }
 
-func assertPromptFiles(t *testing.T, workDir, taskID string) {
+func assertSchemaFiles(t *testing.T, task taskdomain.Task, want []string) {
+	t.Helper()
+	schemaRoot := filepath.Join(taskstore.TaskDir(task.WorkDir, task.ID), "schemas")
+	entries, err := os.ReadDir(schemaRoot)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	assert.Equal(t, want, names)
+}
+
+func assertPromptFiles(t *testing.T, workDir, taskID string, want []string, requireHeader bool) {
 	t.Helper()
 	promptDir := filepath.Join(taskstore.TaskDir(workDir, taskID), "prompts")
-	entries, err := os.ReadDir(promptDir)
+	var names []string
+	err := filepath.Walk(promptDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(promptDir, path)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+		names = append(names, relPath)
+		if requireHeader {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Contains(t, string(data), "Step: {{NODE_NAME}}")
+			assert.Contains(t, string(data), "ArtifactDir: {{ARTIFACT_DIR}}")
+			assert.Contains(t, string(data), "Iteration: {{CURRENT_ITERATION}}")
+		}
+		return nil
+	})
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(entries), 4)
+	sort.Strings(names)
+	assert.Equal(t, want, names)
 }
 
 func mapsEqual(left, right map[string]int) bool {

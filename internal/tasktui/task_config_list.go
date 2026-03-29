@@ -43,7 +43,7 @@ func newTaskConfigListModel() list.Model {
 }
 
 func (i taskConfigListItem) FilterValue() string {
-	return strings.TrimSpace(i.summary.Alias + " " + i.summary.Runtime + " " + i.summary.LoadErr)
+	return strings.TrimSpace(i.summary.Alias + " " + i.summary.Runtime + " " + i.summary.Description + " " + i.summary.LoadErr)
 }
 
 type taskConfigListDelegate struct{}
@@ -92,6 +92,10 @@ func (d taskConfigListDelegate) Render(w io.Writer, m list.Model, index int, ite
 	top := fitLine(marker+title, contentWidth)
 
 	metaParts := []string{}
+	metaParts = append(metaParts, entry.summary.ownershipLabel())
+	if entry.summary.Description != "" {
+		metaParts = append(metaParts, entry.summary.Description)
+	}
 	if entry.summary.Runtime != "" {
 		metaParts = append(metaParts, entry.summary.Runtime)
 	}
@@ -111,4 +115,11 @@ func truncateInline(text string, width int) string {
 		return ""
 	}
 	return ansi.Truncate(text, max(1, width), "…")
+}
+
+func (s taskConfigSummary) ownershipLabel() string {
+	if s.Builtin {
+		return "builtin"
+	}
+	return "custom"
 }
