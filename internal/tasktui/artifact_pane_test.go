@@ -235,6 +235,52 @@ func TestClarificationPanelVisibleAfterTabRoundTrip(t *testing.T) {
 	assert.Contains(t, view, "Question 1/1", "panel should be visible after tab round-trip")
 }
 
+func TestClarificationArtifactsIncludePendingInputMarkdownWithoutPrioritizingIt(t *testing.T) {
+	tempDir := t.TempDir()
+	reviewPath := filepath.Join(tempDir, "review.md")
+	inputPath := filepath.Join(tempDir, "input.md")
+	require.NoError(t, os.WriteFile(reviewPath, []byte("# Review\n\nLGTM\n"), 0o644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("# Clarification History\n\n## Exchange 1\n\nAnswer: pending\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 140, Height: 36})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Clarification with pending input", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusAwaitingUser,
+		ArtifactPaths: []string{reviewPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}, ArtifactPaths: []string{reviewPath}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:          taskruntime.InputKindClarification,
+		TaskID:        "task-1",
+		NodeRunID:     "run-2",
+		NodeName:      "implement",
+		ArtifactPaths: []string{reviewPath, inputPath},
+		Questions: []taskdomain.ClarificationQuestion{{
+			Question:     "Which path should we take?",
+			WhyItMatters: "Determines the next implementation step.",
+			Options:      []taskdomain.ClarificationOption{{Label: "A", Description: "First approach"}},
+		}},
+	}
+	model.screen = ScreenClarification
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+
+	require.Len(t, model.artifactItems, 2)
+	assert.Equal(t, reviewPath, model.artifactItems[0].Path)
+	assert.Equal(t, inputPath, model.artifactItems[1].Path)
+	assert.Equal(t, 0, model.artifactIndex)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Preview · review_plan (#1) · review.md")
+	assert.Contains(t, view, "LGTM")
+}
+
 func TestArtifactTabCyclesViaTab(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")

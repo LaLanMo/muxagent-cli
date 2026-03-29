@@ -1486,9 +1486,14 @@ func assertNodeRunCounts(t *testing.T, runs []taskdomain.NodeRun, want map[strin
 func assertHumanAuditArtifact(t *testing.T, run taskdomain.NodeRun) {
 	t.Helper()
 	paths := taskdomain.ArtifactPaths(run.Result)
-	require.Len(t, paths, 1)
-	assert.FileExists(t, paths[0])
-	assert.Equal(t, "output.json", filepath.Base(paths[0]))
+	require.Len(t, paths, 2)
+	var names []string
+	for _, path := range paths {
+		assert.FileExists(t, path)
+		names = append(names, filepath.Base(path))
+	}
+	sort.Strings(names)
+	assert.Equal(t, []string{"input.md", "output.json"}, names)
 }
 
 func assertArtifactDirs(t *testing.T, task taskdomain.Task, want []string) {

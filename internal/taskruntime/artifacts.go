@@ -2,26 +2,57 @@ package taskruntime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 )
 
-func runArtifactDir(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun) (string, error) {
+const (
+	inputArtifactName          = "input.md"
+	outputArtifactName         = "output.json"
+	clarificationHistoryMarker = "<!-- muxagent:clarification-history -->"
+)
+
+func runArtifactDirPath(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun) (string, error) {
 	sequence := nodeRunSequence(runs, run.ID)
 	if sequence == 0 {
 		return "", fmt.Errorf("node run %q not found in task timeline", run.ID)
 	}
-	dir := taskstore.ArtifactRunDir(task.WorkDir, task.ID, sequence, run.NodeName)
+	return taskstore.ArtifactRunDir(task.WorkDir, task.ID, sequence, run.NodeName), nil
+}
+
+func runArtifactDir(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun) (string, error) {
+	dir, err := runArtifactDirPath(task, runs, run)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	return dir, nil
+}
+
+func runArtifactPath(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun, name string) (string, error) {
+	dir, err := runArtifactDir(task, runs, run)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
+func runArtifactPathForExistingRun(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun, name string) (string, error) {
+	dir, err := runArtifactDirPath(task, runs, run)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
 }
 
 func nodeRunSequence(runs []taskdomain.NodeRun, runID string) int {
@@ -41,11 +72,14 @@ func nodeRunSequence(runs []taskdomain.NodeRun, runID string) int {
 }
 
 func materializeHumanNodeArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []taskdomain.NodeRun, payload map[string]interface{}, submittedAt time.Time) (map[string]interface{}, error) {
-	artifactDir, err := runArtifactDir(task, runs, run)
+	outputPath, err := runArtifactPath(task, runs, run, outputArtifactName)
 	if err != nil {
 		return nil, err
 	}
-	artifactPath := filepath.Join(artifactDir, "output.json")
+	inputPath, err := writeHumanInputArtifact(task, run, runs, payload, submittedAt)
+	if err != nil {
+		return nil, err
+	}
 	envelope := map[string]interface{}{
 		"kind":         "human_node_result",
 		"task_id":      task.ID,
@@ -59,12 +93,10 @@ func materializeHumanNodeArtifact(task taskdomain.Task, run taskdomain.NodeRun, 
 		return nil, err
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(artifactPath, data, 0o644); err != nil {
+	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 		return nil, err
 	}
-	result := cloneMap(payload)
-	result["file_paths"] = []interface{}{artifactPath}
-	return result, nil
+	return appendArtifactPaths(payload, outputPath, inputPath), nil
 }
 
 func cloneMap(src map[string]interface{}) map[string]interface{} {
@@ -76,4 +108,191 @@ func cloneMap(src map[string]interface{}) map[string]interface{} {
 		dst[key] = value
 	}
 	return dst
+}
+
+func appendArtifactPaths(result map[string]interface{}, paths ...string) map[string]interface{} {
+	out := cloneMap(result)
+	existing := taskdomain.ArtifactPaths(out)
+	merged := make([]string, 0, len(existing)+len(paths))
+	seen := make(map[string]struct{}, len(existing)+len(paths))
+	for _, path := range existing {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		merged = append(merged, path)
+	}
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		merged = append(merged, path)
+	}
+	if len(merged) > 0 {
+		out["file_paths"] = merged
+	}
+	return out
+}
+
+func writeHumanInputArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []taskdomain.NodeRun, payload map[string]interface{}, submittedAt time.Time) (string, error) {
+	body, err := renderHumanInputMarkdown(payload, submittedAt)
+	if err != nil {
+		return "", err
+	}
+	return writeInputArtifact(task, run, runs, body)
+}
+
+func ensureAgentInputArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []taskdomain.NodeRun, prompt string) (string, error) {
+	path, err := runArtifactPath(task, runs, run, inputArtifactName)
+	if err != nil {
+		return "", err
+	}
+	if len(run.Clarifications) > 0 {
+		info, statErr := os.Stat(path)
+		if statErr == nil && !info.IsDir() {
+			return path, nil
+		}
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return "", statErr
+		}
+	}
+	if err := os.WriteFile(path, renderAgentInputMarkdown(prompt), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writeClarificationInputArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []taskdomain.NodeRun) (string, error) {
+	path, err := runArtifactPath(task, runs, run, inputArtifactName)
+	if err != nil {
+		return "", err
+	}
+	base, err := readClarificationInputBase(path)
+	if err != nil {
+		return "", err
+	}
+	history, err := renderClarificationInputMarkdown(run.Clarifications)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, mergeClarificationInputMarkdown(base, history), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writeInputArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []taskdomain.NodeRun, body []byte) (string, error) {
+	path, err := runArtifactPath(task, runs, run, inputArtifactName)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func readClarificationInputBase(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	content := string(data)
+	if idx := strings.Index(content, clarificationHistoryMarker); idx >= 0 {
+		content = content[:idx]
+	}
+	return strings.TrimRight(content, "\n"), nil
+}
+
+func mergeClarificationInputMarkdown(base string, history []byte) []byte {
+	base = strings.TrimRight(base, "\n")
+	if base == "" {
+		base = "# Input"
+	}
+	section := strings.TrimRight(string(history), "\n")
+	return []byte(base + "\n\n" + clarificationHistoryMarker + "\n\n" + section + "\n")
+}
+
+func renderHumanInputMarkdown(payload map[string]interface{}, submittedAt time.Time) ([]byte, error) {
+	data, err := json.MarshalIndent(cloneMap(payload), "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	lines := []string{
+		"# Input",
+		"",
+		fmt.Sprintf("Submitted: %s", submittedAt.Format(time.RFC3339Nano)),
+		"",
+		"```json",
+		string(data),
+		"```",
+	}
+	return []byte(strings.Join(lines, "\n") + "\n"), nil
+}
+
+func renderAgentInputMarkdown(prompt string) []byte {
+	lines := []string{
+		"# Input",
+		"",
+		"## Prompt",
+		"",
+		strings.TrimRight(prompt, "\n"),
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func renderClarificationInputMarkdown(exchanges []taskdomain.ClarificationExchange) ([]byte, error) {
+	lines := []string{"## Clarification History", ""}
+	for i, exchange := range exchanges {
+		lines = append(lines, fmt.Sprintf("### Exchange %d", i+1), "")
+		lines = append(lines, fmt.Sprintf("Requested: %s", exchange.RequestedAt.Format(time.RFC3339Nano)))
+		if exchange.AnsweredAt != nil {
+			lines = append(lines, fmt.Sprintf("Answered: %s", exchange.AnsweredAt.Format(time.RFC3339Nano)))
+		} else {
+			lines = append(lines, "Status: awaiting_user")
+		}
+		lines = append(lines, "")
+		for qi, question := range exchange.Request.Questions {
+			lines = append(lines, fmt.Sprintf("#### Question %d", qi+1), "", question.Question, "")
+			if question.WhyItMatters != "" {
+				lines = append(lines, fmt.Sprintf("Why it matters: %s", question.WhyItMatters), "")
+			}
+			if question.MultiSelect {
+				lines = append(lines, "Selection mode: multi-select", "")
+			}
+			if len(question.Options) > 0 {
+				lines = append(lines, "Options:")
+				for _, option := range question.Options {
+					if option.Description != "" {
+						lines = append(lines, fmt.Sprintf("- `%s`: %s", option.Label, option.Description))
+					} else {
+						lines = append(lines, fmt.Sprintf("- `%s`", option.Label))
+					}
+				}
+				lines = append(lines, "")
+			}
+			if exchange.Response != nil && qi < len(exchange.Response.Answers) {
+				selected, err := json.MarshalIndent(exchange.Response.Answers[qi].Selected, "", "  ")
+				if err != nil {
+					return nil, err
+				}
+				lines = append(lines, "Answer:", "", "```json", string(selected), "```", "")
+				continue
+			}
+			lines = append(lines, "Answer: pending", "")
+		}
+	}
+	return []byte(strings.Join(lines, "\n") + "\n"), nil
 }

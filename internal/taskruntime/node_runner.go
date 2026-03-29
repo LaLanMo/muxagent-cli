@@ -57,7 +57,7 @@ func (s *Service) startNode(ctx context.Context, task taskdomain.Task, cfg *task
 			NodeRunID:    run.ID,
 			NodeName:     run.NodeName,
 			TaskView:     &view,
-			InputRequest: s.buildInputRequest(cfg, viewNodeRuns(view), run),
+			InputRequest: s.buildInputRequest(task, cfg, viewNodeRuns(view), run),
 		})
 		return nil
 	default:
@@ -83,6 +83,10 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		return err
 	}
 	prompt, err := buildPrompt(task, cfg, taskstore.ConfigPath(task.WorkDir, task.ID), runs, run, artifactDir)
+	if err != nil {
+		return err
+	}
+	inputPath, err := ensureAgentInputArtifact(task, run, runs, prompt)
 	if err != nil {
 		return err
 	}
@@ -135,6 +139,9 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 			Request:     *result.Clarification,
 			RequestedAt: now,
 		})
+		if _, err := writeClarificationInputArtifact(task, run, runs); err != nil {
+			return err
+		}
 		if err := s.store.SaveNodeRun(context.Background(), run); err != nil {
 			return err
 		}
@@ -148,7 +155,7 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 			NodeRunID:    run.ID,
 			NodeName:     run.NodeName,
 			TaskView:     &view,
-			InputRequest: s.buildInputRequest(cfg, viewNodeRuns(view), run),
+			InputRequest: s.buildInputRequest(task, cfg, viewNodeRuns(view), run),
 		})
 		return nil
 	case taskexecutor.ResultKindResult:
@@ -156,8 +163,16 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		if err := taskconfig.ValidateValue(&resultSchema, result.Result); err != nil {
 			return s.failRun(context.Background(), task, cfg, run, err)
 		}
+		storedResult := cloneMap(result.Result)
+		if len(run.Clarifications) > 0 {
+			inputPath, err = writeClarificationInputArtifact(task, run, runs)
+			if err != nil {
+				return err
+			}
+		}
+		storedResult = appendArtifactPaths(storedResult, inputPath)
 		now := time.Now().UTC()
-		run.Result = result.Result
+		run.Result = storedResult
 		run.Status = taskdomain.NodeRunDone
 		run.FailureReason = ""
 		run.CompletedAt = &now

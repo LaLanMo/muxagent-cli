@@ -111,6 +111,9 @@ Agent nodes use a shared system-generated output envelope across both task runti
 - If clarification is disabled, the generated envelope only allows `kind=result` and `result`.
 - The Codex transport asks the `codex` CLI to validate against that schema and write `output.json` directly.
 - The Claude transport asks the `claude` CLI for `structured_output`, then the executor validates that envelope and writes `output.json` itself.
+- Every `NodeRun` artifact directory keeps that machine-readable `output.json`.
+- User-facing input is exported alongside it as `input.md`: agent nodes store the prompt they received, human nodes store the submitted payload, and clarification flows extend the same file with the clarification history and answers.
+- Clarification runtime state still lives in SQLite `clarifications_json`; `input.md` is the readable audit trail for the same exchanges and answers.
 
 Agent `result_schema` must stay within the current shared Structured Outputs subset used by both Codex and Claude task runs.
 

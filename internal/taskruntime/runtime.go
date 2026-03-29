@@ -290,12 +290,19 @@ func (s *Service) submitInput(ctx context.Context, taskID, nodeRunID string, pay
 	if len(run.Clarifications) == 0 {
 		return errors.New("clarification input submitted for a node without clarification request")
 	}
+	runs, err := s.store.ListNodeRunsByTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
 	response, err := parseClarificationResponse(run.Clarifications[len(run.Clarifications)-1].Request, payload)
 	if err != nil {
 		return err
 	}
 	run.Clarifications[len(run.Clarifications)-1].Response = response
 	run.Clarifications[len(run.Clarifications)-1].AnsweredAt = &now
+	if _, err := writeClarificationInputArtifact(task, run, runs); err != nil {
+		return err
+	}
 	run.Status = taskdomain.NodeRunRunning
 	run.FailureReason = ""
 	if err := s.store.SaveNodeRun(ctx, run); err != nil {

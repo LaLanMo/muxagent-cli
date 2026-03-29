@@ -3,6 +3,7 @@ package taskruntime
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
@@ -67,7 +68,7 @@ func (s *Service) BuildInputRequest(ctx context.Context, taskID, nodeRunID strin
 	if err != nil {
 		return nil, err
 	}
-	return s.buildInputRequest(cfg, runs, run), nil
+	return s.buildInputRequest(task, cfg, runs, run), nil
 }
 
 func (s *Service) refreshTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, error) {
@@ -75,8 +76,13 @@ func (s *Service) refreshTaskView(ctx context.Context, taskID string) (taskdomai
 	return view, err
 }
 
-func (s *Service) buildInputRequest(cfg *taskconfig.Config, runs []taskdomain.NodeRun, run taskdomain.NodeRun) *InputRequest {
+func (s *Service) buildInputRequest(task taskdomain.Task, cfg *taskconfig.Config, runs []taskdomain.NodeRun, run taskdomain.NodeRun) *InputRequest {
 	artifacts := completedArtifactPaths(runs)
+	if inputPath, err := runArtifactPathForExistingRun(task, runs, run, inputArtifactName); err == nil {
+		if info, statErr := os.Stat(inputPath); statErr == nil && !info.IsDir() {
+			artifacts = append(artifacts, inputPath)
+		}
+	}
 	def := cfg.NodeDefinitions[run.NodeName]
 	if def.Type == taskconfig.NodeTypeHuman {
 		schema := def.ResultSchema
