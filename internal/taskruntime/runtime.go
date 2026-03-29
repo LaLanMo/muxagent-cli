@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
@@ -124,7 +123,7 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	switch cmd.Type {
 	case CommandStartTask:
-		return s.startTask(ctx, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath, firstNonEmpty(cmd.WorkDir, s.workDir), cmd.UseWorktree, cmd.Runtime)
+		return s.startTask(ctx, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath, firstNonEmpty(cmd.WorkDir, s.workDir), cmd.UseWorktree)
 	case CommandSubmitInput:
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
 	case CommandRetryNode:
@@ -138,7 +137,7 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	}
 }
 
-func (s *Service) startTask(ctx context.Context, description, configAlias, configPath, workDir string, useWorktree bool, runtimeOverride appconfig.RuntimeID) (err error) {
+func (s *Service) startTask(ctx context.Context, description, configAlias, configPath, workDir string, useWorktree bool) (err error) {
 	workDir = taskstore.NormalizeWorkDir(workDir)
 	taskID := uuid.NewString()
 	now := time.Now().UTC()
@@ -150,7 +149,7 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 	if configPath == "" {
 		return errors.New("task config path is required")
 	}
-	materialized, err := taskconfig.MaterializeWithRuntime(workDir, taskID, configPath, runtimeOverride)
+	materialized, err := taskconfig.Materialize(workDir, taskID, configPath)
 	if err != nil {
 		return err
 	}

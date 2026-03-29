@@ -227,70 +227,6 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	assert.Contains(t, upsertRequests[1].Prompt, "Stay in the same thread context")
 }
 
-func TestServicePersistsRuntimeOverrideIntoClarificationResume(t *testing.T) {
-	executor := &fakeExecutor{
-		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
-				{
-					Kind: taskexecutor.ResultKindClarification,
-					Clarification: &taskdomain.ClarificationRequest{
-						Questions: []taskdomain.ClarificationQuestion{
-							{
-								Question:     "Need a choice",
-								WhyItMatters: "Impacts plan",
-								Options: []taskdomain.ClarificationOption{
-									{Label: "A", Description: "Option A"},
-									{Label: "B", Description: "Option B"},
-								},
-							},
-						},
-					},
-				},
-				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")},
-			},
-			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
-		},
-	}
-	service := newTestService(t, executor)
-	defer service.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = service.Run(ctx) }()
-
-	service.Dispatch(RunCommand{
-		Type:        CommandStartTask,
-		Description: "Implement login",
-		ConfigAlias: taskconfig.DefaultAlias,
-		ConfigPath:  managedDefaultTestConfigPath(t),
-		WorkDir:     service.workDir,
-		Runtime:     appconfig.RuntimeClaudeCode,
-	})
-	requested := waitForEvent(t, service.Events(), EventInputRequested)
-	require.Equal(t, InputKindClarification, requested.InputRequest.Kind)
-
-	cfg, err := taskconfig.Load(taskstore.ConfigPath(service.workDir, requested.TaskID))
-	require.NoError(t, err)
-	assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
-
-	service.Dispatch(RunCommand{
-		Type:      CommandSubmitInput,
-		TaskID:    requested.TaskID,
-		NodeRunID: requested.NodeRunID,
-		Payload: map[string]interface{}{
-			"answers": []interface{}{
-				map[string]interface{}{"selected": "A"},
-			},
-		},
-	})
-	waitForEvent(t, service.Events(), EventInputRequested)
-
-	upsertRequests := executor.requestsForNode("upsert_plan")
-	require.Len(t, upsertRequests, 2)
-	assert.Equal(t, appconfig.RuntimeClaudeCode, upsertRequests[0].Runtime)
-	assert.Equal(t, appconfig.RuntimeClaudeCode, upsertRequests[1].Runtime)
-}
-
 func TestServicePersistsTaskConfigAlias(t *testing.T) {
 	cfg, err := taskconfig.LoadDefault()
 	require.NoError(t, err)
@@ -400,7 +336,7 @@ func TestServiceWorktreeStartupRollsBackWhenRepoSubdirIsMissingInNewWorktree(t *
 	defer service.Close()
 	service.rootCtx = context.Background()
 
-	err = service.startTask(context.Background(), "missing subdir", taskconfig.DefaultAlias, managedDefaultTestConfigPath(t), workDir, true, "")
+	err = service.startTask(context.Background(), "missing subdir", taskconfig.DefaultAlias, managedDefaultTestConfigPath(t), workDir, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "saved worktree cwd unavailable")
 

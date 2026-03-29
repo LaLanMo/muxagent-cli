@@ -50,7 +50,7 @@ starting the daemon.
 - `muxagent auth status` - Show pairing status.
 - `muxagent version` - Show the installed CLI version.
 - `muxagent update` - Update `muxagent`.
-- `muxagent --runtime claude-code` - Launch the task-first TUI with Claude Code for new tasks. Bare `muxagent` still defaults to Codex.
+- `muxagent` - Launch the task-first TUI. Runtime is set per task config via the `runtime` field in config.yaml.
 
 ## Built-in Task Configs
 

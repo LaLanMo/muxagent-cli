@@ -109,18 +109,11 @@ func (m *Model) cycleTaskConfig(delta int) bool {
 }
 
 func (m Model) effectiveLaunchRuntime() appconfig.RuntimeID {
-	if m.launchRuntimeOverride != "" {
-		runtime, err := taskconfig.ResolveRuntime(m.launchRuntimeOverride, nil)
-		if err != nil {
-			return ""
-		}
-		return runtime
-	}
 	cfg := m.selectedTaskConfig()
 	if cfg == nil {
 		return ""
 	}
-	runtime, err := taskconfig.ResolveRuntime("", cfg)
+	runtime, err := taskconfig.ResolveRuntime(cfg)
 	if err != nil {
 		return ""
 	}

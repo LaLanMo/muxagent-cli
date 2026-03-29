@@ -420,38 +420,6 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				assert.Equal(t, failedImplement.ID, retriedImplement.TriggeredBy.NodeRunID)
 			},
 		},
-		{
-			name:        "claude runtime persists and clarification resumes",
-			flow:        "clarify-once",
-			description: "Need clarification with Claude",
-			cliArgs:     []string{"--runtime", "claude-code"},
-			drive: func(t *testing.T, session *tuiSession) {
-				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
-				session.send(t, "\r")
-				session.waitForAll(t, 5*time.Second, "New Task", "runtime claude-code")
-				session.submitNewTask(t, "Need clarification with Claude")
-				session.waitForAll(t, 10*time.Second, "upsert_plan", "awaiting input")
-				session.confirm(t)
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
-			},
-			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
-			requirePromptHeader: true,
-			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
-				require.Len(t, runs, 6)
-				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
-				cfg, err := taskconfig.Load(taskstore.ConfigPath(task.WorkDir, task.ID))
-				require.NoError(t, err)
-				assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
-				for _, run := range runs {
-					if run.NodeName == "upsert_plan" {
-						require.Len(t, run.Clarifications, 1)
-						require.NotNil(t, run.Clarifications[0].Response)
-						assert.Equal(t, run.ID, run.SessionID)
-					}
-				}
-			},
-		},
 	}
 
 	for _, tt := range tests {

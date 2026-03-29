@@ -764,15 +764,11 @@ node_definitions:
 		assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
 	})
 
-	t.Run("runtime override takes precedence", func(t *testing.T) {
+	t.Run("runtime from config", func(t *testing.T) {
 		cfg := basicFixture()
 		cfg.Runtime = appconfig.RuntimeClaudeCode
 
-		runtime, err := ResolveRuntime(appconfig.RuntimeCodex, cfg)
-		require.NoError(t, err)
-		assert.Equal(t, appconfig.RuntimeCodex, runtime)
-
-		runtime, err = ResolveRuntime("", cfg)
+		runtime, err := ResolveRuntime(cfg)
 		require.NoError(t, err)
 		assert.Equal(t, appconfig.RuntimeClaudeCode, runtime)
 	})
@@ -807,7 +803,7 @@ node_definitions:
 `)
 		require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(cfgPath), "prompt.md"), []byte("# prompt"), 0o644))
 
-		materialized, err := MaterializeWithRuntime(workDir, "task-claude", cfgPath, "")
+		materialized, err := Materialize(workDir, "task-claude", cfgPath)
 		require.NoError(t, err)
 		assert.Equal(t, appconfig.RuntimeClaudeCode, materialized.Config.Runtime)
 

@@ -70,7 +70,6 @@ func (m *Model) submitNewTask() tea.Cmd {
 		WorkDir:     m.workDir,
 		ConfigPath:  entry.Path,
 		UseWorktree: m.newTask.useWorktree,
-		Runtime:     m.effectiveLaunchRuntime(),
 	})
 }
 

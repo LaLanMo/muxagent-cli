@@ -137,37 +137,6 @@ func TestRootRejectsRemovedConfigFlag(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown shorthand flag: 'c'")
 }
 
-func TestRootPassesRuntimeOverrideToTaskTUI(t *testing.T) {
-	var gotRuntime appconfig.RuntimeID
-	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
-			gotRuntime = launch.Runtime
-			return nil
-		},
-	})
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"--runtime", "claude-code"})
-
-	err := cmd.Execute()
-	require.NoError(t, err)
-	assert.Equal(t, appconfig.RuntimeClaudeCode, gotRuntime)
-}
-
-func TestRootRejectsInvalidRuntime(t *testing.T) {
-	cmd := newRootCmd(rootOptions{
-		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
-			return nil
-		},
-	})
-	cmd.SetArgs([]string{"--runtime", "bogus"})
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `runtime "bogus" is not supported`)
-}
-
 func TestRootPropagatesTaskTUILaunchError(t *testing.T) {
 	cmd := newRootCmd(rootOptions{
 		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {

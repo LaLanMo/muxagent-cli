@@ -855,10 +855,6 @@ func isNumberValue(value interface{}) bool {
 }
 
 func Materialize(workDir, taskID, overridePath string) (*MaterializedConfig, error) {
-	return MaterializeWithRuntime(workDir, taskID, overridePath, "")
-}
-
-func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverride appconfig.RuntimeID) (*MaterializedConfig, error) {
 	taskDir := filepath.Join(workDir, ".muxagent", "tasks", taskID)
 	promptDir := filepath.Join(taskDir, "prompts")
 	if err := os.MkdirAll(promptDir, 0o755); err != nil {
@@ -892,7 +888,7 @@ func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverrid
 	if err != nil {
 		return nil, err
 	}
-	resolvedRuntime, err := ResolveRuntime(runtimeOverride, cfgCopy)
+	resolvedRuntime, err := ResolveRuntime(cfgCopy)
 	if err != nil {
 		return nil, err
 	}
@@ -955,13 +951,7 @@ func MaterializeWithRuntime(workDir, taskID, overridePath string, runtimeOverrid
 	}, nil
 }
 
-func ResolveRuntime(override appconfig.RuntimeID, cfg *Config) (appconfig.RuntimeID, error) {
-	if override != "" {
-		if !appconfig.IsSupportedRuntime(override) {
-			return "", fmt.Errorf("runtime %q is not supported", override)
-		}
-		return override, nil
-	}
+func ResolveRuntime(cfg *Config) (appconfig.RuntimeID, error) {
 	if cfg != nil && cfg.Runtime != "" {
 		if !appconfig.IsSupportedRuntime(cfg.Runtime) {
 			return "", fmt.Errorf("runtime %q is not supported", cfg.Runtime)

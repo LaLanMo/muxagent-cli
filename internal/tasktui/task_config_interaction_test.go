@@ -188,7 +188,7 @@ node_definitions:
 		taskconfig.CatalogEntry{Alias: "reviewer", Path: filepath.Join(reviewerDir, "config.yaml")},
 	)
 
-	model := NewModelWithCatalog(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, t.TempDir(), catalog, "", "v0.1.0")
+	model := NewModelWithCatalog(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, t.TempDir(), catalog, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
 	model = next.(Model)
 	model.selectedConfigAlias = "broken"

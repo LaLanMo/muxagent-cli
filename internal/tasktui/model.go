@@ -8,7 +8,6 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
-	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -61,7 +60,6 @@ type Model struct {
 	workDir                  string
 	configCatalog            *taskconfig.Catalog
 	selectedConfigAlias      string
-	launchRuntimeOverride    appconfig.RuntimeID
 	worktreeLaunchAvailable  bool
 	rememberedUseWorktree    bool
 	saveTaskLaunchPreference func(bool) error
@@ -117,21 +115,20 @@ func NewModel(service RuntimeService, workDir, configPath string, launchConfig *
 			}},
 		}
 	}
-	return newModel(service, workDir, catalog, "", version)
+	return newModel(service, workDir, catalog, version)
 }
 
-func NewModelWithCatalog(service RuntimeService, workDir string, configCatalog *taskconfig.Catalog, runtimeOverride appconfig.RuntimeID, version string) Model {
-	return newModel(service, workDir, configCatalog, runtimeOverride, version)
+func NewModelWithCatalog(service RuntimeService, workDir string, configCatalog *taskconfig.Catalog, version string) Model {
+	return newModel(service, workDir, configCatalog, version)
 }
 
-func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.Catalog, runtimeOverride appconfig.RuntimeID, version string) Model {
+func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.Catalog, version string) Model {
 	catalog := configCatalogOrDefault(configCatalog)
 	model := Model{
 		service:               service,
 		workDir:               workDir,
 		configCatalog:         catalog,
 		selectedConfigAlias:   catalog.DefaultAlias,
-		launchRuntimeOverride: runtimeOverride,
 		version:               version,
 		screen:                ScreenTaskList,
 		returnScreen:          ScreenTaskList,

@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -27,7 +26,6 @@ type App struct {
 	Service                  RuntimeService
 	WorkDir                  string
 	ConfigCatalog            *taskconfig.Catalog
-	LaunchRuntimeOverride    appconfig.RuntimeID
 	WorktreeLaunchAvailable  bool
 	DefaultUseWorktree       bool
 	SaveTaskLaunchPreference func(bool) error
@@ -41,7 +39,7 @@ func (a App) Run(ctx context.Context) error {
 		runDone <- a.Service.Run(runtimeCtx)
 	}()
 
-	model := NewModelWithCatalog(a.Service, a.WorkDir, a.ConfigCatalog, a.LaunchRuntimeOverride, a.Version)
+	model := NewModelWithCatalog(a.Service, a.WorkDir, a.ConfigCatalog, a.Version)
 	model.worktreeLaunchAvailable = a.WorktreeLaunchAvailable
 	model.rememberedUseWorktree = a.WorktreeLaunchAvailable && a.DefaultUseWorktree
 	model.newTask.useWorktree = model.rememberedUseWorktree

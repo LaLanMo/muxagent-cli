@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/auth"
@@ -24,7 +23,6 @@ import (
 )
 
 type taskTUILaunchOptions struct {
-	Runtime            appconfig.RuntimeID
 	WorktreeAvailable  bool
 	DefaultUseWorktree bool
 }
@@ -54,7 +52,6 @@ func NewRootCmd() *cobra.Command {
 				Service:                 service,
 				WorkDir:                 workDir,
 				ConfigCatalog:           catalog,
-				LaunchRuntimeOverride:   launch.Runtime,
 				WorktreeLaunchAvailable: launch.WorktreeAvailable,
 				DefaultUseWorktree:      launch.DefaultUseWorktree,
 				SaveTaskLaunchPreference: func(useWorktree bool) error {
@@ -68,19 +65,11 @@ func NewRootCmd() *cobra.Command {
 }
 
 func newRootCmd(opts rootOptions) *cobra.Command {
-	var runtimeOverride string
 	rootCmd := &cobra.Command{
 		Use:     "muxagent",
 		Short:   "MuxAgent CLI",
 		Version: cliversion.CLIString(),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var runtime appconfig.RuntimeID
-			if runtimeOverride != "" {
-				runtime = appconfig.RuntimeID(runtimeOverride)
-				if !appconfig.IsSupportedRuntime(runtime) {
-					return fmt.Errorf("runtime %q is not supported", runtimeOverride)
-				}
-			}
 			workDir, err := os.Getwd()
 			if err != nil {
 				return err
@@ -92,7 +81,6 @@ func newRootCmd(opts rootOptions) *cobra.Command {
 			}
 			prefs := appconfig.LoadTaskLaunchPreferences()
 			return opts.launchTUI(cmd.Context(), workDir, taskTUILaunchOptions{
-				Runtime:            runtime,
 				WorktreeAvailable:  worktreeAvailable,
 				DefaultUseWorktree: worktreeAvailable && prefs.UseWorktree,
 			})
@@ -100,7 +88,6 @@ func newRootCmd(opts rootOptions) *cobra.Command {
 	}
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	rootCmd.Flags().StringVar(&runtimeOverride, "runtime", "", "Task runtime override (codex or claude-code)")
 
 	rootCmd.AddCommand(
 		auth.NewCmd(),

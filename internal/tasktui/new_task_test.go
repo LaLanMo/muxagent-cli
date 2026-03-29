@@ -138,7 +138,6 @@ func TestModelSubmitsNewTaskCommand(t *testing.T) {
 	assert.Equal(t, taskruntime.CommandStartTask, service.dispatched[0].Type)
 	assert.Equal(t, taskconfig.DefaultAlias, service.dispatched[0].ConfigAlias)
 	assert.Equal(t, "./taskflow.yaml", service.dispatched[0].ConfigPath)
-	assert.Equal(t, appconfig.RuntimeClaudeCode, service.dispatched[0].Runtime)
 	assert.Equal(t, ScreenRunning, model.screen)
 }
 
@@ -150,7 +149,7 @@ func TestNewTaskCyclesToNextTaskConfigViaHotkey(t *testing.T) {
 			{Alias: taskconfig.DefaultAlias, Config: &taskconfig.Config{Runtime: appconfig.RuntimeCodex}},
 			{Alias: "reviewer", Path: "/tmp/reviewer.yaml", Config: &taskconfig.Config{Runtime: appconfig.RuntimeClaudeCode}},
 		},
-	}, "", "v0.1.0")
+	}, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
 	model = openNewTaskModal(t, model)
@@ -235,7 +234,7 @@ func TestModelSubmitsSelectedTaskConfigAlias(t *testing.T) {
 			{Alias: taskconfig.DefaultAlias, Config: &taskconfig.Config{Runtime: appconfig.RuntimeCodex}},
 			{Alias: "reviewer", Path: "/tmp/reviewer.yaml", Config: &taskconfig.Config{Runtime: appconfig.RuntimeClaudeCode}},
 		},
-	}, "", "v0.1.0")
+	}, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
 	model = openNewTaskModal(t, model)
@@ -250,7 +249,6 @@ func TestModelSubmitsSelectedTaskConfigAlias(t *testing.T) {
 	require.Len(t, service.dispatched, 1)
 	assert.Equal(t, "reviewer", service.dispatched[0].ConfigAlias)
 	assert.Equal(t, "/tmp/reviewer.yaml", service.dispatched[0].ConfigPath)
-	assert.Equal(t, appconfig.RuntimeClaudeCode, service.dispatched[0].Runtime)
 }
 
 func TestStartTaskCommandErrorReturnsToComposerAndPreservesInput(t *testing.T) {
