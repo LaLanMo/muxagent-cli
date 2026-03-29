@@ -50,7 +50,7 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	assert.NotContains(t, strippedView(view.Content), "Enter select")
 }
 
-func TestTaskListHeaderShowsVersionRevisionCwdAndConfig(t *testing.T) {
+func TestTaskListHeaderShowsVersionRevisionAndCwd(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(
 		service,
@@ -70,11 +70,11 @@ func TestTaskListHeaderShowsVersionRevisionCwdAndConfig(t *testing.T) {
 	assert.Contains(t, header, "dev")
 	assert.Contains(t, header, "1234567890ab")
 	assert.Contains(t, header, "/tmp/project")
-	assert.Contains(t, header, "config default")
+	assert.NotContains(t, header, "config")
 	assert.NotContains(t, header, "runtime")
 }
 
-func TestTaskListCompactHeaderShowsCwdAndConfigWithoutRuntime(t *testing.T) {
+func TestTaskListCompactHeaderShowsCwdWithoutConfigOrRuntime(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp", "", nil, "v0.1.0")
@@ -84,7 +84,7 @@ func TestTaskListCompactHeaderShowsCwdAndConfigWithoutRuntime(t *testing.T) {
 	metrics := model.computeScreenMetrics()
 	header := strippedView(model.renderTaskListHeader(metrics.innerWidth))
 	assert.Contains(t, header, "cwd /tmp")
-	assert.Contains(t, header, "config default")
+	assert.NotContains(t, header, "config")
 	assert.NotContains(t, header, "runtime")
 }
 

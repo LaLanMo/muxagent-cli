@@ -217,7 +217,7 @@ func TestTaskListDelegateRendersAwaitingChipAndActionCopy(t *testing.T) {
 	assert.NotContains(t, input, "awaiting approval")
 }
 
-func TestTaskListDelegateUsesRunningAccentForRunningTitle(t *testing.T) {
+func TestTaskListDelegateUsesNeutralTitleStyleForRunningTasks(t *testing.T) {
 	delegate := taskListDelegate{}
 	model := newTaskListModel()
 	model.SetSize(64, 8)
@@ -236,5 +236,40 @@ func TestTaskListDelegateUsesRunningAccentForRunningTitle(t *testing.T) {
 	raw := buf.String()
 
 	assert.Contains(t, ansi.Strip(raw), "❯ running running task")
-	assert.Contains(t, raw, tuiTheme.runningText.Render("running task"))
+	assert.Contains(t, raw, tuiTheme.Text.Body.Render("running task"))
+	assert.NotContains(t, raw, tuiTheme.runningText.Render("running task"))
+}
+
+func TestTaskListDelegateHangingIndentsMultilineDescriptions(t *testing.T) {
+	delegate := taskListDelegate{}
+	model := newTaskListModel()
+	model.SetSize(72, 8)
+	model.SetItems([]list.Item{
+		taskListItem{
+			view: taskdomain.TaskView{
+				Task:            taskdomain.Task{ID: "task-1", Description: "first line\nsecond line"},
+				Status:          taskdomain.TaskStatusRunning,
+				CurrentNodeName: "implement",
+			},
+		},
+	})
+	model.Select(0)
+
+	var buf bytes.Buffer
+	delegate.Render(&buf, model, 0, model.Items()[0])
+	lines := strings.Split(strings.TrimSuffix(ansi.Strip(buf.String()), "\n"), "\n")
+
+	require.Len(t, lines, 3)
+	assert.Contains(t, lines[0], "❯ running first line")
+	firstDescriptionColumn := strings.Index(lines[0], "first line")
+	secondDescriptionColumn := strings.Index(lines[1], "second line")
+	require.NotEqual(t, -1, firstDescriptionColumn)
+	require.NotEqual(t, -1, secondDescriptionColumn)
+	assert.Equal(
+		t,
+		ansi.StringWidth(lines[0][:firstDescriptionColumn]),
+		ansi.StringWidth(lines[1][:secondDescriptionColumn]),
+	)
+	assert.Equal(t, strings.Repeat(" ", secondDescriptionColumn), lines[1][:secondDescriptionColumn])
+	assert.Contains(t, lines[2], "at implement")
 }

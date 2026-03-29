@@ -98,14 +98,28 @@ func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list
 	if selected {
 		marker = "❯ "
 	}
-	titleStyle := tuiTheme.Text.Body
-	if entry.view.Status == taskdomain.TaskStatusRunning {
-		titleStyle = tuiTheme.Status.Running
-	}
-	title := ansi.Truncate(entry.view.Task.Description, max(8, contentWidth-len(statusText)-4), "…")
-	top := fitLine(statusStyle.Render(marker+statusText)+" "+titleStyle.Render(title), contentWidth)
+	top := renderTaskListTitleBlock(entry.view, marker, statusText, statusStyle, contentWidth)
 	meta := fitLine("  "+tuiTheme.TaskList.Secondary.Render(taskListMeta(entry.view)), contentWidth)
 	fmt.Fprint(w, rowStyle.Render(lipgloss.JoinVertical(lipgloss.Left, top, meta)))
+}
+
+func renderTaskListTitleBlock(view taskdomain.TaskView, marker, statusText string, statusStyle lipgloss.Style, contentWidth int) string {
+	titleLines := strings.Split(view.Task.Description, "\n")
+	if len(titleLines) == 0 {
+		titleLines = []string{""}
+	}
+	titleStyle := tuiTheme.Text.Body
+	prefixText := marker + statusText + " "
+	prefixWidth := ansi.StringWidth(prefixText)
+	descriptionWidth := max(1, contentWidth-prefixWidth)
+	rendered := make([]string, 0, len(titleLines))
+	first := statusStyle.Render(marker+statusText) + " " + titleStyle.Render(ansi.Truncate(titleLines[0], descriptionWidth, "…"))
+	rendered = append(rendered, fitLine(first, contentWidth))
+	indent := strings.Repeat(" ", prefixWidth)
+	for _, line := range titleLines[1:] {
+		rendered = append(rendered, fitLine(indent+titleStyle.Render(ansi.Truncate(line, descriptionWidth, "…")), contentWidth))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rendered...)
 }
 
 func taskListRowStyle(entry taskListItem, selected bool, rowWidth int) lipgloss.Style {
