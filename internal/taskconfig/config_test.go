@@ -1,8 +1,10 @@
 package taskconfig
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
@@ -97,6 +99,7 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 		nodeCount    int
 		hasApproval  bool
 		hasImplement bool
+		hasEvaluator bool
 	}{
 		{
 			name:         "default",
@@ -105,6 +108,7 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 			nodeCount:    6,
 			hasApproval:  true,
 			hasImplement: true,
+			hasEvaluator: false,
 		},
 		{
 			name:         "plan-only",
@@ -113,6 +117,7 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 			nodeCount:    3,
 			hasApproval:  false,
 			hasImplement: false,
+			hasEvaluator: false,
 		},
 		{
 			name:         "autonomous",
@@ -121,6 +126,16 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 			nodeCount:    5,
 			hasApproval:  false,
 			hasImplement: true,
+			hasEvaluator: false,
+		},
+		{
+			name:         "yolo",
+			builtinID:    BuiltinIDYolo,
+			entry:        "upsert_plan",
+			nodeCount:    6,
+			hasApproval:  false,
+			hasImplement: true,
+			hasEvaluator: true,
 		},
 	}
 
@@ -137,18 +152,141 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 			assert.Equal(t, tt.hasApproval, hasApproval)
 			_, hasImplement := cfg.NodeDefinitions["implement"]
 			assert.Equal(t, tt.hasImplement, hasImplement)
+			_, hasEvaluator := cfg.NodeDefinitions["evaluate_progress"]
+			assert.Equal(t, tt.hasEvaluator, hasEvaluator)
 			assert.Equal(t, NodeTypeTerminal, cfg.NodeDefinitions["done"].Type)
 		})
 	}
 }
 
-func TestLoadBuiltinAutonomousDisablesClarification(t *testing.T) {
-	cfg, err := LoadBuiltin(BuiltinIDAutonomous)
+func TestLoadBuiltinAutonomousAndYoloDisableClarification(t *testing.T) {
+	tests := []struct {
+		name      string
+		builtinID string
+		nodes     []string
+	}{
+		{
+			name:      "autonomous",
+			builtinID: BuiltinIDAutonomous,
+			nodes:     []string{"upsert_plan", "implement", "verify"},
+		},
+		{
+			name:      "yolo",
+			builtinID: BuiltinIDYolo,
+			nodes:     []string{"upsert_plan", "review_plan", "implement", "verify", "evaluate_progress"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadBuiltin(tt.builtinID)
+			require.NoError(t, err)
+
+			for _, node := range tt.nodes {
+				assert.Zero(t, cfg.NodeDefinitions[node].MaxClarificationRounds)
+			}
+		})
+	}
+}
+
+func TestLoadBuiltinYoloUsesDedicatedPromptSet(t *testing.T) {
+	cfg, err := LoadBuiltin(BuiltinIDYolo)
 	require.NoError(t, err)
 
-	assert.Zero(t, cfg.NodeDefinitions["upsert_plan"].MaxClarificationRounds)
-	assert.Zero(t, cfg.NodeDefinitions["implement"].MaxClarificationRounds)
-	assert.Zero(t, cfg.NodeDefinitions["verify"].MaxClarificationRounds)
+	assert.Equal(t, "./prompts/yolo_upsert_plan.md", cfg.NodeDefinitions["upsert_plan"].SystemPrompt)
+	assert.Equal(t, "./prompts/yolo_review_plan.md", cfg.NodeDefinitions["review_plan"].SystemPrompt)
+	assert.Equal(t, "./prompts/yolo_implement.md", cfg.NodeDefinitions["implement"].SystemPrompt)
+	assert.Equal(t, "./prompts/yolo_verify.md", cfg.NodeDefinitions["verify"].SystemPrompt)
+	assert.Equal(t, "./prompts/yolo_evaluate_progress.md", cfg.NodeDefinitions["evaluate_progress"].SystemPrompt)
+}
+
+func TestLoadBuiltinYoloUsesAggressiveIterationBudget(t *testing.T) {
+	cfg, err := LoadBuiltin(BuiltinIDYolo)
+	require.NoError(t, err)
+
+	assert.Equal(t, 100, cfg.Topology.MaxIterations)
+	for _, node := range cfg.Topology.Nodes {
+		if node.Name == "upsert_plan" {
+			assert.Zero(t, node.MaxIterations)
+		}
+	}
+}
+
+func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		contains []string
+		excludes []string
+	}{
+		{
+			name: "upsert_plan",
+			path: "defaults/prompts/yolo_upsert_plan.md",
+			contains: []string{
+				"Do not infer progress from the iteration number alone.",
+				"Wave Goal",
+				"Done Definition",
+				"Allowed Side Effects",
+				"Treat it as an outcome contract",
+			},
+			excludes: []string{
+				"If this is iteration 2+, assume at least one prior planning wave was completed and verified",
+			},
+		},
+		{
+			name: "review_plan",
+			path: "defaults/prompts/yolo_review_plan.md",
+			contains: []string{
+				"outcome contract",
+				"Wave contract quality",
+				"Done Definition",
+				"Allowed Side Effects",
+			},
+		},
+		{
+			name: "implement",
+			path: "defaults/prompts/yolo_implement.md",
+			contains: []string{
+				"Satisfy the full approved planning-wave contract",
+				"wave goal, done definition, required checks",
+				"deviate from the plan's suggested implementation details",
+				"Wave goal status",
+			},
+		},
+		{
+			name: "verify",
+			path: "defaults/prompts/yolo_verify.md",
+			contains: []string{
+				"planning-wave contract",
+				"Do not require literal adherence to implementation details.",
+				"accepted deviations",
+			},
+		},
+		{
+			name: "evaluate_progress",
+			path: "defaults/prompts/yolo_evaluate_progress.md",
+			contains: []string{
+				"explicit requested scope",
+				"remaining obligation and the next wave goal",
+				"Do not invent adjacent nice-to-have work.",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := fs.ReadFile(defaultsFS, tt.path)
+			require.NoError(t, err)
+			text := string(data)
+
+			for _, want := range tt.contains {
+				assert.Truef(t, strings.Contains(text, want), "expected %q in %s", want, tt.path)
+			}
+			for _, unwanted := range tt.excludes {
+				assert.Falsef(t, strings.Contains(text, unwanted), "did not expect %q in %s", unwanted, tt.path)
+			}
+		})
+	}
 }
 
 func TestLoadRejectsInvalidConfigs_TableDriven(t *testing.T) {

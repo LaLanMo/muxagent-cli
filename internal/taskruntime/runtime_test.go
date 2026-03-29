@@ -432,6 +432,122 @@ func TestServiceReviewRejectLoopsBackToUpsertPlan(t *testing.T) {
 	assert.Equal(t, 2, reviewCount)
 }
 
+func TestServiceYoloVerifyFailureLoopsBackToImplement(t *testing.T) {
+	service := newTestServiceWithConfig(t, yoloRuntimeFixture(), &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"upsert_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review-1.md"}}},
+			},
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl-1.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl-2.md")},
+			},
+			"verify": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": false, "summary": "missing test coverage", "file_paths": []interface{}{"/tmp/verify-1.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "summary": "wave complete", "file_paths": []interface{}{"/tmp/verify-2.md"}}},
+			},
+			"evaluate_progress": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"next_node": "done", "reason": "task complete", "next_focus": "", "file_paths": []interface{}{"/tmp/eval-1.md"}}},
+			},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "yolo verify retry"))
+	completed := waitForTaskSuccess(t, service.Events())
+	require.NotNil(t, completed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
+	require.NoError(t, err)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"upsert_plan":       1,
+		"review_plan":       1,
+		"implement":         2,
+		"verify":            2,
+		"evaluate_progress": 1,
+		"done":              1,
+	})
+	assert.Equal(t, []string{
+		"upsert_plan",
+		"review_plan",
+		"implement",
+		"verify",
+		"implement",
+		"verify",
+		"evaluate_progress",
+		"done",
+	}, nodeRunNames(runs))
+}
+
+func TestServiceYoloEvaluateProgressStartsNextPlanningWave(t *testing.T) {
+	service := newTestServiceWithConfig(t, yoloRuntimeFixture(), &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"upsert_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review-1.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review-2.md"}}},
+			},
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl-1.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl-2.md")},
+			},
+			"verify": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "summary": "wave one complete", "file_paths": []interface{}{"/tmp/verify-1.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "summary": "wave two complete", "file_paths": []interface{}{"/tmp/verify-2.md"}}},
+			},
+			"evaluate_progress": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"next_node": "upsert_plan", "reason": "remaining daemon integration work", "next_focus": "plan the daemon integration wave", "file_paths": []interface{}{"/tmp/eval-1.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"next_node": "done", "reason": "task complete", "next_focus": "", "file_paths": []interface{}{"/tmp/eval-2.md"}}},
+			},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "yolo multi-wave"))
+	completed := waitForTaskSuccess(t, service.Events())
+	require.NotNil(t, completed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
+	require.NoError(t, err)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"upsert_plan":       2,
+		"review_plan":       2,
+		"implement":         2,
+		"verify":            2,
+		"evaluate_progress": 2,
+		"done":              1,
+	})
+	assert.Equal(t, []string{
+		"upsert_plan",
+		"review_plan",
+		"implement",
+		"verify",
+		"evaluate_progress",
+		"upsert_plan",
+		"review_plan",
+		"implement",
+		"verify",
+		"evaluate_progress",
+		"done",
+	}, nodeRunNames(runs))
+}
+
 func TestServiceHumanNodeSubmissionCreatesAuditArtifactAndFeedsNextPrompt(t *testing.T) {
 	executor := &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
@@ -1312,6 +1428,34 @@ func waitForEventWhere(t *testing.T, events <-chan RunEvent, timeout time.Durati
 	}
 }
 
+func waitForTaskSuccess(t *testing.T, events <-chan RunEvent) RunEvent {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("timed out waiting for task success")
+		case event := <-events:
+			switch event.Type {
+			case EventTaskCompleted:
+				return event
+			case EventTaskFailed:
+				message := ""
+				if event.Error != nil {
+					message = event.Error.Message
+				}
+				t.Fatalf("task failed instead of completing: %s", message)
+			case EventCommandError:
+				message := ""
+				if event.Error != nil {
+					message = event.Error.Message
+				}
+				t.Fatalf("command error instead of task completion: %s", message)
+			}
+		}
+	}
+}
+
 func assertNoEventTypeWithin(t *testing.T, events <-chan RunEvent, want EventType, duration time.Duration) {
 	t.Helper()
 	deadline := time.After(duration)
@@ -1649,6 +1793,104 @@ func artifactAgentNode() taskconfig.NodeDefinition {
 			},
 		},
 	}
+}
+
+func artifactAgentNodeWithPrompt(prompt string) taskconfig.NodeDefinition {
+	def := artifactAgentNode()
+	def.SystemPrompt = prompt
+	return def
+}
+
+func yoloRuntimeFixture() *taskconfig.Config {
+	deny := false
+	return &taskconfig.Config{
+		Version: 1,
+		Clarification: taskconfig.ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: taskconfig.Topology{
+			MaxIterations: 100,
+			Entry:         "upsert_plan",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "upsert_plan"},
+				{Name: "review_plan"},
+				{Name: "implement"},
+				{Name: "verify"},
+				{Name: "evaluate_progress"},
+				{Name: "done"},
+			},
+			Edges: []taskconfig.Edge{
+				{From: "upsert_plan", To: "review_plan"},
+				{From: "review_plan", To: "upsert_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
+				{From: "review_plan", To: "implement", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: true}},
+				{From: "implement", To: "verify"},
+				{From: "verify", To: "implement", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
+				{From: "verify", To: "evaluate_progress", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: true}},
+				{From: "evaluate_progress", To: "upsert_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "next_node", Equals: "upsert_plan"}},
+				{From: "evaluate_progress", To: "done", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "next_node", Equals: "done"}},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"upsert_plan": artifactAgentNodeWithPrompt("./prompts/upsert_plan.md"),
+			"review_plan": {
+				Type:         taskconfig.NodeTypeAgent,
+				SystemPrompt: "./prompts/review_plan.md",
+				ResultSchema: taskconfig.JSONSchema{
+					Type:                 "object",
+					AdditionalProperties: &deny,
+					Required:             []string{"passed", "file_paths"},
+					Properties: map[string]*taskconfig.JSONSchema{
+						"passed":     {Type: "boolean"},
+						"file_paths": {Type: "array", MinItems: intPtr(1), Items: &taskconfig.JSONSchema{Type: "string"}},
+					},
+				},
+			},
+			"implement": artifactAgentNodeWithPrompt("./prompts/implement.md"),
+			"verify": {
+				Type:         taskconfig.NodeTypeAgent,
+				SystemPrompt: "./prompts/verify.md",
+				ResultSchema: taskconfig.JSONSchema{
+					Type:                 "object",
+					AdditionalProperties: &deny,
+					Required:             []string{"passed", "summary", "file_paths"},
+					Properties: map[string]*taskconfig.JSONSchema{
+						"passed":     {Type: "boolean"},
+						"summary":    {Type: "string"},
+						"file_paths": {Type: "array", MinItems: intPtr(1), Items: &taskconfig.JSONSchema{Type: "string"}},
+					},
+				},
+			},
+			"evaluate_progress": {
+				Type:         taskconfig.NodeTypeAgent,
+				SystemPrompt: "./prompts/evaluate_progress.md",
+				ResultSchema: taskconfig.JSONSchema{
+					Type:                 "object",
+					AdditionalProperties: &deny,
+					Required:             []string{"next_node", "reason", "next_focus", "file_paths"},
+					Properties: map[string]*taskconfig.JSONSchema{
+						"next_node": {
+							Type: "string",
+							Enum: []interface{}{"done", "upsert_plan"},
+						},
+						"reason":     {Type: "string"},
+						"next_focus": {Type: "string"},
+						"file_paths": {Type: "array", MinItems: intPtr(1), Items: &taskconfig.JSONSchema{Type: "string"}},
+					},
+				},
+			},
+			"done": {Type: taskconfig.NodeTypeTerminal},
+		},
+	}
+}
+
+func nodeRunNames(runs []taskdomain.NodeRun) []string {
+	names := make([]string, 0, len(runs))
+	for _, run := range runs {
+		names = append(names, run.NodeName)
+	}
+	return names
 }
 
 func intPtr(value int) *int {

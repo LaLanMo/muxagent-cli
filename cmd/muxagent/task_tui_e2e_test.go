@@ -41,6 +41,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 	require.Greater(t, len(longDescription), 512)
 	defaultPromptFiles := []string{"implement.md", "review_plan.md", "upsert_plan.md", "verify.md"}
 	defaultSchemaFiles := []string{"implement.json", "review_plan.json", "upsert_plan.json", "verify.json"}
+	yoloPromptFiles := []string{"yolo_evaluate_progress.md", "yolo_implement.md", "yolo_review_plan.md", "yolo_upsert_plan.md", "yolo_verify.md"}
+	yoloSchemaFiles := []string{"evaluate_progress.json", "implement.json", "review_plan.json", "upsert_plan.json", "verify.json"}
 
 	tests := []struct {
 		name                string
@@ -160,6 +162,46 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				})
 				for _, run := range runs {
 					assert.NotEqual(t, "approve_plan", run.NodeName)
+				}
+			},
+		},
+		{
+			name:        "yolo replans after verified wave and then completes",
+			flow:        "yolo-replan-once",
+			description: "Finish the task over multiple autonomous waves",
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "plan-only")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "autonomous")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "yolo")
+				session.submitNewTask(t, "Finish the task over multiple autonomous waves")
+				session.waitForAll(t, 10*time.Second, "Task completed successfully")
+			},
+			expectedArtifacts:   []string{"01-upsert_plan", "02-review_plan", "03-implement", "04-verify", "05-evaluate_progress", "06-upsert_plan", "07-review_plan", "08-implement", "09-verify", "10-evaluate_progress"},
+			expectedPrompts:     yoloPromptFiles,
+			expectedSchemas:     yoloSchemaFiles,
+			requirePromptHeader: true,
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 11)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"upsert_plan":       2,
+					"review_plan":       2,
+					"implement":         2,
+					"verify":            2,
+					"evaluate_progress": 2,
+					"done":              1,
+				})
+				for _, run := range runs {
+					assert.NotEqual(t, "approve_plan", run.NodeName)
+					if run.NodeName == "evaluate_progress" {
+						assert.NotEmpty(t, run.Result["next_node"])
+					}
 				}
 			},
 		},

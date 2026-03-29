@@ -1,0 +1,139 @@
+version: 1
+description: "Hands-off multi-wave mode. It keeps planning, building, and verifying without approval pauses until the task is done or needs another wave."
+runtime: codex
+
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+
+topology:
+  max_iterations: 100
+  entry: upsert_plan
+  nodes:
+    - name: upsert_plan
+    - name: review_plan
+    - name: implement
+    - name: verify
+    - name: evaluate_progress
+    - name: done
+  edges:
+    - from: upsert_plan
+      to: review_plan
+    - from: review_plan
+      to: upsert_plan
+      when:
+        field: passed
+        equals: false
+    - from: review_plan
+      to: implement
+      when:
+        field: passed
+        equals: true
+    - from: implement
+      to: verify
+    - from: verify
+      to: implement
+      when:
+        field: passed
+        equals: false
+    - from: verify
+      to: evaluate_progress
+      when:
+        field: passed
+        equals: true
+    - from: evaluate_progress
+      to: upsert_plan
+      when:
+        field: next_node
+        equals: upsert_plan
+    - from: evaluate_progress
+      to: done
+      when:
+        field: next_node
+        equals: done
+
+node_definitions:
+  upsert_plan:
+    system_prompt: ./prompts/yolo_upsert_plan.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - file_paths
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+  review_plan:
+    system_prompt: ./prompts/yolo_review_plan.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - passed
+        - file_paths
+      properties:
+        passed:
+          type: boolean
+        file_paths:
+          type: array
+          items:
+            type: string
+  implement:
+    system_prompt: ./prompts/yolo_implement.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - file_paths
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+  verify:
+    system_prompt: ./prompts/yolo_verify.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - passed
+        - summary
+        - file_paths
+      properties:
+        passed:
+          type: boolean
+        summary:
+          type: string
+        file_paths:
+          type: array
+          items:
+            type: string
+  evaluate_progress:
+    system_prompt: ./prompts/yolo_evaluate_progress.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - next_node
+        - reason
+        - next_focus
+        - file_paths
+      properties:
+        next_node:
+          type: string
+          enum:
+            - done
+            - upsert_plan
+        reason:
+          type: string
+        next_focus:
+          type: string
+        file_paths:
+          type: array
+          items:
+            type: string
+  done:
+    type: terminal

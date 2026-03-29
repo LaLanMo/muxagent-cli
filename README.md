@@ -67,7 +67,7 @@ starting the daemon.
 ## Built-in Workflows
 
 A task config defines a workflow graph — the sequence of nodes and the edges
-between them that an AI agent follows. MuxAgent ships three built-in configs:
+between them that an AI agent follows. MuxAgent ships four built-in configs:
 
 **`default`** — When you want human sign-off before code changes land.
 
@@ -99,6 +99,18 @@ between them that an AI agent follows. MuxAgent ships three built-in configs:
      (review rejected)
 ```
 
+**`yolo`** — Fully autonomous multi-wave mode. No approval, no clarification.
+
+```
+       ┌──────────────────────────────────────────────────┐
+       │                                    (next wave)   │
+       ▼                                                  │
+      plan ──▶ review ──▶ implement ──▶ verify ──▶ evaluate ──▶ done
+       ▲         │           ▲              │
+       └─────────┘           └──────────────┘
+    (review rejected)         (verify failed)
+```
+
 Built-in configs are different from runtime selection:
 
 - a built-in config chooses the workflow graph, bundled prompts, and product intent
@@ -110,7 +122,7 @@ Built-in configs are stored as task config bundles under `~/.muxagent/taskconfig
 You can clone them and modify the YAML to change the workflow graph, prompts,
 runtime, iteration limits, or clarification settings.
 
-If you already have a user config named `plan-only` or `autonomous`, MuxAgent
+If you already have a user config named `plan-only`, `autonomous`, or `yolo`, MuxAgent
 preserves it and installs the built-in config under a fallback alias such as
 `builtin-plan-only`. Existing bundle files are never overwritten.
 

@@ -13,6 +13,7 @@ const (
 	BuiltinIDDefault    = "default"
 	BuiltinIDPlanOnly   = "plan-only"
 	BuiltinIDAutonomous = "autonomous"
+	BuiltinIDYolo       = "yolo"
 )
 
 type BuiltinDef struct {
@@ -24,6 +25,7 @@ var builtinDefs = []BuiltinDef{
 	{ID: BuiltinIDDefault, DisplayOrder: 10},
 	{ID: BuiltinIDPlanOnly, DisplayOrder: 20},
 	{ID: BuiltinIDAutonomous, DisplayOrder: 30},
+	{ID: BuiltinIDYolo, DisplayOrder: 40},
 }
 
 func BuiltinDefs() []BuiltinDef {

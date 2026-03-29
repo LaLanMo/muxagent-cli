@@ -109,7 +109,22 @@ JSON
     elif [ "$flow" = "verify-fail-once" ] && [ "$count" -eq 1 ]; then
       passed=false
     fi
-    write_result "verify-${count}.md" "\"passed\":${passed}"
+    if [ "$flow" = "yolo-replan-once" ]; then
+      write_result "verify-${count}.md" "\"passed\":${passed},\"summary\":\"wave ${count} complete\""
+    else
+      write_result "verify-${count}.md" "\"passed\":${passed}"
+    fi
+    ;;
+  evaluate_progress)
+    next_node="done"
+    reason="Task complete"
+    next_focus=""
+    if [ "$flow" = "yolo-replan-once" ] && [ "$count" -eq 1 ]; then
+      next_node="upsert_plan"
+      reason="A follow-up planning wave is still required"
+      next_focus="Plan the remaining work for the next wave"
+    fi
+    write_result "evaluate-${count}.md" "\"next_node\":\"${next_node}\",\"reason\":\"${reason}\",\"next_focus\":\"${next_focus}\""
     ;;
   *)
     echo "unexpected node: $node_name" >&2
