@@ -50,7 +50,7 @@ func renderCompactTaskListHeader(width int, meta versionMeta, cwd string) string
 	hero := centerHeaderLine(
 		lipgloss.JoinHorizontal(
 			lipgloss.Top,
-			tuiTheme.Header.HeroAccent.Render("MUX"),
+			tuiTheme.Header.Hero.Render("MUX"),
 			tuiTheme.Header.Hero.Render("AGENT"),
 		),
 		width,
@@ -68,7 +68,7 @@ func renderTaskListWordmark(width int) string {
 	agentRows := renderBlockGlyphRows("AGENT")
 	lines := make([]string, len(muxRows))
 	for i := range muxRows {
-		lines[i] = tuiTheme.Header.HeroAccent.Render(muxRows[i]) +
+		lines[i] = tuiTheme.Header.Hero.Render(muxRows[i]) +
 			"    " +
 			tuiTheme.Header.Hero.Render(agentRows[i])
 	}

@@ -89,6 +89,39 @@ func TestTaskListCompactHeaderShowsCwdWithoutConfigOrRuntime(t *testing.T) {
 	assert.NotContains(t, header, "runtime")
 }
 
+func TestTaskListHeaderMuxMatchesAgentColor(t *testing.T) {
+	tests := []struct {
+		name    string
+		width   int
+		want    string
+		wantNot string
+	}{
+		{
+			name:    "compact",
+			width:   60,
+			want:    tuiTheme.Header.Hero.Render("MUX"),
+			wantNot: tuiTheme.Header.HeroAccent.Render("MUX"),
+		},
+		{
+			name:    "wide",
+			width:   100,
+			want:    tuiTheme.Header.Hero.Render(renderBlockGlyphRows("MUX")[0]),
+			wantNot: tuiTheme.Header.HeroAccent.Render(renderBlockGlyphRows("MUX")[0]),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+			model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+
+			header := model.renderTaskListHeader(tt.width)
+			assert.Contains(t, header, tt.want)
+			assert.NotContains(t, header, tt.wantNot)
+		})
+	}
+}
+
 func TestTaskListScreenUsesFirstLineForMultilineDescriptions(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
