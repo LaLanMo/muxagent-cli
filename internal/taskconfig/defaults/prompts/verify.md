@@ -12,12 +12,6 @@ Workflow history (oldest first):
 Clarifications so far:
 {{CLARIFICATION_HISTORY}}
 
-Completed structured results:
-{{COMPLETED_RESULTS}}
-
-Known artifact paths:
-{{ARTIFACT_PATHS}}
-
 ---
 
 ## How to verify
