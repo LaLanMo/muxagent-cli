@@ -1,6 +1,7 @@
 package taskruntime
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -201,28 +202,36 @@ func writeInputArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []tas
 	return path, nil
 }
 
-func readClarificationInputBase(path string) (string, error) {
+func readClarificationInputBase(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
+			return nil, nil
 		}
-		return "", err
+		return nil, err
 	}
-	content := string(data)
-	if idx := strings.Index(content, clarificationHistoryMarker); idx >= 0 {
-		content = content[:idx]
+	if idx := bytes.Index(data, []byte(clarificationHistoryMarker)); idx >= 0 {
+		data = data[:idx]
 	}
-	return strings.TrimRight(content, "\n"), nil
+	return append([]byte(nil), data...), nil
 }
 
-func mergeClarificationInputMarkdown(base string, history []byte) []byte {
-	base = strings.TrimRight(base, "\n")
-	if base == "" {
-		base = "# Input"
+func mergeClarificationInputMarkdown(base []byte, history []byte) []byte {
+	out := append([]byte(nil), base...)
+	if len(out) > 0 {
+		switch {
+		case bytes.HasSuffix(out, []byte("\n\n")):
+		case bytes.HasSuffix(out, []byte("\n")):
+			out = append(out, '\n')
+		default:
+			out = append(out, '\n', '\n')
+		}
 	}
-	section := strings.TrimRight(string(history), "\n")
-	return []byte(base + "\n\n" + clarificationHistoryMarker + "\n\n" + section + "\n")
+	out = append(out, clarificationHistoryMarker...)
+	out = append(out, '\n', '\n')
+	out = append(out, bytes.TrimRight(history, "\n")...)
+	out = append(out, '\n')
+	return out
 }
 
 func renderHumanInputMarkdown(payload map[string]interface{}, submittedAt time.Time) ([]byte, error) {
@@ -243,14 +252,7 @@ func renderHumanInputMarkdown(payload map[string]interface{}, submittedAt time.T
 }
 
 func renderAgentInputMarkdown(prompt string) []byte {
-	lines := []string{
-		"# Input",
-		"",
-		"## Prompt",
-		"",
-		strings.TrimRight(prompt, "\n"),
-	}
-	return []byte(strings.Join(lines, "\n") + "\n")
+	return []byte(prompt)
 }
 
 func renderClarificationInputMarkdown(exchanges []taskdomain.ClarificationExchange) ([]byte, error) {

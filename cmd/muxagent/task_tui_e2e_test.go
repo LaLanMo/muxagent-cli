@@ -502,6 +502,63 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 	}
 }
 
+func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	fakeClaudeFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-claude.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	fakeClaudePath := filepath.Join(fakeDir, "claude")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+	copyExecutable(t, fakeClaudeFixture, fakeClaudePath)
+
+	stateDir := filepath.Join(workDir, ".fake-codex-state")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", stateDir)
+	t.Setenv("FAKE_CLAUDE_FLOW", "happy")
+	t.Setenv("FAKE_CLAUDE_STATE_DIR", filepath.Join(workDir, ".fake-claude-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Implement login")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.confirm(t)
+
+	_, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
+	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+
+	upsertRun := requireNodeRunByName(t, runs, "upsert_plan")
+	inputPath := findArtifactPathByBase(t, taskdomain.ArtifactPaths(upsertRun.Result), "input.md")
+	inputBytes, err := os.ReadFile(inputPath)
+	require.NoError(t, err)
+
+	capturedPromptPath := filepath.Join(stateDir, "01-upsert_plan.prompt.txt")
+	capturedPromptBytes, err := os.ReadFile(capturedPromptPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(capturedPromptBytes), string(inputBytes))
+
+	templatePath := filepath.Join(moduleRoot, "internal", "taskconfig", "defaults", "prompts", "upsert_plan.md")
+	assertPromptContainsLiteralTemplateLines(t, string(inputBytes), templatePath)
+	assert.Contains(t, string(inputBytes), "Output contract:")
+	assert.Contains(t, string(inputBytes), "- Return exactly one JSON object matching the provided schema.")
+	assert.Contains(t, string(inputBytes), "- When the node is complete, return {\"kind\":\"result\",\"result\":<payload matching the node result schema>,\"clarification\":null}.")
+	assert.NotContains(t, string(inputBytes), "# Input")
+	assert.NotContains(t, string(inputBytes), "## Prompt")
+	assert.NotContains(t, string(inputBytes), "{{")
+
+	session.quit(t)
+}
+
 func TestTaskTUICanCreateTasksWithDifferentConfigsInOneSession(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
@@ -1494,6 +1551,43 @@ func assertHumanAuditArtifact(t *testing.T, run taskdomain.NodeRun) {
 	}
 	sort.Strings(names)
 	assert.Equal(t, []string{"input.md", "output.json"}, names)
+}
+
+func requireNodeRunByName(t *testing.T, runs []taskdomain.NodeRun, name string) taskdomain.NodeRun {
+	t.Helper()
+	for _, run := range runs {
+		if run.NodeName == name {
+			return run
+		}
+	}
+	t.Fatalf("node run %q not found", name)
+	return taskdomain.NodeRun{}
+}
+
+func findArtifactPathByBase(t *testing.T, paths []string, base string) string {
+	t.Helper()
+	for _, path := range paths {
+		if filepath.Base(path) == base {
+			return path
+		}
+	}
+	t.Fatalf("artifact %q not found in %v", base, paths)
+	return ""
+}
+
+func assertPromptContainsLiteralTemplateLines(t *testing.T, input, templatePath string) {
+	t.Helper()
+	templateBytes, err := os.ReadFile(templatePath)
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(templateBytes), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if strings.Contains(line, "{{") {
+			continue
+		}
+		assert.Contains(t, input, line)
+	}
 }
 
 func assertArtifactDirs(t *testing.T, task taskdomain.Task, want []string) {

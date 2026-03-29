@@ -86,10 +86,6 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 	if err != nil {
 		return err
 	}
-	inputPath, err := ensureAgentInputArtifact(task, run, runs, prompt)
-	if err != nil {
-		return err
-	}
 	executionDir := task.ExecutionWorkDir()
 	if task.ExecutionDir != "" && task.ExecutionDir != task.WorkDir {
 		executionDir, err = worktree.ResolveWorktreeCWD(task.ExecutionDir, ".")
@@ -109,6 +105,10 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		Runtime:             cfg.Runtime,
 		Prompt:              prompt,
 		ResultSchema:        cfg.NodeDefinitions[run.NodeName].ResultSchema,
+	}
+	inputPath, err := ensureAgentInputArtifact(task, run, runs, taskexecutor.AppendOutputContract(req))
+	if err != nil {
+		return err
 	}
 	var progressErr error
 	result, err := s.executor.Execute(ctx, req, func(item taskexecutor.Progress) {

@@ -4,6 +4,7 @@ set -eu
 output=""
 resume_mode=0
 resume_thread=""
+prompt=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o)
@@ -16,6 +17,7 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     *)
+      prompt="$1"
       shift
       ;;
   esac
@@ -33,6 +35,7 @@ state_dir=${FAKE_CODEX_STATE_DIR:-$(dirname "$artifact_dir")/.fake-state}
 flow=${FAKE_CODEX_FLOW:-happy}
 
 mkdir -p "$state_dir"
+printf '%s' "$prompt" > "$state_dir/${run_dir}.prompt.txt"
 count_file="$state_dir/${node_name}.count"
 count=0
 if [ -f "$count_file" ]; then
