@@ -2,15 +2,16 @@
 
 ![MuxAgent Task TUI](task-tui.png)
 
-MuxAgent is a task-first TUI for AI coding agents. Define workflow graphs —
-plan, review, approve, implement, verify — and run them with Codex or Claude
-Code.
+MuxAgent is a CLI for running coding agents through graph-based workflows.
+Use graph-based workflows to plan, review, approve, implement, and verify code
+with Codex or Claude Code.
 
 ## What MuxAgent Does
 
-- **Task System** — Define multi-step workflow graphs that AI coding agents
-  execute. Three built-in configs for different risk tolerances. Supports
-  Codex and Claude Code runtimes.
+- **Task System** — Run code tasks through graph-based workflows with explicit
+  planning, review, approval, implementation, and verification steps. Three
+  ready-made configs cover different risk tolerances. Supports Codex and
+  Claude Code runtimes.
 - **Remote Control** — Monitor and control Claude Code sessions from your
   phone via a paired mobile app.
 
@@ -41,8 +42,9 @@ Official installs include everything needed to run MuxAgent with Claude Code.
 muxagent
 ```
 
-This opens the task-first TUI. Pick a task config (`default`, `autonomous`, or
-`plan-only`), describe your task, and the workflow handles the rest.
+This opens the workflow CLI. Pick a task config (`default`, `autonomous`, or
+`plan-only`), describe the task, and MuxAgent routes the agent through the
+workflow for you.
 
 ### Remote Control
 
@@ -64,10 +66,10 @@ code, waits for approval in the mobile app, and then starts the daemon.
 You can also run `muxagent auth login` manually if you want to pair before
 starting the daemon.
 
-## Built-in Workflows
+## Workflow Graphs
 
 A task config defines a workflow graph — the sequence of nodes and the edges
-between them that an AI agent follows. MuxAgent ships four built-in configs:
+between them that an AI agent follows. MuxAgent ships four ready-made configs:
 
 **`default`** — When you want human sign-off before code changes land.
 
@@ -111,14 +113,14 @@ between them that an AI agent follows. MuxAgent ships four built-in configs:
     (review rejected)         (verify failed)
 ```
 
-Built-in configs are different from runtime selection:
+Workflow configs are different from runtime selection:
 
-- a built-in config chooses the workflow graph, bundled prompts, and product intent
+- a workflow config chooses the graph, bundled prompts, and product intent
 - runtime selection chooses which coding runtime executes agent nodes, for example `codex` or `claude-code`
 
 ## Customizing Workflows
 
-Built-in configs are stored as task config bundles under `~/.muxagent/taskconfigs`.
+The included workflow configs are stored as task config bundles under `~/.muxagent/taskconfigs`.
 You can clone them and modify the YAML to change the workflow graph, prompts,
 runtime, iteration limits, or clarification settings.
 
@@ -133,7 +135,7 @@ iteration, and schema specification.
 
 **Task TUI**
 
-- `muxagent` — Launch the task-first TUI.
+- `muxagent` — Launch the interactive workflow CLI.
 
 **Daemon**
 
