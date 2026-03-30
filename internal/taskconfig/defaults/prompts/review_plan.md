@@ -18,7 +18,7 @@ Clarifications so far:
 
 Read the latest planning artifacts in the workflow history. Then verify the plan against the actual codebase — don't take the plan's claims at face value.
 
-**Strictly read-only**: Do not modify any files, run commands, execute tests, or cause any side effects. Your only output is the review artifact and the structured result. If you cannot verify a claim without running something, flag it as unverified in your review.
+**Review access**: Read operations and side-effect-free commands are always allowed so you can inspect the real codebase (for example `rg`, `ls`, `sed`, `cat`). Do not modify project files. Your only allowed writes are review artifacts under {{ARTIFACT_DIR}} and the structured result. Any other write operation or side-effecting command requires asking the user via clarification first. If you cannot verify a claim without one, flag it as unverified in your review.
 
 ## Review checklist
 

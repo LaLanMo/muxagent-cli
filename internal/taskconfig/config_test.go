@@ -256,6 +256,53 @@ func TestLoadBuiltinYoloUsesAggressiveIterationBudget(t *testing.T) {
 	}
 }
 
+func TestEmbeddedDefaultPlanningPromptsAllowReadCommands(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		contains []string
+		excludes []string
+	}{
+		{
+			name: "draft_plan",
+			path: "defaults/prompts/draft_plan.md",
+			contains: []string{
+				"Read operations and side-effect-free commands are always allowed",
+				"Any other write operation or side-effecting command requires asking the user via clarification first.",
+			},
+			excludes: []string{
+				"Do not modify project files, run commands, execute tests, or cause any side effects.",
+			},
+		},
+		{
+			name: "review_plan",
+			path: "defaults/prompts/review_plan.md",
+			contains: []string{
+				"Read operations and side-effect-free commands are always allowed",
+				"Any other write operation or side-effecting command requires asking the user via clarification first.",
+			},
+			excludes: []string{
+				"Do not modify any files, run commands, execute tests, or cause any side effects.",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := fs.ReadFile(defaultsFS, tt.path)
+			require.NoError(t, err)
+			text := string(data)
+
+			for _, want := range tt.contains {
+				assert.Truef(t, strings.Contains(text, want), "expected %q in %s", want, tt.path)
+			}
+			for _, unwanted := range tt.excludes {
+				assert.Falsef(t, strings.Contains(text, unwanted), "did not expect %q in %s", unwanted, tt.path)
+			}
+		})
+	}
+}
+
 func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 	tests := []struct {
 		name     string
