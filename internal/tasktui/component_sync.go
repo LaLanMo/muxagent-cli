@@ -114,9 +114,12 @@ func (m Model) manageTaskConfigsListActionItem() taskListItem {
 
 func (m *Model) syncArtifactPane() {
 	selectedPath := selectedArtifactPath(m.artifactItems, m.artifactIndex)
+	previousPreviewPath := m.artifactPreviewPath
 	m.artifactItems = buildArtifactItems(m.workDir, m.current, m.currentInput)
 	if len(m.artifactItems) == 0 {
 		m.artifactIndex = 0
+		m.artifactErrorText = ""
+		m.artifactPreviewPath = ""
 		m.artifactPreview.SetContent("")
 		m.artifactPreview.GotoTop()
 		return
@@ -125,11 +128,17 @@ func (m *Model) syncArtifactPane() {
 		for i, item := range m.artifactItems {
 			if item.Path == selectedPath {
 				m.artifactIndex = i
+				if item.Path != previousPreviewPath {
+					m.artifactErrorText = ""
+				}
 				return
 			}
 		}
 	}
 	m.artifactIndex = defaultArtifactIndex(m.artifactItems, m.screen, m.currentInput)
+	if selectedArtifactPath(m.artifactItems, m.artifactIndex) != previousPreviewPath {
+		m.artifactErrorText = ""
+	}
 }
 
 func (m *Model) syncInputWidths() {

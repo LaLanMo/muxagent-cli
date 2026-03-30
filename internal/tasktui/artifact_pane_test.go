@@ -322,6 +322,160 @@ func TestArtifactTabCyclesViaTab(t *testing.T) {
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 }
 
+func TestArtifactsTabCyclesOnlyBetweenArtifactPanesAcrossDetailScreens(t *testing.T) {
+	tests := []struct {
+		name            string
+		screen          Screen
+		status          taskdomain.TaskStatus
+		inputKind       taskruntime.InputKind
+		wantFilesFooter string
+		wantPrevFooter  string
+	}{
+		{
+			name:            "running",
+			screen:          ScreenRunning,
+			status:          taskdomain.TaskStatusRunning,
+			wantFilesFooter: "↑↓ files  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPrevFooter:  "↑↓ scroll  Esc back  Tab files  Shift+Tab timeline",
+		},
+		{
+			name:            "complete",
+			screen:          ScreenComplete,
+			status:          taskdomain.TaskStatusDone,
+			wantFilesFooter: "↑↓ files  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPrevFooter:  "↑↓ scroll  Esc back  Tab files  Shift+Tab timeline",
+		},
+		{
+			name:            "approval",
+			screen:          ScreenApproval,
+			status:          taskdomain.TaskStatusAwaitingUser,
+			inputKind:       taskruntime.InputKindHumanNode,
+			wantFilesFooter: "↑↓ files  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPrevFooter:  "↑↓ scroll  Esc back  Tab files  Shift+Tab timeline",
+		},
+		{
+			name:            "clarification",
+			screen:          ScreenClarification,
+			status:          taskdomain.TaskStatusAwaitingUser,
+			inputKind:       taskruntime.InputKindClarification,
+			wantFilesFooter: "↑↓ files  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPrevFooter:  "↑↓ scroll  Esc back  Tab files  Shift+Tab timeline",
+		},
+		{
+			name:            "failed",
+			screen:          ScreenFailed,
+			status:          taskdomain.TaskStatusFailed,
+			wantFilesFooter: "↑↓ files  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPrevFooter:  "↑↓ scroll  Esc back  Tab files  Shift+Tab timeline",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := artifactTabTestModel(t, tt.screen, tt.status, tt.inputKind)
+			assert.Equal(t, []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}, model.availableFocusRegions())
+
+			footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+			assert.Contains(t, footer, tt.wantFilesFooter)
+			if tt.screen == ScreenApproval {
+				assert.NotContains(t, footer, "Enter confirm")
+			}
+
+			next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			model = next.(Model)
+			assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
+
+			footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+			assert.Contains(t, footer, tt.wantPrevFooter)
+			if tt.screen == ScreenApproval {
+				assert.NotContains(t, footer, "Enter confirm")
+			}
+
+			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			model = next.(Model)
+			assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+
+			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+			model = next.(Model)
+			assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
+		})
+	}
+}
+
+func TestApprovalArtifactsPaneIgnoresEnterConfirm(t *testing.T) {
+	model := artifactTabTestModel(t, ScreenApproval, taskdomain.TaskStatusAwaitingUser, taskruntime.InputKindHumanNode)
+	model.approval.choice = 1
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+
+	assert.Nil(t, cmd)
+	assert.False(t, model.submittingInput)
+	assert.Equal(t, 1, model.approval.choice)
+	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
+}
+
+func TestArtifactCopyCopiesPathAndRawContents(t *testing.T) {
+	capturePath := installFakeClipboard(t)
+	model := artifactTabTestModel(t, ScreenComplete, taskdomain.TaskStatusDone, "")
+	wantPath := selectedArtifactPath(model.artifactItems, model.artifactIndex)
+	wantContents := "# Summary\n\n- Ship it\n"
+
+	next, _ := model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
+	model = next.(Model)
+	gotPath, err := os.ReadFile(capturePath)
+	require.NoError(t, err)
+	assert.Equal(t, wantPath, string(gotPath))
+	assert.Empty(t, model.artifactErrorText)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = next.(Model)
+	next, _ = model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
+	model = next.(Model)
+	gotContents, err := os.ReadFile(capturePath)
+	require.NoError(t, err)
+	assert.Equal(t, wantContents, string(gotContents))
+	assert.Empty(t, model.artifactErrorText)
+}
+
+func TestArtifactCopyFailureBannerClearsOnSelectionChange(t *testing.T) {
+	setTaskTUIRuntimePath(t)
+
+	tempDir := t.TempDir()
+	firstPath := filepath.Join(tempDir, "first.md")
+	secondPath := filepath.Join(tempDir, "second.md")
+	require.NoError(t, os.WriteFile(firstPath, []byte("# First\n"), 0o644))
+	require.NoError(t, os.WriteFile(secondPath, []byte("# Second\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Copy artifacts", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusDone,
+		ArtifactPaths: []string{firstPath, secondPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.screen = ScreenComplete
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+
+	next, _ = model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
+	model = next.(Model)
+	assert.Contains(t, model.artifactErrorText, "Unable to copy artifact path")
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Unable to copy artifact path")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	model = next.(Model)
+	assert.Empty(t, model.artifactErrorText)
+}
+
 func TestArtifactPaneFocusReusesSharedDividerWithoutShiftingPreview(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "summary.md")
@@ -537,4 +691,46 @@ func TestArtifactMarkdownThemeUsesPrimaryReaderEmphasis(t *testing.T) {
 	require.NotNil(t, cfg.CodeBlock.Chroma)
 	require.NotNil(t, cfg.CodeBlock.Chroma.Comment.Color)
 	assert.Equal(t, "#AAB8C7", *cfg.CodeBlock.Chroma.Comment.Color)
+}
+
+func artifactTabTestModel(t *testing.T, screen Screen, status taskdomain.TaskStatus, inputKind taskruntime.InputKind) Model {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "summary.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Summary\n\n- Ship it\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        status,
+		ArtifactPaths: []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	if screen == ScreenFailed {
+		model.current.NodeRuns[0].Status = taskdomain.NodeRunFailed
+	}
+	if inputKind != "" {
+		model.currentInput = &taskruntime.InputRequest{
+			Kind:          inputKind,
+			TaskID:        "task-1",
+			NodeRunID:     "run-1",
+			NodeName:      "implement",
+			ArtifactPaths: []string{artifactPath},
+			Questions: []taskdomain.ClarificationQuestion{{
+				Question:     "Which path should we take?",
+				WhyItMatters: "Determines the next implementation step.",
+				Options:      []taskdomain.ClarificationOption{{Label: "A", Description: "First approach"}},
+			}},
+		}
+	}
+	model.screen = screen
+	model.activeDetailTab = DetailTabArtifacts
+	model.focusRegion = FocusRegionArtifactFiles
+	model.syncComponents()
+	return model
 }

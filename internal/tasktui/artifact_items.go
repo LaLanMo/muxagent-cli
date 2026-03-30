@@ -148,6 +148,18 @@ func selectedArtifactPath(items []artifactItem, index int) string {
 	return items[index].Path
 }
 
+func selectedArtifactContents(items []artifactItem, index int) (string, error) {
+	path := selectedArtifactPath(items, index)
+	if path == "" {
+		return "", fmt.Errorf("no artifact selected")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func artifactProvenance(current *taskdomain.TaskView) map[string]string {
 	if current == nil {
 		return nil

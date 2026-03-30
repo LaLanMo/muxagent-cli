@@ -3,6 +3,7 @@ package tasktui
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -152,6 +153,28 @@ func setTaskTUIRuntimePath(t *testing.T, commands ...string) {
 		require.NoError(t, os.WriteFile(path, contents, 0o755))
 	}
 	t.Setenv("PATH", dir)
+}
+
+func installFakeClipboard(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	capturePath := filepath.Join(dir, "clipboard.txt")
+	script := []byte("#!/bin/sh\ncat > \"$TASKTUI_TEST_CLIPBOARD\"\n")
+	command := "pbcopy"
+	switch runtime.GOOS {
+	case "linux":
+		command = "xclip"
+	case "windows":
+		command = "clip.exe"
+	}
+	path := filepath.Join(dir, command)
+	require.NoError(t, os.WriteFile(path, script, 0o755))
+	catPath, err := exec.LookPath("cat")
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(catPath, filepath.Join(dir, "cat")))
+	t.Setenv("TASKTUI_TEST_CLIPBOARD", capturePath)
+	t.Setenv("PATH", dir)
+	return capturePath
 }
 
 type fakeService struct {

@@ -1,6 +1,12 @@
 package tasktui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	"fmt"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/LaLanMo/muxagent-cli/internal/auth"
+)
 
 func (m *Model) handleFocusNavigationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if !keyMatches(msg, m.keys.nextFocus) {
@@ -83,6 +89,8 @@ func (m *Model) handleArtifactPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		case keyMatches(msg, m.keys.down):
 			m.artifactIndex = moveSelection(m.artifactIndex, 1, len(m.artifactItems))
 			return nil, true
+		case keyMatches(msg, m.keys.copy):
+			return nil, m.copySelectedArtifactPath()
 		}
 	case FocusRegionArtifactPreview:
 		if !m.artifactTabActive() {
@@ -93,7 +101,36 @@ func (m *Model) handleArtifactPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			nextPreview, cmd := m.artifactPreview.Update(msg)
 			m.artifactPreview = nextPreview
 			return cmd, true
+		case keyMatches(msg, m.keys.copy):
+			return nil, m.copySelectedArtifactContents()
 		}
 	}
 	return nil, false
+}
+
+func (m *Model) copySelectedArtifactPath() bool {
+	path := selectedArtifactPath(m.artifactItems, m.artifactIndex)
+	if path == "" {
+		m.artifactErrorText = "No artifact selected to copy."
+		return true
+	}
+	return m.copyArtifactText(path, "copy artifact path")
+}
+
+func (m *Model) copySelectedArtifactContents() bool {
+	contents, err := selectedArtifactContents(m.artifactItems, m.artifactIndex)
+	if err != nil {
+		m.artifactErrorText = fmt.Sprintf("Unable to copy artifact contents: %v", err)
+		return true
+	}
+	return m.copyArtifactText(contents, "copy artifact contents")
+}
+
+func (m *Model) copyArtifactText(text, action string) bool {
+	if err := auth.CopyToClipboard(text); err != nil {
+		m.artifactErrorText = fmt.Sprintf("Unable to %s: %v", action, err)
+		return true
+	}
+	m.artifactErrorText = ""
+	return true
 }

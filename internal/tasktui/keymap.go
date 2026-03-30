@@ -9,6 +9,7 @@ type appKeyMap struct {
 	confirm         key.Binding
 	up              key.Binding
 	down            key.Binding
+	copy            key.Binding
 	nextFocus       key.Binding
 	toggleDetailTab key.Binding
 	toggleWorktree  key.Binding
@@ -26,6 +27,7 @@ func newAppKeyMap() appKeyMap {
 		confirm:         key.NewBinding(key.WithKeys("enter")),
 		up:              key.NewBinding(key.WithKeys("up")),
 		down:            key.NewBinding(key.WithKeys("down")),
+		copy:            key.NewBinding(key.WithKeys("c")),
 		nextFocus:       key.NewBinding(key.WithKeys("tab")),
 		toggleDetailTab: key.NewBinding(key.WithKeys("shift+tab")),
 		toggleWorktree:  key.NewBinding(key.WithKeys("ctrl+t")),

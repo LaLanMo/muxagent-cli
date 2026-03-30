@@ -79,6 +79,7 @@ type Model struct {
 	artifactItems       []artifactItem
 	artifactIndex       int
 	artifactPreviewPath string
+	artifactErrorText   string
 	autoScrollDetail    bool
 	errorText           string
 	pendingRuntimeCmd   *pendingRuntimeCommand
@@ -125,16 +126,16 @@ func NewModelWithCatalog(service RuntimeService, workDir string, configCatalog *
 func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.Catalog, version string) Model {
 	catalog := configCatalogOrDefault(configCatalog)
 	model := Model{
-		service:               service,
-		workDir:               workDir,
-		configCatalog:         catalog,
-		selectedConfigAlias:   catalog.DefaultAlias,
-		version:               version,
-		screen:                ScreenTaskList,
-		returnScreen:          ScreenTaskList,
-		keys:                  newAppKeyMap(),
-		taskList:              newTaskListModel(),
-		configList:            newTaskConfigListModel(),
+		service:             service,
+		workDir:             workDir,
+		configCatalog:       catalog,
+		selectedConfigAlias: catalog.DefaultAlias,
+		version:             version,
+		screen:              ScreenTaskList,
+		returnScreen:        ScreenTaskList,
+		keys:                newAppKeyMap(),
+		taskList:            newTaskListModel(),
+		configList:          newTaskConfigListModel(),
 		editor: newEditorController(EditorSpec{
 			Placeholder: "Describe your task...",
 			Rows:        6,

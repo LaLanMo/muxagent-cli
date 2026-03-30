@@ -119,14 +119,18 @@ func (m Model) renderArtifactPreviewColumn(width, height int) string {
 	}
 	header := m.renderArtifactPaneTitle(title, m.focusRegion == FocusRegionArtifactPreview)
 
-	contentHeight := max(1, height-1)
 	innerWidth := max(10, width-2)
-	bodyContent := lipgloss.Place(innerWidth, contentHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
-
-	content := lipgloss.JoinVertical(lipgloss.Left, header, bodyContent)
+	lines := []string{header}
+	bodyHeight := max(1, height-1)
+	if strings.TrimSpace(m.artifactErrorText) != "" {
+		lines = append(lines, fitLine(tuiTheme.Status.Failed.Render("× "+m.artifactErrorText), innerWidth))
+		bodyHeight = max(1, bodyHeight-1)
+	}
+	bodyContent := lipgloss.Place(innerWidth, bodyHeight, lipgloss.Left, lipgloss.Top, m.artifactPreview.View())
+	lines = append(lines, bodyContent)
 
 	style := lipgloss.NewStyle().Width(width).Height(height).PaddingLeft(1)
-	return style.Render(content)
+	return style.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func artifactVisibleCapacity(total int) int {

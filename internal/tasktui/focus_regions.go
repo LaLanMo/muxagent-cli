@@ -38,6 +38,9 @@ func (m Model) artifactTabActive() bool {
 }
 
 func (m Model) availableFocusRegions() []FocusRegion {
+	if m.artifactTabActive() {
+		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}
+	}
 	switch m.screen {
 	case ScreenTaskConfigs:
 		if m.taskConfigs.form != nil {
@@ -51,35 +54,20 @@ func (m Model) availableFocusRegions() []FocusRegion {
 		if m.composerRegionVisible() {
 			regions = append(regions, FocusRegionComposer)
 		}
-		if m.artifactTabActive() {
-			regions = append(regions, FocusRegionArtifactFiles, FocusRegionArtifactPreview)
-		} else {
-			regions = append(regions, FocusRegionDetail)
-		}
+		regions = append(regions, FocusRegionDetail)
 		return regions
 	case ScreenClarification:
 		regions := []FocusRegion{FocusRegionChoices, FocusRegionComposer, FocusRegionActionPanel}
-		if m.artifactTabActive() {
-			regions = append(regions, FocusRegionArtifactFiles, FocusRegionArtifactPreview)
-		} else {
-			regions = append(regions, FocusRegionDetail)
-		}
+		regions = append(regions, FocusRegionDetail)
 		return regions
 	case ScreenFailed:
 		regions := make([]FocusRegion, 0, 4)
 		if len(m.availableFailureActions()) > 0 {
 			regions = append(regions, FocusRegionActionPanel)
 		}
-		if m.artifactTabActive() {
-			regions = append(regions, FocusRegionArtifactFiles, FocusRegionArtifactPreview)
-		} else {
-			regions = append(regions, FocusRegionDetail)
-		}
+		regions = append(regions, FocusRegionDetail)
 		return regions
 	case ScreenRunning, ScreenComplete:
-		if m.artifactTabActive() {
-			return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}
-		}
 		return []FocusRegion{FocusRegionDetail}
 	default:
 		return nil

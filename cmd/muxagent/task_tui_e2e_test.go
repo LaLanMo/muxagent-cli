@@ -906,6 +906,49 @@ func TestTaskTUISmallTerminalArtifactTabSwitching(t *testing.T) {
 	session.quit(t)
 }
 
+func TestTaskTUIApprovalArtifactsFooterAndEnterGuard(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	clipboardPath := setupArtifactTUIRuntime(t, moduleRoot, workDir, "happy", true)
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 120, 32)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Approval artifacts")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab artifacts")
+
+	waitForNodeRunCounts(t, workDir, map[string]int{"draft_plan": 1, "review_plan": 1, "approve_plan": 1})
+	_, _, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusAwaitingUser)
+
+	session.resetOutput()
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Tab artifacts", "Files", "Preview ·")
+
+	before := session.markOutput()
+	session.send(t, "\r")
+	_, changed := session.waitForOutputChangeWithin(t, 750*time.Millisecond, before)
+	assert.False(t, changed)
+	assert.NotContains(t, session.output(), "Task completed successfully")
+
+	session.send(t, "c")
+	copiedPath := waitForClipboardContents(t, clipboardPath)
+	assert.Contains(t, view.ArtifactPaths, copiedPath)
+
+	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Tab files", "Shift+Tab timeline")
+	require.NoError(t, os.Remove(clipboardPath))
+	session.send(t, "c")
+	copiedContents := waitForClipboardContents(t, clipboardPath)
+	wantContents, err := os.ReadFile(copiedPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(wantContents), copiedContents)
+
+	session.quit(t)
+}
+
 func TestTaskTUIWideTerminalCompletedArtifactsTabSwitch(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
@@ -954,6 +997,44 @@ func TestTaskTUIWideTerminalCompletedArtifactsTabSwitch(t *testing.T) {
 	session.resetOutput()
 	session.sendBacktab(t)
 	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·")
+
+	session.quit(t)
+}
+
+func TestTaskTUICompletedArtifactsCopyPathAndContents(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	clipboardPath := setupArtifactTUIRuntime(t, moduleRoot, workDir, "happy", true)
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 149, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Completed artifacts copy")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.confirm(t)
+	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Shift+Tab artifacts")
+
+	_, _, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
+
+	session.resetOutput()
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Tab artifacts", "Files", "Preview ·")
+
+	session.send(t, "c")
+	copiedPath := waitForClipboardContents(t, clipboardPath)
+	assert.Contains(t, view.ArtifactPaths, copiedPath)
+
+	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Tab files", "Shift+Tab timeline")
+	require.NoError(t, os.Remove(clipboardPath))
+	session.send(t, "c")
+	copiedContents := waitForClipboardContents(t, clipboardPath)
+	wantContents, err := os.ReadFile(copiedPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(wantContents), copiedContents)
 
 	session.quit(t)
 }
@@ -1057,6 +1138,29 @@ func TestTaskTUIClarificationWithArtifactsTabSwitchReachable(t *testing.T) {
 	before = session.markOutput()
 	session.resize(t, 149, 39)
 	session.waitForFreshAll(t, 5*time.Second, before, "Shift+Tab artifacts", "Question 1/1")
+
+	session.quit(t)
+}
+
+func TestTaskTUIArtifactsCopyFailureBanner(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	_ = setupArtifactTUIRuntime(t, moduleRoot, workDir, "happy", false)
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 120, 32)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Artifact copy failure")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab artifacts")
+
+	session.resetOutput()
+	session.sendBacktab(t)
+	session.waitForAll(t, 5*time.Second, "Tab artifacts", "Shift+Tab timeline")
+	session.sendAndWaitForAll(t, "c", 5*time.Second, "Unable to copy artifact path")
 
 	session.quit(t)
 }
@@ -1728,6 +1832,52 @@ func copyExecutable(t *testing.T, src, dst string) {
 	require.NoError(t, os.WriteFile(dst, data, 0o755))
 }
 
+func setupArtifactTUIRuntime(t *testing.T, moduleRoot, workDir, flow string, withClipboard bool) string {
+	t.Helper()
+
+	fakeDir := t.TempDir()
+	copyExecutable(t, filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh"), filepath.Join(fakeDir, "codex"))
+	linkRuntimeCommands(t, fakeDir, "basename", "cat", "dirname", "mkdir", "sleep")
+
+	clipboardPath := ""
+	if withClipboard {
+		clipboardPath = filepath.Join(fakeDir, "clipboard.txt")
+		writeFakeClipboardCommand(t, fakeDir, clipboardPath)
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("FAKE_CODEX_FLOW", flow)
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+	return clipboardPath
+}
+
+func linkRuntimeCommands(t *testing.T, dir string, commands ...string) {
+	t.Helper()
+	for _, command := range commands {
+		path, err := exec.LookPath(command)
+		require.NoError(t, err)
+		require.NoError(t, os.Symlink(path, filepath.Join(dir, command)))
+	}
+}
+
+func writeFakeClipboardCommand(t *testing.T, dir, capturePath string) {
+	t.Helper()
+
+	name := "pbcopy"
+	switch runtime.GOOS {
+	case "linux":
+		name = "xclip"
+	case "windows":
+		t.Skip("clipboard PTY helper is not supported on windows")
+	}
+
+	script := "#!/bin/sh\ncat > \"$MUXAGENT_TEST_CLIPBOARD\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755))
+	t.Setenv("MUXAGENT_TEST_CLIPBOARD", capturePath)
+}
+
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -1756,6 +1906,22 @@ func waitForPersistedTask(t *testing.T, workDir string, want taskdomain.TaskStat
 	require.NoError(t, err)
 	require.Equalf(t, want, view.Status, "final runs: %v", summarizeRuns(runs))
 	return task, runs, view
+}
+
+func waitForClipboardContents(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			return string(data)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	return string(data)
 }
 
 func waitForNodeRunCounts(t *testing.T, workDir string, want map[string]int) {

@@ -10,6 +10,11 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.submittingInput {
 		return m, nil
 	}
+	if m.focusRegion == FocusRegionArtifactFiles || m.focusRegion == FocusRegionArtifactPreview {
+		if keyMatches(msg, m.keys.confirm) {
+			return m, nil
+		}
+	}
 	if m.focusRegion == FocusRegionComposer {
 		switch {
 		case keyMatches(msg, m.keys.back):
@@ -53,5 +58,8 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderApprovalFooter(surface surfaceRect) string {
+	if m.focusRegion == FocusRegionArtifactFiles || m.focusRegion == FocusRegionArtifactPreview {
+		return renderFooterHintBar(surface.Width, m.detailHint("Esc back"))
+	}
 	return renderFooterHintBar(surface.Width, m.detailHint(joinHintParts("↑↓ select", "Enter confirm", "Esc back")))
 }
