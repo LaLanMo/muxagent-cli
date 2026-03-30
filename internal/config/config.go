@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,6 +51,23 @@ func Default() Config {
 			RuntimeCodex: {},
 		},
 	}
+}
+
+func DetectPreferredRuntime(lookPath func(string) (string, error)) (RuntimeID, bool) {
+	if lookPath != nil {
+		if _, err := lookPath("codex"); err == nil {
+			return RuntimeCodex, true
+		}
+		if _, err := lookPath("claude"); err == nil {
+			return RuntimeClaudeCode, true
+		}
+	}
+	return RuntimeCodex, false
+}
+
+func PreferredRuntimeFromPATH() RuntimeID {
+	runtime, _ := DetectPreferredRuntime(exec.LookPath)
+	return runtime
 }
 
 // UserConfigPath returns the path to the user-level config file at ~/.muxagent/config.json.

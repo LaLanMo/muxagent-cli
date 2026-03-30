@@ -1,23 +1,25 @@
 package tasktui
 
+import appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
+
 type taskConfigSummary struct {
-	Alias                 string
-	BundlePath            string
-	ConfigPath            string
-	IsDefault             bool
-	Runtime               string
-	NodeNames             []string
-	LoadErr               string
-	BuiltinID             string
-	Builtin               bool
-	Description           string
+	Alias       string
+	BundlePath  string
+	ConfigPath  string
+	IsDefault   bool
+	RuntimeID   appconfig.RuntimeID
+	Runtime     string
+	NodeNames   []string
+	LoadErr     string
+	BuiltinID   string
+	Builtin     bool
+	Description string
 }
 
 type taskConfigFormMode int
 
 const (
-	taskConfigFormClone taskConfigFormMode = iota
-	taskConfigFormRename
+	taskConfigFormRename taskConfigFormMode = iota
 )
 
 type taskConfigFormState struct {

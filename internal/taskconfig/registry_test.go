@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"testing"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -142,6 +143,42 @@ func TestLoadCatalogStampsLegacyDefaultAsBuiltinAndPreservesCustomFiles(t *testi
 	entry, ok := registryEntryByAlias(reg.Configs, DefaultAlias)
 	require.True(t, ok)
 	assert.Equal(t, BuiltinIDDefault, entry.BuiltinID)
+}
+
+func TestLoadCatalogSeedsMissingBuiltinConfigAndFollowsPATH(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setTaskConfigRuntimePath(t, "claude")
+
+	taskConfigDir, err := TaskConfigDir()
+	require.NoError(t, err)
+	defaultDir := filepath.Join(taskConfigDir, managedDefaultBundleDir)
+	require.NoError(t, os.MkdirAll(defaultDir, 0o755))
+
+	catalog, err := LoadCatalog()
+	require.NoError(t, err)
+	defaultEntry, ok := catalog.Entry(DefaultAlias)
+	require.True(t, ok)
+
+	cfg, err := defaultEntry.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
+
+	currentBytes, err := builtinConfigBytes(BuiltinIDDefault)
+	require.NoError(t, err)
+	configBytes, err := os.ReadFile(defaultEntry.Path)
+	require.NoError(t, err)
+	assert.Equal(t, string(currentBytes), string(configBytes))
+	assert.NotContains(t, string(configBytes), "runtime:")
+
+	setTaskConfigRuntimePath(t, "codex")
+	reloaded, err := LoadCatalog()
+	require.NoError(t, err)
+	reloadedEntry, ok := reloaded.Entry(DefaultAlias)
+	require.True(t, ok)
+	reloadedCfg, err := reloadedEntry.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, appconfig.RuntimeCodex, reloadedCfg.Runtime)
 }
 
 func TestLoadCatalogFallsBackWhenBuiltinAliasIsAlreadyUserOwned(t *testing.T) {
@@ -330,6 +367,101 @@ func TestSetDefaultConfigUpdatesRegistry(t *testing.T) {
 	reg, err := LoadRegistry()
 	require.NoError(t, err)
 	assert.Equal(t, "reviewer", reg.DefaultAlias)
+}
+
+func TestSetConfigRuntimePinsBuiltinAndCustomConfigs(t *testing.T) {
+	tests := []struct {
+		name          string
+		setup         func(t *testing.T)
+		alias         string
+		wantConfigYML string
+	}{
+		{
+			name:          "builtin config",
+			setup:         func(t *testing.T) {},
+			alias:         DefaultAlias,
+			wantConfigYML: "runtime: claude-code",
+		},
+		{
+			name: "custom config",
+			setup: func(t *testing.T) {
+				writeSimpleUserBundle(t, "reviewer", "reviewer")
+				_, err := SaveRegistry(Registry{
+					DefaultAlias: DefaultAlias,
+					Configs: []RegistryEntry{
+						{Alias: "reviewer", Path: "reviewer"},
+					},
+				})
+				require.NoError(t, err)
+			},
+			alias:         "reviewer",
+			wantConfigYML: "runtime: claude-code",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			setTaskConfigRuntimePath(t, "codex")
+
+			_, err := LoadCatalog()
+			require.NoError(t, err)
+			tt.setup(t)
+
+			catalog, err := SetConfigRuntime(tt.alias, appconfig.RuntimeClaudeCode)
+			require.NoError(t, err)
+			entry, ok := catalog.Entry(tt.alias)
+			require.True(t, ok)
+			cfg, err := entry.LoadConfig()
+			require.NoError(t, err)
+			assert.Equal(t, appconfig.RuntimeClaudeCode, cfg.Runtime)
+
+			data, err := os.ReadFile(entry.Path)
+			require.NoError(t, err)
+			assert.Contains(t, string(data), tt.wantConfigYML)
+
+			setTaskConfigRuntimePath(t, "codex")
+			reloaded, err := LoadCatalog()
+			require.NoError(t, err)
+			reloadedEntry, ok := reloaded.Entry(tt.alias)
+			require.True(t, ok)
+			reloadedCfg, err := reloadedEntry.LoadConfig()
+			require.NoError(t, err)
+			assert.Equal(t, appconfig.RuntimeClaudeCode, reloadedCfg.Runtime)
+		})
+	}
+}
+
+func TestSetConfigRuntimeRejectsInvalidConfigWithoutMutatingFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setTaskConfigRuntimePath(t, "codex")
+
+	taskConfigDir, err := TaskConfigDir()
+	require.NoError(t, err)
+	brokenDir := filepath.Join(taskConfigDir, "broken")
+	require.NoError(t, os.MkdirAll(brokenDir, 0o755))
+	configPath := filepath.Join(brokenDir, managedConfigFile)
+	require.NoError(t, os.WriteFile(configPath, []byte("version: ["), 0o644))
+	_, err = SaveRegistry(Registry{
+		DefaultAlias: DefaultAlias,
+		Configs: []RegistryEntry{
+			{Alias: "broken", Path: "broken"},
+		},
+	})
+	require.NoError(t, err)
+
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	_, err = SetConfigRuntime("broken", appconfig.RuntimeClaudeCode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `load task config "broken"`)
+
+	after, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
 }
 
 func TestDeleteConfigReleasesCustomDefaultAndRestoresBuiltinDefault(t *testing.T) {

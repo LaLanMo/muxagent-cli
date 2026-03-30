@@ -465,7 +465,11 @@ func syncBuiltinBundle(taskConfigDir, builtinID string) error {
 		if err != nil {
 			return err
 		}
-		if err := ensureManagedAssetFile(filepath.Join(bundleDir, filepath.FromSlash(destRelPath)), assetPath); err != nil {
+		destPath := filepath.Join(bundleDir, filepath.FromSlash(destRelPath))
+		if destRelPath == managedConfigFile {
+			assetPath = builtinConfigAsset(builtinID)
+		}
+		if err := ensureManagedAssetFile(destPath, assetPath); err != nil {
 			return err
 		}
 	}

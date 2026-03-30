@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 )
 
@@ -87,6 +88,7 @@ func buildTaskConfigSummaries(catalog *taskconfig.Catalog, reg taskconfig.Regist
 			summary.LoadErr = err.Error()
 		} else {
 			entry.Config = cfg
+			summary.RuntimeID = cfg.Runtime
 			summary.Runtime = runtimeDisplayLabel(cfg.Runtime)
 			summary.Description = cfg.Description
 			for _, node := range cfg.Topology.Nodes {
@@ -128,30 +130,6 @@ func (m Model) selectedManagedTaskConfig() (taskConfigSummary, bool) {
 		}
 	}
 	return taskConfigSummary{}, false
-}
-
-func (m *Model) openCloneTaskConfigForm() tea.Cmd {
-	selected, ok := m.selectedManagedTaskConfig()
-	if !ok {
-		return nil
-	}
-	slot := "task-config-clone:" + selected.Alias
-	m.taskConfigs.form = &taskConfigFormState{
-		Mode:        taskConfigFormClone,
-		SourceAlias: selected.Alias,
-		Title:       "Clone Task Config",
-		Label:       "New alias",
-		Placeholder: "reviewer",
-		SubmitLabel: "Clone",
-		Slot:        slot,
-	}
-	m.taskConfigs.confirm = nil
-	m.taskConfigs.errorText = ""
-	m.taskConfigs.statusText = ""
-	m.editor.ClearSlot(slot)
-	m.focusRegion = FocusRegionComposer
-	m.syncComponents()
-	return m.syncInputFocus()
 }
 
 func (m *Model) openRenameTaskConfigForm() tea.Cmd {
@@ -220,6 +198,48 @@ func (m *Model) closeTaskConfigForm() {
 	m.taskConfigs.form = nil
 }
 
+func toggleTaskConfigRuntimeTarget(summary taskConfigSummary) (appconfig.RuntimeID, bool) {
+	switch summary.RuntimeID {
+	case appconfig.RuntimeCodex:
+		return appconfig.RuntimeClaudeCode, true
+	case appconfig.RuntimeClaudeCode:
+		return appconfig.RuntimeCodex, true
+	default:
+		return "", false
+	}
+}
+
+func (m *Model) toggleSelectedTaskConfigRuntime() tea.Cmd {
+	selected, ok := m.selectedManagedTaskConfig()
+	if !ok {
+		return nil
+	}
+	if strings.TrimSpace(selected.LoadErr) != "" {
+		m.taskConfigs.errorText = fmt.Sprintf("config %q is invalid and runtime cannot be switched", selected.Alias)
+		m.taskConfigs.statusText = ""
+		m.syncComponents()
+		return nil
+	}
+	targetRuntime, ok := toggleTaskConfigRuntimeTarget(selected)
+	if !ok {
+		m.taskConfigs.errorText = fmt.Sprintf("config %q runtime cannot be switched", selected.Alias)
+		m.taskConfigs.statusText = ""
+		m.syncComponents()
+		return nil
+	}
+	if _, err := taskconfig.SetConfigRuntime(selected.Alias, targetRuntime); err != nil {
+		m.taskConfigs.errorText = err.Error()
+		m.taskConfigs.statusText = ""
+		m.syncComponents()
+		return nil
+	}
+	m.taskConfigs.pending = true
+	m.taskConfigs.errorText = ""
+	m.taskConfigs.statusText = fmt.Sprintf("config %q runtime is now %s", selected.Alias, runtimeDisplayLabel(targetRuntime))
+	m.syncComponents()
+	return m.loadTaskConfigCatalogCmd(selected.Alias, m.selectedConfigAlias)
+}
+
 func (m *Model) submitTaskConfigForm() tea.Cmd {
 	form := m.taskConfigs.form
 	if form == nil {
@@ -235,42 +255,23 @@ func (m *Model) submitTaskConfigForm() tea.Cmd {
 	m.taskConfigs.errorText = ""
 	m.taskConfigs.statusText = ""
 	sourceAlias := form.SourceAlias
-	mode := form.Mode
 
-	switch mode {
-	case taskConfigFormClone:
-		source, ok := m.configCatalog.Entry(sourceAlias)
-		if !ok {
-			form.ErrorText = "source config no longer exists"
-			m.syncComponents()
-			return nil
-		}
-		if _, err := taskconfig.CloneConfig(alias, source.Path); err != nil {
-			form.ErrorText = err.Error()
-			m.syncComponents()
-			return nil
-		}
-		m.taskConfigs.pending = true
-		m.closeTaskConfigForm()
-		m.syncComponents()
-		return m.loadTaskConfigCatalogCmd(alias, alias)
-	case taskConfigFormRename:
-		updateTaskSelection := ""
-		if m.selectedConfigAlias == sourceAlias {
-			updateTaskSelection = alias
-		}
-		if _, err := taskconfig.RenameConfigAlias(sourceAlias, alias); err != nil {
-			form.ErrorText = err.Error()
-			m.syncComponents()
-			return nil
-		}
-		m.taskConfigs.pending = true
-		m.closeTaskConfigForm()
-		m.syncComponents()
-		return m.loadTaskConfigCatalogCmd(alias, updateTaskSelection)
-	default:
+	if form.Mode != taskConfigFormRename {
 		return nil
 	}
+	updateTaskSelection := ""
+	if m.selectedConfigAlias == sourceAlias {
+		updateTaskSelection = alias
+	}
+	if _, err := taskconfig.RenameConfigAlias(sourceAlias, alias); err != nil {
+		form.ErrorText = err.Error()
+		m.syncComponents()
+		return nil
+	}
+	m.taskConfigs.pending = true
+	m.closeTaskConfigForm()
+	m.syncComponents()
+	return m.loadTaskConfigCatalogCmd(alias, updateTaskSelection)
 }
 
 func (m *Model) submitSetDefaultTaskConfig() tea.Cmd {

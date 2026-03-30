@@ -2,6 +2,9 @@ package tasktui
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -134,6 +137,21 @@ func taskStatusForID(tasks []taskdomain.TaskView, taskID string) taskdomain.Task
 		}
 	}
 	return ""
+}
+
+func setTaskTUIRuntimePath(t *testing.T, commands ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, command := range commands {
+		path := filepath.Join(dir, command)
+		contents := []byte("#!/bin/sh\nexit 0\n")
+		if runtime.GOOS == "windows" {
+			path += ".exe"
+			contents = []byte{}
+		}
+		require.NoError(t, os.WriteFile(path, contents, 0o755))
+	}
+	t.Setenv("PATH", dir)
 }
 
 type fakeService struct {

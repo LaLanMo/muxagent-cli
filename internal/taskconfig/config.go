@@ -242,7 +242,7 @@ func parse(data []byte) (*Config, error) {
 
 func applyDefaults(cfg *Config) {
 	if strings.TrimSpace(string(cfg.Runtime)) == "" {
-		cfg.Runtime = appconfig.RuntimeCodex
+		cfg.Runtime = appconfig.PreferredRuntimeFromPATH()
 	}
 	if cfg.Clarification.MaxQuestions == 0 {
 		cfg.Clarification.MaxQuestions = 4
@@ -269,7 +269,7 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("unsupported config version %d", cfg.Version)
 	}
 	if strings.TrimSpace(string(cfg.Runtime)) == "" {
-		cfg.Runtime = appconfig.RuntimeCodex
+		cfg.Runtime = appconfig.PreferredRuntimeFromPATH()
 	}
 	if !appconfig.IsSupportedRuntime(cfg.Runtime) {
 		return fmt.Errorf("runtime %q is not supported", cfg.Runtime)
@@ -958,7 +958,7 @@ func ResolveRuntime(cfg *Config) (appconfig.RuntimeID, error) {
 		}
 		return cfg.Runtime, nil
 	}
-	return appconfig.RuntimeCodex, nil
+	return appconfig.PreferredRuntimeFromPATH(), nil
 }
 
 func readPrompt(fsys fs.FS, sourceDir, path string, embedded bool) ([]byte, error) {

@@ -40,6 +40,65 @@ func TestDefault_ContainsBuiltInRuntimes(t *testing.T) {
 	}
 }
 
+func TestDetectPreferredRuntime(t *testing.T) {
+	tests := []struct {
+		name        string
+		available   map[string]bool
+		wantRuntime RuntimeID
+		wantFound   bool
+	}{
+		{
+			name: "prefers codex when both are available",
+			available: map[string]bool{
+				"codex":  true,
+				"claude": true,
+			},
+			wantRuntime: RuntimeCodex,
+			wantFound:   true,
+		},
+		{
+			name: "uses codex when only codex is available",
+			available: map[string]bool{
+				"codex": true,
+			},
+			wantRuntime: RuntimeCodex,
+			wantFound:   true,
+		},
+		{
+			name: "uses claude when codex is unavailable",
+			available: map[string]bool{
+				"claude": true,
+			},
+			wantRuntime: RuntimeClaudeCode,
+			wantFound:   true,
+		},
+		{
+			name:        "falls back to codex when neither is available",
+			available:   map[string]bool{},
+			wantRuntime: RuntimeCodex,
+			wantFound:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime, found := DetectPreferredRuntime(func(name string) (string, error) {
+				if tt.available[name] {
+					return "/tmp/" + name, nil
+				}
+				return "", os.ErrNotExist
+			})
+
+			if runtime != tt.wantRuntime {
+				t.Fatalf("runtime = %q, want %q", runtime, tt.wantRuntime)
+			}
+			if found != tt.wantFound {
+				t.Fatalf("found = %v, want %v", found, tt.wantFound)
+			}
+		})
+	}
+}
+
 func TestRuntimeSettingsFor(t *testing.T) {
 	cfg := Default()
 

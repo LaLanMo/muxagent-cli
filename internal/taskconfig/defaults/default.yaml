@@ -1,6 +1,5 @@
 version: 1
 description: "Human-gated workflow: plan, review, approve, implement, verify."
-runtime: codex
 
 clarification:
   max_questions: 4

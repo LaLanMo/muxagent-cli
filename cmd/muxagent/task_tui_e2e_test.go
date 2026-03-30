@@ -735,66 +735,60 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	restarted.quit(t)
 }
 
-func TestTaskTUIConfigScreenCanCloneSetDefaultAndDeleteConfig(t *testing.T) {
+func TestTaskTUIConfigScreenCanToggleRuntimeAndPersistAcrossRestart(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	fakeClaudeFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-claude.sh")
+	basePath := os.Getenv("PATH")
 
 	workDir := canonicalPath(t, t.TempDir())
 	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	fakeClaudePath := filepath.Join(fakeDir, "claude")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+	copyExecutable(t, fakeClaudeFixture, fakeClaudePath)
 
 	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("FAKE_CLAUDE_FLOW", "happy")
+	t.Setenv("FAKE_CLAUDE_STATE_DIR", filepath.Join(workDir, ".fake-claude-state"))
 	t.Setenv("TERM", "xterm-256color")
 
 	session := startTUISession(t, binaryPath, workDir)
 	session.waitForAll(t, 10*time.Second, "new task", "task configs")
 	session.send(t, "\x1b[B")
 	session.send(t, "\r")
-	session.waitForAll(t, 10*time.Second, "Task Configs", "Default")
+	output := session.waitForAll(t, 10*time.Second, "Task Configs", "default", "Codex", "Shift+Tab runtime Claude Code")
+	assert.NotContains(t, output, "n clone")
 
-	session.send(t, "n")
-	session.waitForAll(t, 5*time.Second, "Clone Task Config", "Source config default")
-	session.send(t, "reviewer")
-	session.send(t, "\r")
-	session.waitForAll(t, 10*time.Second, "reviewer", "custom", "Codex")
+	session.sendBacktab(t)
+	session.waitForAll(t, 10*time.Second, `config "default" runtime is now Claude Code`)
 
 	require.Eventually(t, func() bool {
-		reg, err := taskconfig.LoadRegistry()
+		catalog, err := taskconfig.LoadCatalog()
 		if err != nil {
 			return false
 		}
-		_, ok := registryEntry(reg.Configs, "reviewer")
-		return ok && reg.DefaultAlias == taskconfig.DefaultAlias
-	}, 5*time.Second, 100*time.Millisecond)
-
-	session.send(t, "\r")
-	require.Eventually(t, func() bool {
-		reg, err := taskconfig.LoadRegistry()
-		if err != nil {
+		entry, ok := catalog.Entry(taskconfig.DefaultAlias)
+		if !ok {
 			return false
 		}
-		return reg.DefaultAlias == "reviewer"
+		cfg, err := entry.LoadConfig()
+		return err == nil && cfg.Runtime == appconfig.RuntimeClaudeCode
 	}, 5*time.Second, 100*time.Millisecond)
 
-	session.send(t, "x")
-	session.waitForAll(t, 5*time.Second, "Delete Task Config", "Existing tasks")
-	session.send(t, "\r")
-	require.Eventually(t, func() bool {
-		reg, err := taskconfig.LoadRegistry()
-		if err != nil {
-			return false
-		}
-		_, ok := registryEntry(reg.Configs, "reviewer")
-		return !ok && reg.DefaultAlias == taskconfig.DefaultAlias
-	}, 5*time.Second, 100*time.Millisecond)
-
-	taskConfigDir, err := taskconfig.TaskConfigDir()
-	require.NoError(t, err)
-	assert.NoDirExists(t, filepath.Join(taskConfigDir, "reviewer"))
-	session.waitForAll(t, 5*time.Second, "Task Configs", "Default")
-
-	session.send(t, "\x1b")
-	session.waitForAll(t, 5*time.Second, "new task", "task configs")
 	session.forceClose()
+
+	restarted := startTUISession(t, binaryPath, workDir)
+	restarted.waitForAll(t, 10*time.Second, "new task", "task configs")
+	restarted.send(t, "\x1b[B")
+	restarted.send(t, "\r")
+	restarted.waitForAll(t, 10*time.Second, "Task Configs", "default", "Claude Code", "Shift+Tab runtime Codex")
+	restarted.forceClose()
 }
 
 func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {

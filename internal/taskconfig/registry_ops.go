@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 func CloneConfig(alias, sourceConfigPath string) (*Catalog, error) {
@@ -128,6 +131,49 @@ func SetDefaultConfig(alias string) (*Catalog, error) {
 	}
 	reg.DefaultAlias = alias
 	if _, err := SaveRegistry(reg); err != nil {
+		return nil, err
+	}
+	return LoadCatalog()
+}
+
+func SetConfigRuntime(alias string, runtime appconfig.RuntimeID) (*Catalog, error) {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return nil, errors.New("task config alias is required")
+	}
+	if !appconfig.IsSupportedRuntime(runtime) {
+		return nil, fmt.Errorf("runtime %q is not supported", runtime)
+	}
+
+	reg, err := LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := registryEntryByAlias(reg.Configs, alias)
+	if !ok {
+		return nil, fmt.Errorf("task config alias %q does not exist", alias)
+	}
+
+	taskConfigDir, err := TaskConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	_, configPath, err := resolveRegistryEntryPath(taskConfigDir, entry.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load task config %q: %w", alias, err)
+	}
+	cfg.Runtime = runtime
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		return nil, err
 	}
 	return LoadCatalog()

@@ -1,6 +1,5 @@
 version: 1
 description: "Hands-off multi-wave mode. It keeps planning, building, and verifying without approval pauses until the task is done or needs another wave."
-runtime: codex
 
 clarification:
   max_questions: 4

@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,8 @@ import (
 )
 
 func TestLoadDefaultConfig(t *testing.T) {
+	setTaskConfigRuntimePath(t)
+
 	cfg, err := LoadDefault()
 	require.NoError(t, err)
 
@@ -92,6 +95,8 @@ node_definitions:
 }
 
 func TestLoadBuiltinConfigs(t *testing.T) {
+	setTaskConfigRuntimePath(t)
+
 	tests := []struct {
 		name         string
 		builtinID    string
@@ -155,6 +160,45 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 			_, hasEvaluator := cfg.NodeDefinitions["evaluate_progress"]
 			assert.Equal(t, tt.hasEvaluator, hasEvaluator)
 			assert.Equal(t, NodeTypeTerminal, cfg.NodeDefinitions["done"].Type)
+		})
+	}
+}
+
+func TestLoadBuiltinUsesPreferredRuntimeFromPATH(t *testing.T) {
+	tests := []struct {
+		name        string
+		pathEntries []string
+		wantRuntime appconfig.RuntimeID
+	}{
+		{
+			name:        "prefers codex when both are present",
+			pathEntries: []string{"codex", "claude"},
+			wantRuntime: appconfig.RuntimeCodex,
+		},
+		{
+			name:        "uses codex when only codex is present",
+			pathEntries: []string{"codex"},
+			wantRuntime: appconfig.RuntimeCodex,
+		},
+		{
+			name:        "uses claude when codex is absent",
+			pathEntries: []string{"claude"},
+			wantRuntime: appconfig.RuntimeClaudeCode,
+		},
+		{
+			name:        "falls back to codex when neither is present",
+			pathEntries: nil,
+			wantRuntime: appconfig.RuntimeCodex,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setTaskConfigRuntimePath(t, tt.pathEntries...)
+
+			cfg, err := LoadBuiltin(BuiltinIDDefault)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRuntime, cfg.Runtime)
 		})
 	}
 }
@@ -731,6 +775,8 @@ func TestValidateAcceptsValidConfigs_TableDriven(t *testing.T) {
 }
 
 func TestMaterializeWritesConfigAndPrompts(t *testing.T) {
+	setTaskConfigRuntimePath(t)
+
 	workDir := t.TempDir()
 
 	materialized, err := Materialize(workDir, "task-1", "")
@@ -911,6 +957,17 @@ node_definitions:
 		assert.Equal(t, appconfig.RuntimeClaudeCode, runtime)
 	})
 
+	t.Run("runtime without explicit config uses preferred path runtime", func(t *testing.T) {
+		setTaskConfigRuntimePath(t, "claude")
+
+		cfg := basicFixture()
+		cfg.Runtime = ""
+
+		runtime, err := ResolveRuntime(cfg)
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeClaudeCode, runtime)
+	})
+
 	t.Run("materialize persists resolved runtime", func(t *testing.T) {
 		workDir := t.TempDir()
 		cfgPath := writeConfigFile(t, `
@@ -949,6 +1006,46 @@ node_definitions:
 		require.NoError(t, err)
 		assert.Equal(t, appconfig.RuntimeClaudeCode, persisted.Runtime)
 	})
+
+	t.Run("materialize persists preferred runtime for runtime-less configs", func(t *testing.T) {
+		setTaskConfigRuntimePath(t, "claude")
+
+		workDir := t.TempDir()
+		cfgPath := writeConfigFile(t, `
+version: 1
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+topology:
+  max_iterations: 1
+  entry: start
+  nodes:
+    - name: start
+    - name: done
+  edges:
+    - from: start
+      to: done
+node_definitions:
+  start:
+    system_prompt: ./prompt.md
+    result_schema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  done:
+    type: terminal
+`)
+		require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(cfgPath), "prompt.md"), []byte("# prompt"), 0o644))
+
+		materialized, err := Materialize(workDir, "task-runtime-less", cfgPath)
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeClaudeCode, materialized.Config.Runtime)
+
+		persisted, err := Load(materialized.ConfigPath)
+		require.NoError(t, err)
+		assert.Equal(t, appconfig.RuntimeClaudeCode, persisted.Runtime)
+	})
 }
 
 func writeConfigFile(t *testing.T, content string) string {
@@ -956,6 +1053,21 @@ func writeConfigFile(t *testing.T, content string) string {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
+}
+
+func setTaskConfigRuntimePath(t *testing.T, commands ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, command := range commands {
+		path := filepath.Join(dir, command)
+		contents := []byte("#!/bin/sh\nexit 0\n")
+		if runtime.GOOS == "windows" {
+			path += ".exe"
+			contents = []byte{}
+		}
+		require.NoError(t, os.WriteFile(path, contents, 0o755))
+	}
+	t.Setenv("PATH", dir)
 }
 
 func basicFixture() *Config {

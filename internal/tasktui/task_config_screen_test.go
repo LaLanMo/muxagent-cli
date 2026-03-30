@@ -16,6 +16,7 @@ import (
 func TestTaskConfigScreenLoadsBuiltinsAndBrokenConfigHealth(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	setTaskTUIRuntimePath(t, "codex")
 
 	taskConfigDir, err := taskconfig.TaskConfigDir()
 	require.NoError(t, err)
@@ -33,37 +34,78 @@ func TestTaskConfigScreenLoadsBuiltinsAndBrokenConfigHealth(t *testing.T) {
 	model = openTaskConfigScreen(t, model)
 
 	require.Equal(t, ScreenTaskConfigs, model.screen)
-	require.Len(t, model.taskConfigs.entries, 4)
+	require.Len(t, model.taskConfigs.entries, 5)
 
 	assert.Equal(t, "default", model.taskConfigs.entries[0].Alias)
 	assert.Equal(t, "plan-only", model.taskConfigs.entries[1].Alias)
 	assert.Equal(t, "autonomous", model.taskConfigs.entries[2].Alias)
+	assert.Equal(t, "yolo", model.taskConfigs.entries[3].Alias)
 
-	broken := model.taskConfigs.entries[3]
+	broken := model.taskConfigs.entries[4]
 	assert.Equal(t, "broken", broken.Alias)
 	assert.False(t, broken.Builtin)
 	assert.NotEmpty(t, broken.LoadErr)
 }
 
-func TestTaskConfigScreenCrudLifecycleForUserClone(t *testing.T) {
+func TestTaskConfigScreenRuntimeTogglePersistsSelectionAndUpdatesSummary(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	setTaskTUIRuntimePath(t, "codex", "claude")
 
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, t.TempDir(), "", nil, "v0.1.0")
 	model = openTaskConfigScreen(t, model)
 
-	cmd := model.openCloneTaskConfigForm()
-	model = runCmdUpdateModel(t, model, cmd)
-	model = typeText(t, model, "reviewer")
-	cmd = model.submitTaskConfigForm()
+	selected, ok := model.selectedManagedTaskConfig()
+	require.True(t, ok)
+	assert.Equal(t, "default", selected.Alias)
+	assert.Equal(t, "Codex", selected.Runtime)
+
+	cmd := model.toggleSelectedTaskConfigRuntime()
 	require.NotNil(t, cmd)
 	model = runCmdUpdateModel(t, model, cmd)
 
-	assert.Equal(t, "reviewer", model.taskConfigs.selectedAlias)
-	assert.Equal(t, "reviewer", model.selectedConfigAlias)
-	require.True(t, hasTaskConfigEntry(model.taskConfigs.entries, "reviewer"))
+	assert.Equal(t, "default", model.taskConfigs.selectedAlias)
+	assert.Equal(t, taskconfig.DefaultAlias, model.selectedConfigAlias)
+	assert.Equal(t, `config "default" runtime is now Claude Code`, model.taskConfigs.statusText)
 
-	cmd = model.openRenameTaskConfigForm()
+	selected, ok = model.selectedManagedTaskConfig()
+	require.True(t, ok)
+	assert.Equal(t, "Claude Code", selected.Runtime)
+	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab runtime Codex")
+
+	entry, ok := model.configCatalog.Entry(taskconfig.DefaultAlias)
+	require.True(t, ok)
+	cfg, err := entry.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "claude-code", string(cfg.Runtime))
+}
+
+func TestTaskConfigScreenUserConfigLifecycleWithoutCloneFlow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setTaskTUIRuntimePath(t, "codex")
+
+	catalog, err := taskconfig.LoadCatalog()
+	require.NoError(t, err)
+	source, ok := catalog.Entry(taskconfig.DefaultAlias)
+	require.True(t, ok)
+	_, err = taskconfig.CloneConfig("reviewer", source.Path)
+	require.NoError(t, err)
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, t.TempDir(), "", nil, "v0.1.0")
+	model = openTaskConfigScreen(t, model)
+
+	for i := 0; i < len(model.taskConfigs.entries); i++ {
+		selected, ok := model.selectedManagedTaskConfig()
+		require.True(t, ok)
+		if selected.Alias == "reviewer" {
+			break
+		}
+		next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = next.(Model)
+	}
+
+	cmd := model.openRenameTaskConfigForm()
 	model = runCmdUpdateModel(t, model, cmd)
 	model.editor.SetValue("deep-review")
 	cmd = model.submitTaskConfigForm()
@@ -71,14 +113,15 @@ func TestTaskConfigScreenCrudLifecycleForUserClone(t *testing.T) {
 	model = runCmdUpdateModel(t, model, cmd)
 
 	assert.Equal(t, "deep-review", model.taskConfigs.selectedAlias)
-	assert.Equal(t, "deep-review", model.selectedConfigAlias)
+	assert.Equal(t, taskconfig.DefaultAlias, model.selectedConfigAlias)
 	require.True(t, hasTaskConfigEntry(model.taskConfigs.entries, "deep-review"))
-	require.False(t, hasTaskConfigEntry(model.taskConfigs.entries, "reviewer"))
+	assert.False(t, hasTaskConfigEntry(model.taskConfigs.entries, "reviewer"))
 
 	cmd = model.submitSetDefaultTaskConfig()
 	require.NotNil(t, cmd)
 	model = runCmdUpdateModel(t, model, cmd)
 	assert.Equal(t, "deep-review", model.configCatalog.DefaultAlias)
+	assert.Equal(t, "deep-review", model.selectedConfigAlias)
 
 	cmd = model.openDeleteTaskConfigConfirm()
 	model = runCmdUpdateModel(t, model, cmd)
@@ -94,6 +137,7 @@ func TestTaskConfigScreenCrudLifecycleForUserClone(t *testing.T) {
 func TestTaskConfigHeaderPrioritizesModeIntent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	setTaskTUIRuntimePath(t, "codex")
 
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, t.TempDir(), "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})

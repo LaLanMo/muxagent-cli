@@ -1,6 +1,5 @@
 version: 1
 description: "Autonomous workflow: plan, review, implement, verify — no manual approval."
-runtime: codex
 
 clarification:
   max_questions: 4

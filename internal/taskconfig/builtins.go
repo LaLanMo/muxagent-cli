@@ -69,6 +69,10 @@ func builtinBundlePath(id string) string {
 	return "builtin/" + id
 }
 
+func builtinConfigBytes(id string) ([]byte, error) {
+	return defaultsFS.ReadFile(builtinConfigAsset(id))
+}
+
 func loadEmbeddedBuiltinConfig(id string) (*Config, error) {
 	if !IsBuiltinID(id) {
 		return nil, fs.ErrNotExist

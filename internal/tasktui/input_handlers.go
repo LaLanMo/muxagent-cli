@@ -49,8 +49,8 @@ func (m Model) handleTaskConfigListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		cmd := m.submitSetDefaultTaskConfig()
 		m.syncComponents()
 		return m, cmd
-	case keyMatches(msg, m.keys.cloneConfig):
-		cmd := m.openCloneTaskConfigForm()
+	case keyMatches(msg, m.keys.toggleDetailTab):
+		cmd := m.toggleSelectedTaskConfigRuntime()
 		m.syncComponents()
 		return m, cmd
 	case keyMatches(msg, m.keys.renameConfig):

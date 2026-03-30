@@ -77,8 +77,12 @@ func (m Model) taskConfigListHint() string {
 		case selected.LoadErr == "":
 			parts = append(parts, "Enter set default")
 		}
+		if selected.LoadErr == "" {
+			if targetRuntime, ok := toggleTaskConfigRuntimeTarget(selected); ok {
+				parts = append(parts, "Shift+Tab runtime "+runtimeDisplayLabel(targetRuntime))
+			}
+		}
 	}
-	parts = append(parts, "n clone")
 	if selected, ok := m.selectedManagedTaskConfig(); ok && !selected.Builtin {
 		parts = append(parts, "r rename", "x delete")
 	}

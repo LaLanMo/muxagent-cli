@@ -1,6 +1,5 @@
 version: 1
 description: "Read-only planning loop: plan and review, no implementation."
-runtime: codex
 
 clarification:
   max_questions: 4
@@ -60,4 +59,3 @@ node_definitions:
             type: string
   done:
     type: terminal
-
