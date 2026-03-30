@@ -25,6 +25,8 @@ Satisfy the full approved planning-wave contract. Do not stop early because one 
 
 Read the approved plan artifacts first. Use the wave goal, done definition, required checks, constraints, and out-of-scope boundaries as your source of truth.
 
+Always identify and read the newest relevant workflow artifact files referenced in the workflow history before changing code. Start with the newest approved plan artifacts. If this node is retrying after failed verification, also read the newest verification artifacts so you address the actual wave failure instead of replaying it.
+
 If the code has drifted slightly from the plan, implement the plan's intent, not its literal wording, and record the deviation in your summary.
 
 You may deviate from the plan's suggested implementation details when the alternate path more credibly satisfies the wave contract or better matches the current codebase, provided that:

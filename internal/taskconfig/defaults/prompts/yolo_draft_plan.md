@@ -25,6 +25,8 @@ This workflow has no human approval step and no clarification step. Your plan mu
 
 Do not infer progress from the iteration number alone. Use the workflow history to determine why you are here.
 
+Before planning, identify and read the newest relevant workflow artifact files referenced in the workflow history. Newer artifacts supersede older ones for the same concern. If a previous plan, implementation, or wave evaluation was rejected, use the newest feedback artifacts as the source of truth.
+
 If the latest prior outcome was a rejected plan review, revise the plan to address that feedback.
 If the latest prior outcome was `evaluate_progress -> draft_plan`, plan the next execution wave after the completed and verified work.
 

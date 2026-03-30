@@ -35,6 +35,8 @@ This node must not route back to implementation directly. Its only valid outcome
 
 Read the original task, the completed workflow history, the latest verification artifacts, and any remaining evidence in the codebase.
 
+Always identify and read the newest relevant workflow artifact files referenced in the workflow history before deciding the next node. Favor the newest verification and evaluation artifacts when earlier waves disagree with later evidence.
+
 Return `next_node=done` only if the original task's explicit requested scope is now complete, not just the latest wave.
 
 If work remains, return `next_node=draft_plan` and make `next_focus` concrete enough that the next planner can produce the next wave without rediscovering the problem from scratch. State the remaining obligation and the next wave goal, not generic advice.

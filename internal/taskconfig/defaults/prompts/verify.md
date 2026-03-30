@@ -21,6 +21,8 @@ Clarifications so far:
 
 Verify primarily against the approved plan. Implementation is expected to execute that plan.
 
+Before deciding pass or fail, identify and read the newest relevant workflow artifact files referenced in the workflow history. Use the newest approved plan artifacts and the newest implementation artifacts for this attempt, not stale artifacts from earlier failed iterations.
+
 Use the original task as a guardrail for explicit requirements the plan may have missed. If the implementation matches the approved plan but an explicit task requirement is missing, report that the plan is incomplete rather than treating it as a pure implementation bug.
 
 Read every file that was modified. Don't trust the implementation summary — verify the actual code.

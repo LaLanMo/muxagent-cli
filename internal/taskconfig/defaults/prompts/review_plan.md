@@ -21,6 +21,8 @@ Clarifications so far:
 
 Read the latest planning artifacts in the workflow history. Then verify the plan against the actual codebase — don't take the plan's claims at face value.
 
+Always identify and read the newest relevant workflow artifact files referenced in the workflow history before reviewing. If multiple planning iterations exist, review the newest draft artifacts for the current iteration, not stale drafts that were already superseded.
+
 **Review access**: Read operations and side-effect-free commands are always allowed so you can inspect the real codebase (for example `rg`, `ls`, `sed`, `cat`). Do not modify project files. Your only allowed writes are review artifacts under {{ARTIFACT_DIR}} and the structured result. Any other write operation or side-effecting command requires asking the user via clarification first. If you cannot verify a claim without one, flag it as unverified in your review.
 
 ## Review checklist

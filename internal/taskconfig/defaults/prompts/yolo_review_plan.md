@@ -23,6 +23,8 @@ Decide whether the latest planning wave is a strong enough outcome contract for 
 
 Read the latest planning artifacts in the workflow history. Then verify the plan against the actual codebase. Do not trust the plan's claims at face value.
 
+Always identify and read the newest relevant workflow artifact files referenced in the workflow history before reviewing. If multiple planning waves or retries exist, review the newest draft artifacts for the current wave, not older superseded contracts.
+
 ## Review checklist
 
 **1. Remaining-work accuracy** — Does the plan focus on what is still undone, rather than repeating already completed work?

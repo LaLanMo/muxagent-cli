@@ -21,6 +21,8 @@ Clarifications so far:
 
 Explore first. Read the actual source files to understand existing patterns, dependencies, and constraints before writing anything. Do not plan against imagined code.
 
+Before writing a new plan, identify and read the newest relevant workflow artifact files referenced in the workflow history. Newer artifacts supersede older ones for the same concern. If an earlier plan was rejected, the newest review or approval artifacts explain what must change.
+
 If this is iteration 2+, previous plans were rejected. Read the review/approval feedback in the workflow history. Address every point raised. Do not repeat rejected approaches.
 
 ## Plan artifacts

@@ -21,6 +21,8 @@ Clarifications so far:
 
 The plan was reviewed and approved. Execute it — don't redesign it.
 
+Before making changes, identify and read the newest relevant workflow artifact files referenced in the workflow history. Start with the newest approved plan artifacts. If this node is retrying after failed verification, also read the newest verification artifacts so you fix the actual rejection instead of repeating the same implementation.
+
 Work through the plan steps in order. Complete one step fully before starting the next.
 
 ## Discipline

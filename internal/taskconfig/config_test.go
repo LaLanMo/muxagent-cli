@@ -316,6 +316,7 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 			contains: []string{
 				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Do not infer progress from the iteration number alone.",
+				"newest relevant workflow artifact files",
 				"Wave Goal",
 				"Done Definition",
 				"Allowed Side Effects",
@@ -332,6 +333,7 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 			contains: []string{
 				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"outcome contract",
+				"newest relevant workflow artifact files",
 				"Wave contract quality",
 				"Done Definition",
 				"Allowed Side Effects",
@@ -346,6 +348,7 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 			contains: []string{
 				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Satisfy the full approved planning-wave contract",
+				"newest relevant workflow artifact files",
 				"wave goal, done definition, required checks",
 				"deviate from the plan's suggested implementation details",
 				"Wave goal status",
@@ -360,6 +363,7 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 			contains: []string{
 				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"planning-wave contract",
+				"newest relevant workflow artifact files",
 				"Do not require literal adherence to implementation details.",
 				"accepted deviations",
 			},
@@ -373,6 +377,7 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 			contains: []string{
 				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"explicit requested scope",
+				"newest relevant workflow artifact files",
 				"remaining obligation and the next wave goal",
 				"Do not invent adjacent nice-to-have work.",
 			},

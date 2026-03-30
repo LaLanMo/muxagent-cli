@@ -27,6 +27,8 @@ This node is not the overall task-progress evaluator. If the approved wave is co
 
 Read the approved plan artifacts and every modified file. Pay particular attention to the wave goal, done definition, required checks, constraints, and out-of-scope boundaries. Do not trust the implementation summary on its own.
 
+Always identify and read the newest relevant workflow artifact files referenced in the workflow history before judging the wave. Use the newest approved plan artifacts and the newest implementation artifacts for this wave, not stale artifacts from earlier failed attempts.
+
 Read operations and side-effect-free commands are always allowed. Running tests and builds that the plan's verification section specified is allowed.
 
 Do not require literal adherence to implementation details. A credible deviation may still pass if the wave goal is achieved, the done definition is satisfied, required checks pass, and the wave constraints are respected.
