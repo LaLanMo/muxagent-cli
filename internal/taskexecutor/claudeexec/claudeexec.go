@@ -81,10 +81,11 @@ func (e *Executor) Execute(ctx context.Context, req taskexecutor.Request, progre
 
 	decoder := json.NewDecoder(stdout)
 	var (
-		sawFinalResult bool
-		finalResult    *taskexecutor.Result
-		finalOutput    []byte
-		finalErr       error
+		sawFinalResult            bool
+		finalResult               *taskexecutor.Result
+		finalOutput               []byte
+		finalErr                  error
+		lastStructuredOutputInput json.RawMessage
 	)
 	for {
 		var raw json.RawMessage
@@ -103,6 +104,9 @@ func (e *Executor) Execute(ctx context.Context, req taskexecutor.Request, progre
 			stderrWG.Wait()
 			return taskexecutor.Result{}, err
 		}
+		if captured := extractStructuredOutputInput(raw); captured != nil {
+			lastStructuredOutputInput = captured
+		}
 		if message.SessionID != "" && message.SessionID != expectedSessionID {
 			stopCommand(cmd)
 			stderrWG.Wait()
@@ -118,11 +122,15 @@ func (e *Executor) Execute(ctx context.Context, req taskexecutor.Request, progre
 		sawFinalResult = true
 		switch {
 		case message.Subtype == "success":
-			if len(bytes.TrimSpace(message.StructuredOutput)) == 0 || bytes.Equal(bytes.TrimSpace(message.StructuredOutput), []byte("null")) {
+			so := message.StructuredOutput
+			if (len(bytes.TrimSpace(so)) == 0 || bytes.Equal(bytes.TrimSpace(so), []byte("null"))) && lastStructuredOutputInput != nil {
+				so = lastStructuredOutputInput
+			}
+			if len(bytes.TrimSpace(so)) == 0 || bytes.Equal(bytes.TrimSpace(so), []byte("null")) {
 				finalErr = errors.New("claude success result is missing structured_output")
 				continue
 			}
-			finalOutput, err = canonicalJSON(message.StructuredOutput)
+			finalOutput, err = canonicalJSON(so)
 			if err != nil {
 				finalErr = fmt.Errorf("invalid structured_output: %w", err)
 				continue
@@ -273,4 +281,33 @@ func stopCommand(cmd *exec.Cmd) {
 func asString(value interface{}) string {
 	text, _ := value.(string)
 	return text
+}
+
+// extractStructuredOutputInput recovers the StructuredOutput tool input from
+// an assistant-type stream message. Claude Code stream-json emits assistant
+// turns as:
+//
+//	{"type":"assistant","message":{"content":[{"type":"tool_use","name":"StructuredOutput","input":{...}}]}}
+//
+// Returns the input payload if found, nil otherwise. Safely returns nil for
+// any non-matching message format.
+func extractStructuredOutputInput(raw json.RawMessage) json.RawMessage {
+	var envelope struct {
+		Message struct {
+			Content []struct {
+				Type  string          `json:"type"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	for _, block := range envelope.Message.Content {
+		if block.Type == "tool_use" && block.Name == "StructuredOutput" && len(block.Input) > 0 {
+			return block.Input
+		}
+	}
+	return nil
 }

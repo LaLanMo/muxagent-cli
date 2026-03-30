@@ -123,6 +123,23 @@ func TestExecutorFailsOnSessionMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "claude session drift")
 }
 
+func TestExecutorRecoversStructuredOutputFromStream(t *testing.T) {
+	binaryPath := writeFakeClaude(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "recovered-structured-output")
+
+	executor := New(binaryPath)
+	req := requestFixture(t.TempDir())
+	result, err := executor.Execute(context.Background(), req, nil)
+	require.NoError(t, err)
+	assert.Equal(t, taskexecutor.ResultKindResult, result.Kind)
+
+	outputBytes, err := os.ReadFile(filepath.Join(req.ArtifactDir, "output.json"))
+	require.NoError(t, err)
+	var output map[string]interface{}
+	require.NoError(t, json.Unmarshal(outputBytes, &output))
+	assert.Equal(t, "result", output["kind"])
+}
+
 func TestExecutorFailsWhenFinalResultIsMissing(t *testing.T) {
 	binaryPath := writeFakeClaude(t)
 	t.Setenv("FAKE_CLAUDE_MODE", "no-final-result")
@@ -269,6 +286,11 @@ case "$mode" in
     ;;
   no-final-result)
     printf '{"type":"assistant","message":"planning","session_id":"%s"}\n' "$expected_session"
+    ;;
+  recovered-structured-output)
+    printf '{"type":"assistant","message":{"id":"msg-1","role":"assistant","content":[{"type":"tool_use","name":"StructuredOutput","id":"tu-1","input":{"kind":"result","result":{"file_paths":["/tmp/artifact.md"]},"clarification":null}}]},"session_id":"%s"}\n' "$expected_session"
+    printf '{"type":"assistant","message":"background task completed","session_id":"%s"}\n' "$expected_session"
+    printf '{"type":"result","subtype":"success","session_id":"%s","structured_output":null}\n' "$expected_session"
     ;;
 esac
 `
