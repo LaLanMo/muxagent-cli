@@ -4,7 +4,10 @@ Step: {{NODE_NAME}}
 ArtifactDir: {{ARTIFACT_DIR}}
 Iteration: {{CURRENT_ITERATION}}
 
-Task: {{TASK_DESCRIPTION}}
+Task
+```
+{{TASK_DESCRIPTION}}
+```
 
 Workflow history (oldest first):
 {{WORKFLOW_HISTORY}}

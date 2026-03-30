@@ -59,7 +59,7 @@ func shouldResumeClarificationThread(run taskdomain.NodeRun) bool {
 
 func buildClarificationResumePrompt(task taskdomain.Task, run taskdomain.NodeRun, artifactDir string, iteration int) (string, error) {
 	latest := run.Clarifications[len(run.Clarifications)-1]
-	lines := []string{buildPromptHeader(run.NodeName, artifactDir, iteration), "", "Mission", "Resume this same step after the user answered your clarification request.", "", "Task", task.Description, "", "Relevant History", "Continue in the existing session or thread for this node run.", "Workflow history for this follow-up lives in the thread context above.", "", "New clarification exchange"}
+	lines := []string{buildPromptHeader(run.NodeName, artifactDir, iteration), "", "Mission", "Resume this same step after the user answered your clarification request.", "", "Task", "```", task.Description, "```", "", "Relevant History", "Continue in the existing session or thread for this node run.", "Workflow history for this follow-up lives in the thread context above.", "", "New clarification exchange"}
 	for qi, question := range latest.Request.Questions {
 		lines = append(lines, fmt.Sprintf("Q: %s", question.Question))
 		if len(question.Options) > 0 {
@@ -125,13 +125,6 @@ func summarizeWorkflowHistory(runs []taskdomain.NodeRun) string {
 			}
 		} else {
 			entryLines = append(entryLines, "   Result JSON: (none)")
-		}
-		artifacts := taskdomain.ArtifactPaths(run.Result)
-		if len(artifacts) > 0 {
-			entryLines = append(entryLines, "   Artifacts:")
-			for _, path := range artifacts {
-				entryLines = append(entryLines, "   - "+path)
-			}
 		}
 		entries = append(entries, strings.Join(entryLines, "\n"))
 	}

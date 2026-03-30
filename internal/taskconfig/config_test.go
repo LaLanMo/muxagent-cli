@@ -314,6 +314,7 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 			name: "draft_plan",
 			path: "defaults/prompts/yolo_draft_plan.md",
 			contains: []string{
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Do not infer progress from the iteration number alone.",
 				"Wave Goal",
 				"Done Definition",
@@ -321,6 +322,7 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 				"Treat it as an outcome contract",
 			},
 			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 				"If this is iteration 2+, assume at least one prior planning wave was completed and verified",
 			},
 		},
@@ -328,38 +330,54 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 			name: "review_plan",
 			path: "defaults/prompts/yolo_review_plan.md",
 			contains: []string{
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"outcome contract",
 				"Wave contract quality",
 				"Done Definition",
 				"Allowed Side Effects",
+			},
+			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 			},
 		},
 		{
 			name: "implement",
 			path: "defaults/prompts/yolo_implement.md",
 			contains: []string{
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Satisfy the full approved planning-wave contract",
 				"wave goal, done definition, required checks",
 				"deviate from the plan's suggested implementation details",
 				"Wave goal status",
+			},
+			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 			},
 		},
 		{
 			name: "verify",
 			path: "defaults/prompts/yolo_verify.md",
 			contains: []string{
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"planning-wave contract",
 				"Do not require literal adherence to implementation details.",
 				"accepted deviations",
+			},
+			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 			},
 		},
 		{
 			name: "evaluate_progress",
 			path: "defaults/prompts/yolo_evaluate_progress.md",
 			contains: []string{
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"explicit requested scope",
 				"remaining obligation and the next wave goal",
 				"Do not invent adjacent nice-to-have work.",
+			},
+			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 			},
 		},
 	}

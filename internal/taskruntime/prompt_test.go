@@ -47,8 +47,10 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 	configPath := writeOverrideConfig(t, cfg)
 	promptPath := filepath.Join(filepath.Dir(configPath), "prompts", "draft_plan.md")
 	template := strings.Join([]string{
-		"Task request:",
+		"Task:",
+		"```",
 		"{{TASK_DESCRIPTION}}",
+		"```",
 		"",
 		"Iteration:",
 		"{{CURRENT_ITERATION}}",
@@ -96,13 +98,17 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Contains(t, prompt, "Create hello.txt")
+	assert.Contains(t, prompt, "Task:\n```\nCreate hello.txt\n```")
 	assert.Contains(t, prompt, "\n2\n")
 	assert.Contains(t, prompt, "1. draft_plan (#1)")
 	assert.Contains(t, prompt, "2. review_plan (#1)")
 	assert.Contains(t, prompt, "/tmp/plan-v1.md")
 	assert.Contains(t, prompt, "/tmp/review-v1.md")
+	assert.Contains(t, prompt, "\"passed\":false")
 	assert.Contains(t, prompt, "Clarification history:\n(none)")
+	assert.NotContains(t, prompt, "Artifacts:")
+	assert.Equal(t, 1, strings.Count(prompt, "/tmp/plan-v1.md"))
+	assert.Equal(t, 1, strings.Count(prompt, "/tmp/review-v1.md"))
 	assert.Less(t, strings.Index(prompt, "1. draft_plan (#1)"), strings.Index(prompt, "2. review_plan (#1)"))
 	assert.Less(t, strings.Index(prompt, "/tmp/plan-v1.md"), strings.Index(prompt, "/tmp/review-v1.md"))
 }
@@ -123,6 +129,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"Step: {{NODE_NAME}}",
 				"ArtifactDir: {{ARTIFACT_DIR}}",
 				"Iteration: {{CURRENT_ITERATION}}",
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Workflow history (oldest first):",
 				"Clarifications so far:",
 				"How to plan",
@@ -130,6 +137,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"file_paths",
 			},
 			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 				"Completed structured results:",
 				"Known artifact paths:",
 			},
@@ -140,6 +148,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"Step: {{NODE_NAME}}",
 				"ArtifactDir: {{ARTIFACT_DIR}}",
 				"Iteration: {{CURRENT_ITERATION}}",
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Workflow history (oldest first):",
 				"Clarifications so far:",
 				"Review checklist",
@@ -147,6 +156,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"passed",
 			},
 			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 				"Completed structured results:",
 				"Known artifact paths:",
 			},
@@ -157,6 +167,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"Step: {{NODE_NAME}}",
 				"ArtifactDir: {{ARTIFACT_DIR}}",
 				"Iteration: {{CURRENT_ITERATION}}",
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Workflow history (oldest first):",
 				"Clarifications so far:",
 				"Execute it",
@@ -164,6 +175,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"file_paths",
 			},
 			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 				"Completed structured results:",
 				"Known artifact paths:",
 			},
@@ -174,6 +186,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"Step: {{NODE_NAME}}",
 				"ArtifactDir: {{ARTIFACT_DIR}}",
 				"Iteration: {{CURRENT_ITERATION}}",
+				"Task\n```\n{{TASK_DESCRIPTION}}\n```",
 				"Workflow history (oldest first):",
 				"Clarifications so far:",
 				"Verification checklist",
@@ -181,6 +194,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 				"passed",
 			},
 			excludes: []string{
+				"Task: {{TASK_DESCRIPTION}}",
 				"Completed structured results:",
 				"Known artifact paths:",
 			},
@@ -228,7 +242,7 @@ func TestBuildClarificationResumePromptUsesStableHeader(t *testing.T) {
 	}
 
 	prompt, err := buildClarificationResumePrompt(
-		taskdomain.Task{Description: "Implement login"},
+		taskdomain.Task{Description: "Implement login\nHandle SSO fallback"},
 		run,
 		"/tmp/task-artifacts/draft-plan",
 		2,
@@ -239,6 +253,7 @@ func TestBuildClarificationResumePromptUsesStableHeader(t *testing.T) {
 	assert.Contains(t, prompt, "ArtifactDir: /tmp/task-artifacts/draft-plan")
 	assert.Contains(t, prompt, "Iteration: 2")
 	assert.Contains(t, prompt, "Mission")
+	assert.Contains(t, prompt, "Task\n```\nImplement login\nHandle SSO fallback\n```")
 	assert.Contains(t, prompt, "New clarification exchange")
 	assert.Contains(t, prompt, "User selected:")
 	assert.Contains(t, prompt, "Pass Bar")

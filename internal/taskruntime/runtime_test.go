@@ -110,6 +110,65 @@ func TestServiceAgentRunPersistsPromptInputArtifact(t *testing.T) {
 	assert.Contains(t, completed.TaskView.ArtifactPaths, "impl.md")
 }
 
+func TestServiceVerifyRunUsesFormattedTaskBlockAndDedupedWorkflowHistory(t *testing.T) {
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"draft_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
+			"implement":   {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
+			"verify":      {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/verify.md"}}}},
+		},
+	}
+	service := newTestService(t, executor)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	description := "Implement login\nHandle SSO fallback"
+	service.Dispatch(startTaskCommand(t, service, description))
+	inputEvent := waitForEvent(t, service.Events(), EventInputRequested)
+	require.NotNil(t, inputEvent.InputRequest)
+	require.Equal(t, InputKindHumanNode, inputEvent.InputRequest.Kind)
+
+	service.Dispatch(RunCommand{
+		Type:      CommandSubmitInput,
+		TaskID:    inputEvent.TaskID,
+		NodeRunID: inputEvent.NodeRunID,
+		Payload:   map[string]interface{}{"approved": true},
+	})
+	completed := waitForEvent(t, service.Events(), EventTaskCompleted)
+	require.NotNil(t, completed.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
+
+	verifyRequests := executor.requestsForNode("verify")
+	require.Len(t, verifyRequests, 1)
+	verifyPrompt := verifyRequests[0].Prompt
+	assert.Contains(t, verifyPrompt, "Task\n```\nImplement login\nHandle SSO fallback\n```")
+	assert.NotContains(t, verifyPrompt, "Artifacts:")
+	assert.Equal(t, 1, strings.Count(verifyPrompt, "/tmp/review.md"))
+	assert.Contains(t, verifyPrompt, `"passed":true`)
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
+	require.NoError(t, err)
+
+	var verifyRun taskdomain.NodeRun
+	for _, run := range runs {
+		if run.NodeName == "verify" {
+			verifyRun = run
+			break
+		}
+	}
+	require.Equal(t, taskdomain.NodeRunDone, verifyRun.Status)
+
+	inputPath := mustRunArtifactPathForRun(t, completed.TaskView.Task, runs, verifyRun, inputArtifactName)
+	input := readTestFile(t, inputPath)
+	assert.Contains(t, input, "Task\n```\nImplement login\nHandle SSO fallback\n```")
+	assert.NotContains(t, input, "Artifacts:")
+	assert.Equal(t, 1, strings.Count(input, "/tmp/review.md"))
+}
+
 func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	executor := &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
