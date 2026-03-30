@@ -115,8 +115,14 @@ func (m Model) renderRunningStreamPanel(run taskdomain.NodeRunView, nodeLabel st
 	if sessionID := m.nodeRunSessionID(run); sessionID != "" {
 		lines = append(lines, tuiTheme.streamThread.Render(ansi.Wrap("thread: "+sessionID, contentWidth, "")))
 	}
-	for _, line := range progressLines(m.progressByRun[run.ID], contentWidth) {
-		lines = append(lines, line)
+	if events := m.streamByRun[run.ID]; len(events) > 0 {
+		for _, line := range progressEventLines(events, contentWidth) {
+			lines = append(lines, line)
+		}
+	} else {
+		for _, line := range progressLines(m.progressByRun[run.ID], contentWidth) {
+			lines = append(lines, line)
+		}
 	}
 	return tuiTheme.streamPanel.Width(panelWidth).Render(strings.Join(lines, "\n"))
 }

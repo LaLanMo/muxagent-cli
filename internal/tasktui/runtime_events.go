@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
 
@@ -133,12 +134,19 @@ func (m *Model) applyProgressEvent(event taskruntime.RunEvent) {
 	if event.Progress.SessionID != "" {
 		m.sessionByRun[event.NodeRunID] = event.Progress.SessionID
 	}
-	if event.Progress.Message == "" {
+	if event.Progress.Message != "" {
+		messages := append([]string(nil), m.progressByRun[event.NodeRunID]...)
+		messages = appendProgressMessage(messages, event.Progress.Message)
+		m.progressByRun[event.NodeRunID] = messages
+	}
+	if len(event.Progress.Events) == 0 {
 		return
 	}
-	messages := append([]string(nil), m.progressByRun[event.NodeRunID]...)
-	messages = appendProgressMessage(messages, event.Progress.Message)
-	m.progressByRun[event.NodeRunID] = messages
+	events := append([]taskexecutor.StreamEvent(nil), m.streamByRun[event.NodeRunID]...)
+	for _, item := range event.Progress.Events {
+		events = appendProgressEvent(events, item)
+	}
+	m.streamByRun[event.NodeRunID] = events
 }
 
 func (m *Model) hydrateRunSessionIDs(view taskdomain.TaskView) {
@@ -148,6 +156,7 @@ func (m *Model) hydrateRunSessionIDs(view taskdomain.TaskView) {
 		}
 		if run.Status != taskdomain.NodeRunRunning {
 			delete(m.progressByRun, run.ID)
+			delete(m.streamByRun, run.ID)
 		}
 	}
 }
@@ -157,6 +166,7 @@ func (m *Model) clearRunProgress(nodeRunID string) {
 		return
 	}
 	delete(m.progressByRun, nodeRunID)
+	delete(m.streamByRun, nodeRunID)
 }
 
 func (m *Model) clearTaskProgress(view *taskdomain.TaskView) {
@@ -165,6 +175,7 @@ func (m *Model) clearTaskProgress(view *taskdomain.TaskView) {
 	}
 	for _, run := range view.NodeRuns {
 		delete(m.progressByRun, run.ID)
+		delete(m.streamByRun, run.ID)
 	}
 }
 
@@ -183,6 +194,30 @@ func appendProgressMessage(messages []string, raw string) []string {
 		messages = append([]string(nil), messages[len(messages)-4:]...)
 	}
 	return messages
+}
+
+func appendProgressEvent(events []taskexecutor.StreamEvent, next taskexecutor.StreamEvent) []taskexecutor.StreamEvent {
+	if next.Kind == "" {
+		return events
+	}
+	key := next.StableKey()
+	if key != "" {
+		for i := range events {
+			if events[i].StableKey() == key {
+				events[i] = taskexecutor.MergeStreamEvent(events[i], next)
+				return trimProgressEvents(events)
+			}
+		}
+	}
+	events = append(events, next)
+	return trimProgressEvents(events)
+}
+
+func trimProgressEvents(events []taskexecutor.StreamEvent) []taskexecutor.StreamEvent {
+	if len(events) <= 6 {
+		return events
+	}
+	return append([]taskexecutor.StreamEvent(nil), events[len(events)-6:]...)
 }
 
 func (m *Model) upsertTask(view taskdomain.TaskView) {

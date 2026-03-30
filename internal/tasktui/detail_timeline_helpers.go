@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 )
 
 func renderDAGNode(name, state string) string {
@@ -83,4 +84,74 @@ func progressLines(progress []string, width int) []string {
 		lines = append(lines, tuiTheme.streamJSON.Render(ansi.Truncate(item, lineWidth, "…")))
 	}
 	return lines
+}
+
+func progressEventLines(events []taskexecutor.StreamEvent, width int) []string {
+	lines := make([]string, 0, len(events))
+	lineWidth := max(8, width)
+	for _, event := range events {
+		if event.Kind == taskexecutor.StreamEventKindTool {
+			if line := renderToolEventLine(event, lineWidth); line != "" {
+				lines = append(lines, line)
+			}
+			continue
+		}
+		summary := strings.TrimSpace(event.Summary())
+		if summary == "" {
+			continue
+		}
+		style := tuiTheme.streamJSON
+		if event.Kind == taskexecutor.StreamEventKindPlan || event.Kind == taskexecutor.StreamEventKindUsage {
+			style = tuiTheme.streamThread
+		}
+		if event.Message != nil && event.Message.Type == taskexecutor.MessagePartTypeReasoning {
+			style = tuiTheme.streamThread
+		}
+		lines = append(lines, style.Render(ansi.Truncate(summary, lineWidth, "…")))
+	}
+	return lines
+}
+
+func renderToolEventLine(event taskexecutor.StreamEvent, width int) string {
+	if event.Tool == nil {
+		return ""
+	}
+	label := strings.TrimSpace(event.Tool.DisplayLabel())
+	subject := strings.TrimSpace(event.Tool.DisplaySubject())
+	if label == "" && subject == "" {
+		return ""
+	}
+	icon, iconStyle := toolStatusVisual(event.Tool.Status)
+	parts := make([]string, 0, 3)
+	if icon != "" {
+		parts = append(parts, iconStyle.Render(icon))
+	}
+	if label != "" {
+		prefix := label
+		if len(parts) > 0 {
+			prefix = " " + prefix
+		}
+		parts = append(parts, tuiTheme.body.Render(prefix))
+	}
+	if subject != "" {
+		spacing := " "
+		if label != "" {
+			spacing = "  "
+		}
+		parts = append(parts, tuiTheme.mutedText.Render(spacing+subject))
+	}
+	return ansi.Truncate(lipgloss.JoinHorizontal(lipgloss.Left, parts...), width, "…")
+}
+
+func toolStatusVisual(status taskexecutor.ToolStatus) (string, lipgloss.Style) {
+	switch status {
+	case taskexecutor.ToolStatusCompleted:
+		return "✓", tuiTheme.Status.Done
+	case taskexecutor.ToolStatusFailed:
+		return "×", tuiTheme.Status.Failed
+	case taskexecutor.ToolStatusInProgress, taskexecutor.ToolStatusPending:
+		return "●", tuiTheme.Status.Running
+	default:
+		return "•", tuiTheme.Text.Subtle
+	}
 }

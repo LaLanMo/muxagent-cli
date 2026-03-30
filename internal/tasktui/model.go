@@ -10,6 +10,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
 
@@ -75,6 +76,7 @@ type Model struct {
 	currentInput        *taskruntime.InputRequest
 	startupText         string
 	progressByRun       map[string][]string
+	streamByRun         map[string][]taskexecutor.StreamEvent
 	sessionByRun        map[string]string
 	artifactItems       []artifactItem
 	artifactIndex       int
@@ -143,6 +145,7 @@ func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.
 		detailViewport:   newDetailViewport(),
 		artifactPreview:  newArtifactPreviewViewport(),
 		progressByRun:    map[string][]string{},
+		streamByRun:      map[string][]taskexecutor.StreamEvent{},
 		sessionByRun:     map[string]string{},
 		autoScrollDetail: true,
 	}
