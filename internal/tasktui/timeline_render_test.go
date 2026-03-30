@@ -12,6 +12,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,6 +69,136 @@ func TestProgressLinesTruncateLongMessagesInsteadOfWrapping(t *testing.T) {
 	stripped := ansi.Strip(lines[0])
 	assert.NotContains(t, stripped, "\n")
 	assert.Contains(t, stripped, "…")
+}
+
+func TestDetailScreenRendersStructuredProgressEvents(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	now := time.Now().UTC()
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusRunning,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: now}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.screen = ScreenRunning
+	model.handleEvent(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "implement",
+		Progress: &taskruntime.ProgressInfo{
+			SessionID: "thread-123",
+			Events: []taskexecutor.StreamEvent{
+				{
+					Kind: taskexecutor.StreamEventKindPlan,
+					Plan: &taskexecutor.PlanSnapshot{PlanID: "plan-1", Steps: []taskexecutor.PlanStep{
+						{Text: "Inspect repo", Status: "completed"},
+						{Text: "Update file", Status: "pending"},
+					}},
+				},
+				{
+					Kind: taskexecutor.StreamEventKindTool,
+					Tool: &taskexecutor.ToolCall{
+						CallID:       "tool-1",
+						Kind:         taskexecutor.ToolKindEdit,
+						Status:       taskexecutor.ToolStatusCompleted,
+						InputSummary: "/tmp/project/sample.txt",
+					},
+				},
+				{
+					Kind: taskexecutor.StreamEventKindMessage,
+					Message: &taskexecutor.MessagePart{
+						Role: taskexecutor.MessageRoleAssistant,
+						Type: taskexecutor.MessagePartTypeText,
+						Text: "Updated sample.txt and wrote notes.",
+					},
+				},
+			},
+		},
+	})
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "thread: thread-123")
+	assert.Contains(t, view, "plan: 1/2 complete, next Update file")
+	assert.Contains(t, view, "✓ edit  /tmp/project/sample.txt")
+	assert.NotContains(t, view, "edit done")
+	assert.Contains(t, view, "assistant: Updated sample.txt and wrote notes.")
+}
+
+func TestDetailScreenPreservesCodexBaselineLabels(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	now := time.Now().UTC()
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusRunning,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: now}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.screen = ScreenRunning
+	model.handleEvent(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "implement",
+		Progress: &taskruntime.ProgressInfo{
+			SessionID: "thread-123",
+			Events: []taskexecutor.StreamEvent{
+				{
+					Kind: taskexecutor.StreamEventKindPlan,
+					Plan: &taskexecutor.PlanSnapshot{PlanID: "plan-1", Steps: []taskexecutor.PlanStep{
+						{Text: "planning changes", Status: "completed"},
+						{Text: "editing files", Status: "pending"},
+					}},
+				},
+				{
+					Kind: taskexecutor.StreamEventKindTool,
+					Tool: &taskexecutor.ToolCall{
+						CallID:       "tool-1",
+						Kind:         taskexecutor.ToolKindShell,
+						Name:         "command_execution",
+						Status:       taskexecutor.ToolStatusCompleted,
+						InputSummary: "/bin/zsh -lc 'go test ./...'",
+					},
+				},
+				{
+					Kind: taskexecutor.StreamEventKindTool,
+					Tool: &taskexecutor.ToolCall{
+						CallID:       "tool-2",
+						Kind:         taskexecutor.ToolKindFileChange,
+						Name:         "file_change",
+						Status:       taskexecutor.ToolStatusCompleted,
+						InputSummary: "A artifact.md",
+					},
+				},
+				{
+					Kind: taskexecutor.StreamEventKindMessage,
+					Message: &taskexecutor.MessagePart{
+						Role: taskexecutor.MessageRoleAssistant,
+						Type: taskexecutor.MessagePartTypeText,
+						Text: "wrapping up",
+					},
+				},
+			},
+		},
+	})
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "plan: 1/2 complete, next editing files")
+	assert.Contains(t, view, "✓ shell  /bin/zsh -lc 'go test ./...'")
+	assert.Contains(t, view, "✓ files  A artifact.md")
+	assert.Contains(t, view, "assistant: wrapping up")
+	assert.NotContains(t, view, "command execution")
+	assert.NotContains(t, view, "other")
 }
 
 func TestCompletedDetailShowsThreadIDWithoutOldStreamMessages(t *testing.T) {

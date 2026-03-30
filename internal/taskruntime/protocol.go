@@ -3,6 +3,7 @@ package taskruntime
 import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 )
 
 type CommandType string
@@ -57,6 +58,7 @@ type RunEvent struct {
 type ProgressInfo struct {
 	Message   string
 	SessionID string
+	Events    []taskexecutor.StreamEvent
 }
 
 type RunError struct {

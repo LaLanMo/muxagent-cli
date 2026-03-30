@@ -189,7 +189,7 @@ func (s *Service) handleNodeProgress(ctx context.Context, task taskdomain.Task, 
 			return err
 		}
 	}
-	if item.Message == "" && item.SessionID == "" {
+	if item.Message == "" && item.SessionID == "" && len(item.Events) == 0 {
 		return nil
 	}
 	s.publish(RunEvent{
@@ -200,6 +200,7 @@ func (s *Service) handleNodeProgress(ctx context.Context, task taskdomain.Task, 
 		Progress: &ProgressInfo{
 			Message:   item.Message,
 			SessionID: item.SessionID,
+			Events:    append([]taskexecutor.StreamEvent(nil), item.Events...),
 		},
 	})
 	return nil

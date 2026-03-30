@@ -25,6 +25,7 @@ type Request struct {
 type Progress struct {
 	Message   string
 	SessionID string
+	Events    []StreamEvent
 }
 
 type ResultKind string

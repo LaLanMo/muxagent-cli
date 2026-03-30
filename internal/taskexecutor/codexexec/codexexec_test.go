@@ -34,11 +34,11 @@ func TestExecutorParsesResultAndProgress(t *testing.T) {
 	assert.Equal(t, "thread-123", progress[0].SessionID)
 	assert.Empty(t, progress[0].Message)
 	assert.Equal(t, []string{
-		`{"type":"item.started","message":"planning changes"}`,
-		`{"type":"item.updated","message":"editing files"}`,
-		`{"type":"item.updated","message":"running tests"}`,
-		`{"type":"item.completed","message":"writing artifact"}`,
-		`{"type":"item.completed","message":"wrapping up"}`,
+		"plan: 0/3 complete, next planning changes",
+		"plan: 1/3 complete, next editing files",
+		"shell: /bin/zsh -lc 'go test ./...'",
+		"files: A artifact.md",
+		"assistant: wrapping up",
 	}, []string{
 		progress[1].Message,
 		progress[2].Message,
@@ -122,7 +122,7 @@ func TestExecutorHandlesVeryLargeJSONLMessages(t *testing.T) {
 	assert.Equal(t, "thread-123", progress[0].SessionID)
 	assert.Greater(t, len(progress[1].Message), 1024*1024)
 	assert.Contains(t, progress[1].Message, `"type":"response_item"`)
-	assert.Contains(t, progress[2].Message, `"type":"item.completed"`)
+	assert.Equal(t, "assistant: after huge event", progress[2].Message)
 }
 
 func TestExecutorWithoutClarificationGeneratesResultOnlySchema(t *testing.T) {
@@ -266,23 +266,39 @@ func TestExecutorFailsWhenResumeSwitchesToDifferentThread(t *testing.T) {
 }
 
 func TestParseJSONLLineUsesRawStreamingJSONLLines(t *testing.T) {
-	message, sessionID, errorMessage, err := parseJSONLLine([]byte(`{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[{"path":"/tmp/project/hello.txt","kind":"add"}],"status":"completed"}}`))
+	line, err := parseJSONLLine([]byte(`{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[{"path":"/tmp/project/hello.txt","kind":"add"}],"status":"completed"}}`))
 	require.NoError(t, err)
-	assert.Equal(t, `{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[{"path":"/tmp/project/hello.txt","kind":"add"}],"status":"completed"}}`, message)
-	assert.Empty(t, sessionID)
-	assert.Empty(t, errorMessage)
+	assert.Equal(t, "files: A hello.txt", line.Message)
+	assert.Empty(t, line.SessionID)
+	assert.Empty(t, line.ErrorMessage)
+	require.Len(t, line.Events, 1)
+	require.NotNil(t, line.Events[0].Tool)
+	assert.Equal(t, taskexecutor.ToolKindFileChange, line.Events[0].Tool.Kind)
 
-	message, sessionID, errorMessage, err = parseJSONLLine([]byte(`{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'pwd && ls'","status":"in_progress"}}`))
+	line, err = parseJSONLLine([]byte(`{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[{"path":"/tmp/project/hello.txt","kind":"add"},{"path":"/tmp/project/footer.go","kind":"update"},{"path":"/tmp/project/old.txt","kind":"delete"}],"status":"completed"}}`))
 	require.NoError(t, err)
-	assert.Equal(t, `{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'pwd && ls'","status":"in_progress"}}`, message)
-	assert.Empty(t, sessionID)
-	assert.Empty(t, errorMessage)
+	assert.Equal(t, "files: A hello.txt, M footer.go, D old.txt", line.Message)
+	require.Len(t, line.Events, 1)
+	require.NotNil(t, line.Events[0].Tool)
+	assert.Equal(t, "A hello.txt, M footer.go, D old.txt", line.Events[0].Tool.InputSummary)
 
-	message, sessionID, errorMessage, err = parseJSONLLine([]byte(`{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"kind\":\"result\",\"result\":{\"file_paths\":[\"/tmp/hello.txt\"]},\"clarification\":null}"}}`))
+	line, err = parseJSONLLine([]byte(`{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'pwd && ls'","status":"in_progress"}}`))
 	require.NoError(t, err)
-	assert.Equal(t, `{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"kind\":\"result\",\"result\":{\"file_paths\":[\"/tmp/hello.txt\"]},\"clarification\":null}"}}`, message)
-	assert.Empty(t, sessionID)
-	assert.Empty(t, errorMessage)
+	assert.Equal(t, "shell running: /bin/zsh -lc 'pwd && ls'", line.Message)
+	assert.Empty(t, line.SessionID)
+	assert.Empty(t, line.ErrorMessage)
+	require.Len(t, line.Events, 1)
+	require.NotNil(t, line.Events[0].Tool)
+	assert.Equal(t, taskexecutor.ToolKindShell, line.Events[0].Tool.Kind)
+
+	line, err = parseJSONLLine([]byte(`{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"kind\":\"result\",\"result\":{\"summary\":\"all done\",\"file_paths\":[\"/tmp/hello.txt\"]},\"clarification\":null}"}}`))
+	require.NoError(t, err)
+	assert.Equal(t, "assistant: all done", line.Message)
+	assert.Empty(t, line.SessionID)
+	assert.Empty(t, line.ErrorMessage)
+	require.Len(t, line.Events, 1)
+	require.NotNil(t, line.Events[0].Message)
+	assert.Equal(t, "all done", line.Events[0].Message.Text)
 }
 
 func requestFixture(artifactDir string) taskexecutor.Request {
@@ -364,12 +380,12 @@ done
 
 	case "${FAKE_CODEX_MODE:-result}" in
 	  result)
-	    echo '{"type":"thread.started","thread_id":"thread-123"}'
-	    echo '{"type":"item.started","message":"planning changes"}'
-	    echo '{"type":"item.updated","message":"editing files"}'
-	    echo '{"type":"item.updated","message":"running tests"}'
-	    echo '{"type":"item.completed","message":"writing artifact"}'
-	    echo '{"type":"item.completed","message":"wrapping up"}'
+	    printf '%s\n' '{"type":"thread.started","thread_id":"thread-123"}'
+	    printf '%s\n' '{"type":"item.started","item":{"id":"item_0","type":"todo_list","items":[{"text":"planning changes","completed":false},{"text":"editing files","completed":false},{"text":"running tests","completed":false}],"status":"in_progress"}}'
+	    printf '%s\n' '{"type":"item.updated","item":{"id":"item_0","type":"todo_list","items":[{"text":"planning changes","completed":true},{"text":"editing files","completed":false},{"text":"running tests","completed":false}],"status":"in_progress"}}'
+	    printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc '\''go test ./...'\''","aggregated_output":"ok\n","exit_code":0,"status":"completed"}}'
+	    printf '%s\n' '{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/tmp/artifact.md","kind":"add"}],"status":"completed"}}'
+	    printf '%s\n' '{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"wrapping up"}}'
 	    printf '%s\n' '{"kind":"result","result":{"file_paths":["/tmp/artifact.md"]},"clarification":null}' > "$output"
 	    ;;
 	  clarification)
@@ -398,7 +414,7 @@ done
 import json
 blob = "x" * (1024 * 1024 + 32768)
 print(json.dumps({"type":"response_item","payload":{"type":"reasoning","encrypted_content":blob}}, separators=(',', ':')))
-print(json.dumps({"type":"item.completed","message":"after huge event"}, separators=(',', ':')))
+print(json.dumps({"type":"item.completed","item":{"id":"item_9","type":"agent_message","text":"after huge event"}}, separators=(',', ':')))
 PY
     printf '%s\n' '{"kind":"result","result":{"file_paths":["/tmp/artifact.md"]},"clarification":null}' > "$output"
     ;;
