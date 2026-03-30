@@ -76,6 +76,45 @@ func collectEvents(ch <-chan appwire.Event, timeout time.Duration) []appwire.Eve
 	}
 }
 
+func collectEventsUntil(ch <-chan appwire.Event, timeout time.Duration, done func([]appwire.Event) bool) []appwire.Event {
+	var events []appwire.Event
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	for {
+		if done != nil && done(events) {
+			return events
+		}
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return events
+			}
+			events = append(events, ev)
+		case <-deadline.C:
+			return events
+		}
+	}
+}
+
+func countEvents(events []appwire.Event, eventType appwire.EventType) int {
+	count := 0
+	for _, ev := range events {
+		if ev.Type == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}, timeout, 25*time.Millisecond, "expected file %s", path)
+}
+
 func newTestClient(t *testing.T, bin string) *acp.Client {
 	t.Helper()
 	client := acp.NewClient(acp.Config{
@@ -199,21 +238,17 @@ func TestClient_PromptStreamsEvents(t *testing.T) {
 	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
-	// Start collecting events before prompt
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 5*time.Second)
-	}()
-
 	stopReason, _, err := client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 		{Type: "text", Text: "hello"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "end_turn", stopReason)
 
-	// Give events time to propagate, then collect
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 5*time.Second, func(events []appwire.Event) bool {
+		return countEvents(events, appwire.EventMessageDelta) >= 3 &&
+			countEvents(events, appwire.EventToolCompleted) >= 1 &&
+			countEvents(events, appwire.EventReasoning) >= 1
+	})
 
 	// Verify we got the expected event types
 	typeMap := make(map[appwire.EventType]int)
@@ -273,18 +308,17 @@ func TestClient_PromptStreamsLocationsOnlyToolUpdate(t *testing.T) {
 	resp, err := client.NewSession(ctx, "/tmp", "")
 	require.NoError(t, err)
 
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 5*time.Second)
-	}()
-
 	_, _, err = client.Prompt(ctx, resp.SessionID, []domain.ContentBlock{
 		{Type: "text", Text: "show location update"},
 	})
 	require.NoError(t, err)
 
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 5*time.Second, func(events []appwire.Event) bool {
+		locationUpdate := findToolEvent(events, appwire.EventToolUpdated, func(tool *appwire.ToolEvent) bool {
+			return len(tool.App.Locations) == 1 && tool.App.Locations[0].Path == "/tmp/output.txt"
+		})
+		return locationUpdate != nil && countEvents(events, appwire.EventToolCompleted) >= 1
+	})
 	locationUpdate := findToolEvent(events, appwire.EventToolUpdated, func(tool *appwire.ToolEvent) bool {
 		return len(tool.App.Locations) == 1 && tool.App.Locations[0].Path == "/tmp/output.txt"
 	})
@@ -406,18 +440,12 @@ func TestClient_LoadSessionReplaysHistory(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Start collecting events before load
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 3*time.Second)
-	}()
-
 	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
 	require.NoError(t, err)
 
-	// Give events time to propagate
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 3*time.Second, func(events []appwire.Event) bool {
+		return countEvents(events, appwire.EventHistoryComplete) >= 1
+	})
 
 	// Verify replayed events
 	typeMap := make(map[appwire.EventType]int)
@@ -480,8 +508,15 @@ func TestClient_LoadSessionFailsWithoutHistoryCompleteWhenAgentExitsDuringReplay
 
 func TestClient_LoadSessionRejectsConcurrentReplay(t *testing.T) {
 	bin := buildMockAgent(t)
+	barrierDir := t.TempDir()
+	readyFile := filepath.Join(barrierDir, "load.ready")
+	releaseFile := filepath.Join(barrierDir, "load.release")
 	client := newTestClientWithEnv(t, bin, map[string]string{
-		"MOCKAGENT_LOAD_DELAY_MS": "250",
+		"MOCKAGENT_LOAD_READY_FILE":   readyFile,
+		"MOCKAGENT_LOAD_RELEASE_FILE": releaseFile,
+	})
+	t.Cleanup(func() {
+		_ = os.WriteFile(releaseFile, []byte("release"), 0o644)
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -492,12 +527,13 @@ func TestClient_LoadSessionRejectsConcurrentReplay(t *testing.T) {
 		_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
 		firstDone <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
+	waitForFile(t, readyFile, 5*time.Second)
 
 	_, err := client.LoadSession(ctx, "test-session-002", "/tmp", "", "")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "session/load already in progress")
 
+	require.NoError(t, os.WriteFile(releaseFile, []byte("release"), 0o644))
 	require.NoError(t, <-firstDone)
 }
 
@@ -510,16 +546,12 @@ func TestClient_LoadSessionReplaysCompletedToolCallWithDiff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 3*time.Second)
-	}()
-
 	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
 	require.NoError(t, err)
 
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 3*time.Second, func(events []appwire.Event) bool {
+		return countEvents(events, appwire.EventHistoryComplete) >= 1
+	})
 
 	completed := findToolEvent(events, appwire.EventToolCompleted, func(tool *appwire.ToolEvent) bool {
 		return tool.App.CallID == "hist-tool-edit-1"
@@ -541,16 +573,12 @@ func TestClient_LoadSessionReplaysClaudeStyleEditDiffAcrossPendingAndCompletedUp
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 3*time.Second)
-	}()
-
 	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
 	require.NoError(t, err)
 
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 3*time.Second, func(events []appwire.Event) bool {
+		return countEvents(events, appwire.EventHistoryComplete) >= 1
+	})
 
 	started := findToolEvent(events, appwire.EventToolStarted, func(tool *appwire.ToolEvent) bool {
 		return tool.App.CallID == "hist-tool-edit-1"
@@ -581,16 +609,12 @@ func TestClient_LoadSessionReplaysClaudeStyleReadOutput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 3*time.Second)
-	}()
-
 	_, err := client.LoadSession(ctx, "test-session-001", "/tmp", "", "")
 	require.NoError(t, err)
 
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 3*time.Second, func(events []appwire.Event) bool {
+		return countEvents(events, appwire.EventHistoryComplete) >= 1
+	})
 
 	completed := findToolEvent(events, appwire.EventToolCompleted, func(tool *appwire.ToolEvent) bool {
 		return tool.App.CallID == "hist-tool-read-1"
@@ -609,17 +633,13 @@ func TestClient_LoadSessionFallsBackToRuntimeModeWhenSetModeFails(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 3*time.Second)
-	}()
-
 	resp, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
 	require.NoError(t, err)
 	assert.Equal(t, "default", findCurrentValue(resp.ConfigOptions, "mode"))
 
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 3*time.Second, func(events []appwire.Event) bool {
+		return countEvents(events, appwire.EventHistoryComplete) >= 1
+	})
 	modeEvent := findEvent(events, appwire.EventModeChanged)
 	require.NotNil(t, modeEvent)
 	assert.Equal(t, "default", eventCurrentModeID(modeEvent))
@@ -632,17 +652,13 @@ func TestClient_LoadSessionReturnsRequestedModeWhenSetModeSucceeds(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	done := make(chan []appwire.Event, 1)
-	go func() {
-		done <- collectEvents(client.Events(), 3*time.Second)
-	}()
-
 	resp, err := client.LoadSession(ctx, "test-session-001", "/tmp", domain.ModeAcceptEdits, "")
 	require.NoError(t, err)
 	assert.Equal(t, domain.ModeAcceptEdits, findCurrentValue(resp.ConfigOptions, "mode"))
 
-	time.Sleep(200 * time.Millisecond)
-	events := <-done
+	events := collectEventsUntil(client.Events(), 3*time.Second, func(events []appwire.Event) bool {
+		return countEvents(events, appwire.EventHistoryComplete) >= 1
+	})
 	modeEvent := findEvent(events, appwire.EventModeChanged)
 	require.NotNil(t, modeEvent)
 	assert.Equal(t, domain.ModeAcceptEdits, eventCurrentModeID(modeEvent))

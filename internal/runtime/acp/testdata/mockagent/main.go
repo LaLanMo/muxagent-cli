@@ -110,6 +110,27 @@ func setCurrentModelValue(model string) {
 	currentModel = model
 }
 
+func signalFile(path string) {
+	if path == "" {
+		return
+	}
+	_ = os.WriteFile(path, []byte("ready"), 0o644)
+}
+
+func waitForFile(path string) {
+	if path == "" {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		<-ticker.C
+	}
+}
+
 func modeConfigOption(mode string) map[string]any {
 	return map[string]any{
 		"id":           "mode",
@@ -433,6 +454,9 @@ func main() {
 					"rawOutput":     map[string]any{"output": "historical output"},
 				})
 			}
+
+			signalFile(os.Getenv("MOCKAGENT_LOAD_READY_FILE"))
+			waitForFile(os.Getenv("MOCKAGENT_LOAD_RELEASE_FILE"))
 
 			mode := currentModeValue()
 			model := currentModelValue()

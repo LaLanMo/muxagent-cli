@@ -1662,10 +1662,10 @@ func joinAllRuntimeFixture() *taskconfig.Config {
 			},
 		},
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
-			"start": artifactAgentNode(),
-			"left":  artifactAgentNode(),
-			"right": artifactAgentNode(),
-			"join":  artifactAgentNode(),
+			"start": artifactAgentNodeWithPrompt("./prompts/start.md"),
+			"left":  artifactAgentNodeWithPrompt("./prompts/left.md"),
+			"right": artifactAgentNodeWithPrompt("./prompts/right.md"),
+			"join":  artifactAgentNodeWithPrompt("./prompts/join.md"),
 			"end":   {Type: taskconfig.NodeTypeTerminal},
 		},
 	}
@@ -1697,9 +1697,9 @@ func parallelTerminalFixture() *taskconfig.Config {
 			},
 		},
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
-			"start":     artifactAgentNode(),
-			"left":      artifactAgentNode(),
-			"right":     artifactAgentNode(),
+			"start":     artifactAgentNodeWithPrompt("./prompts/start.md"),
+			"left":      artifactAgentNodeWithPrompt("./prompts/left.md"),
+			"right":     artifactAgentNodeWithPrompt("./prompts/right.md"),
 			"end_left":  {Type: taskconfig.NodeTypeTerminal},
 			"end_right": {Type: taskconfig.NodeTypeTerminal},
 		},
@@ -1756,10 +1756,10 @@ func reviewLoopLimitFixture() *taskconfig.Config {
 			},
 		},
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
-			"draft_plan": artifactAgentNode(),
+			"draft_plan": artifactAgentNodeWithPrompt("./prompts/draft_plan.md"),
 			"review_plan": {
 				Type:         taskconfig.NodeTypeAgent,
-				SystemPrompt: "./prompts/node.md",
+				SystemPrompt: "./prompts/review_plan.md",
 				ResultSchema: taskconfig.JSONSchema{
 					Type:                 "object",
 					AdditionalProperties: &deny,

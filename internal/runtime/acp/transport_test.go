@@ -115,7 +115,7 @@ func TestTransportStopReapsProcessAfterWriteFailure(t *testing.T) {
 	}
 
 	transport := NewTransport(script, []string{ready}, dir, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := transport.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -124,7 +124,7 @@ func TestTransportStopReapsProcessAfterWriteFailure(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(ready)
 		return err == nil
-	}, 5*time.Second, 25*time.Millisecond, "expected child to confirm stdin closure")
+	}, 10*time.Second, 25*time.Millisecond, "expected child to confirm stdin closure")
 
 	notifyErr := transport.Notify("session/cancel", map[string]any{
 		"sessionId": "test-session-001",

@@ -76,7 +76,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assert.Equal(t, "done", view.CurrentNodeName)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":  1,
+					"draft_plan":   1,
 					"review_plan":  1,
 					"approve_plan": 1,
 					"implement":    1,
@@ -120,7 +120,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 3)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan": 1,
+					"draft_plan":  1,
 					"review_plan": 1,
 					"done":        1,
 				})
@@ -154,7 +154,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 7)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan": 1,
+					"draft_plan":  1,
 					"review_plan": 1,
 					"implement":   2,
 					"verify":      2,
@@ -190,7 +190,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 11)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":       2,
+					"draft_plan":        2,
 					"review_plan":       2,
 					"implement":         2,
 					"verify":            2,
@@ -223,7 +223,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 6)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":  1,
+					"draft_plan":   1,
 					"review_plan":  1,
 					"approve_plan": 1,
 					"implement":    1,
@@ -242,21 +242,13 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, "Reject once")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.send(t, "\x1b[B")
-				session.pause(300 * time.Millisecond)
-				session.send(t, "\t")
-				session.pause(300 * time.Millisecond)
-				session.send(t, "Need more detail")
-				session.pause(750 * time.Millisecond)
-				session.send(t, "\x1b")
-				session.pause(300 * time.Millisecond)
-				session.confirm(t)
-				waitForNodeRunCounts(t, session.cmd.Dir, map[string]int{
-					"draft_plan":  2,
-					"review_plan":  2,
-					"approve_plan": 2,
-				})
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+				session.sendAndWaitForAll(t, "\x1b[B", 5*time.Second, "Feedback")
+				session.sendAndWaitForAll(t, "\t", 5*time.Second, "Esc choices")
+				session.sendAndWait(t, "Need more detail", 5*time.Second)
+				session.sendAndWaitForAll(t, "\x1b", 5*time.Second, "Enter confirm")
+				session.send(t, "\r")
+				session.resetOutput()
+				session.waitForAll(t, 20*time.Second, "approve_plan", "awaiting approval")
 				session.confirm(t)
 			},
 			expectedArtifacts: []string{"01-draft_plan", "02-review_plan", "03-approve_plan", "04-draft_plan", "05-review_plan", "06-approve_plan", "07-implement", "08-verify"},
@@ -264,7 +256,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 9)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":  2,
+					"draft_plan":   2,
 					"review_plan":  2,
 					"approve_plan": 2,
 					"implement":    1,
@@ -308,7 +300,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 6)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":  1,
+					"draft_plan":   1,
 					"review_plan":  1,
 					"approve_plan": 1,
 					"implement":    1,
@@ -347,7 +339,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 8)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":  2,
+					"draft_plan":   2,
 					"review_plan":  2,
 					"approve_plan": 1,
 					"implement":    1,
@@ -404,7 +396,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 8)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":  2,
+					"draft_plan":   2,
 					"review_plan":  2,
 					"approve_plan": 1,
 					"implement":    1,
@@ -434,7 +426,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				require.Len(t, runs, 7)
 				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
 				assertNodeRunCounts(t, runs, map[string]int{
-					"draft_plan":  1,
+					"draft_plan":   1,
 					"review_plan":  1,
 					"approve_plan": 1,
 					"implement":    2,
@@ -488,6 +480,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			}
 			session := startTUISession(t, binaryPath, workDir, args...)
 			tt.drive(t, session)
+			session.waitForAll(t, 20*time.Second, "Task completed successfully")
 			task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
 
 			assert.Equal(t, tt.description, task.Description)
@@ -543,6 +536,7 @@ func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
 	session.submitNewTask(t, "Implement login")
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
+	session.waitForAll(t, 20*time.Second, "Task completed successfully")
 
 	_, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
 	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
@@ -611,18 +605,18 @@ func TestTaskTUICanCreateTasksWithDifferentConfigsInOneSession(t *testing.T) {
 	session.waitForAll(t, 5*time.Second, "New Task", "config default")
 	session.submitNewTask(t, "Default config task")
 	session.waitForAll(t, 10*time.Second, "Task completed successfully")
+	before := session.markOutput()
 	session.send(t, "\x1b")
-	session.waitForAll(t, 5*time.Second, "new task", "done Default config task")
+	session.waitForFreshAll(t, 5*time.Second, before, "new task", "done Default config task")
 
-	session.send(t, "\x1b[A")
-	session.pause(150 * time.Millisecond)
-	session.send(t, "\x1b[A")
-	session.pause(150 * time.Millisecond)
+	session.sendAndWait(t, "\x1b[A", 5*time.Second)
+	session.sendAndWait(t, "\x1b[A", 5*time.Second)
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "config default")
 	session.send(t, "\x10")
+	before = session.markOutput()
 	session.resize(t, 140, 40)
-	session.waitForAll(t, 5*time.Second, "reviewer", "runtime claude-code")
+	session.waitForFreshAll(t, 5*time.Second, before, "reviewer", "runtime claude-code")
 	session.submitNewTask(t, "Reviewer config task")
 	session.waitForAll(t, 10*time.Second, "Task completed successfully")
 	session.quit(t)
@@ -687,6 +681,7 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	session.submitNewTask(t, "Worktree-backed task")
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
+	session.waitForAll(t, 20*time.Second, "Task completed successfully")
 
 	task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
 	require.Len(t, runs, 6)
@@ -714,10 +709,8 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	restarted := startTUISession(t, binaryPath, workDir)
 	restarted.resize(t, 141, 40)
 	restarted.waitForAll(t, 10*time.Second, "done Worktree-backed task", "worktree", "new task")
-	restarted.send(t, "\x1b[B")
-	restarted.pause(150 * time.Millisecond)
-	restarted.send(t, "\x1b[B")
-	restarted.pause(150 * time.Millisecond)
+	restarted.sendAndWait(t, "\x1b[B", 5*time.Second)
+	restarted.sendAndWait(t, "\x1b[B", 5*time.Second)
 	restarted.send(t, "\r")
 	restarted.resetOutput()
 	restarted.waitForAll(t, 5*time.Second, "Task: Worktree-backed task", "done", "worktree", "✓ draft_plan")
@@ -726,8 +719,7 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	restarted.resetOutput()
 	restarted.waitForAll(t, 5*time.Second, "done Worktree-backed task", "worktree", "new task")
 	for i := 0; i < 2; i++ {
-		restarted.send(t, "\x1b[A")
-		restarted.pause(150 * time.Millisecond)
+		restarted.sendAndWait(t, "\x1b[A", 5*time.Second)
 	}
 	restarted.send(t, "\r")
 	restarted.resetOutput()
@@ -818,9 +810,9 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	session.send(t, "\x1b")
 	session.resetOutput()
 	session.waitForAll(t, 5*time.Second, "new task", "running Stay on list")
-	waitForPersistedTask(t, workDir, taskdomain.TaskStatusAwaitingUser)
+	session.resetOutput()
 	session.resize(t, 140, 40)
-	session.waitForAll(t, 5*time.Second, "new task", "Stay on list", "awaiting approval")
+	session.waitForAll(t, 5*time.Second, "Stay on list", "awaiting approval")
 
 	output := session.output()
 	assert.NotContains(t, output, "Approve this plan?")
@@ -830,7 +822,7 @@ func TestTaskTUIBackToListDoesNotAutoReopenDetail(t *testing.T) {
 	assert.Equal(t, "Stay on list", task.Description)
 	assert.Equal(t, taskdomain.TaskStatusAwaitingUser, view.Status)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"draft_plan":  1,
+		"draft_plan":   1,
 		"review_plan":  1,
 		"approve_plan": 1,
 	})
@@ -950,8 +942,8 @@ func TestTaskTUIWideTerminalCompletedArtifactsTabSwitch(t *testing.T) {
 	session.resetOutput()
 
 	// Switch back to timeline, then go back to task list
-	session.sendBacktab(t)
-	session.pause(150 * time.Millisecond)
+	session.sendAndWaitForAll(t, "\x1b[Z", 5*time.Second, "Shift+Tab artifacts", "Esc back")
+	session.resetOutput()
 	session.send(t, "\x1b")
 	session.waitForAll(t, 5*time.Second, "new task", "done Wide completed artifacts")
 
@@ -1006,8 +998,9 @@ func TestTaskTUISmallTerminalCompletedArtifactsTabSwitchAndReopen(t *testing.T) 
 	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts", "Esc back")
 	session.resetOutput()
 
+	before := session.markOutput()
 	session.send(t, "\x1b")
-	session.waitForAll(t, 5*time.Second, "new task", "done Small completed artifacts")
+	session.waitForFreshAll(t, 5*time.Second, before, "new task", "done Small completed artifacts")
 
 	// Re-open and verify footer hint
 	session.resetOutput()
@@ -1044,9 +1037,11 @@ func TestTaskTUIClarificationWithArtifactsTabSwitchReachable(t *testing.T) {
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
 	session.confirm(t)
 
-	output := session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "Shift+Tab artifacts")
-	assert.Contains(t, output, "Write your own answer")
-	assert.Contains(t, output, "Submit answers")
+	session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "Shift+Tab artifacts")
+	session.resetOutput()
+	before := session.markOutput()
+	session.resize(t, 150, 39)
+	output := session.waitForFreshAll(t, 5*time.Second, before, "Question 1/1", "Write your own answer", "Submit answers")
 	assert.NotContains(t, output, "[ ] Other")
 
 	// Switch to artifacts tab via Shift+Tab
@@ -1059,8 +1054,9 @@ func TestTaskTUIClarificationWithArtifactsTabSwitchReachable(t *testing.T) {
 	// A resize forces a full repaint so we can assert on the panel content.
 	session.resetOutput()
 	session.sendBacktab(t)
-	session.resize(t, 150, 39)
-	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts", "Question 1/1")
+	before = session.markOutput()
+	session.resize(t, 149, 39)
+	session.waitForFreshAll(t, 5*time.Second, before, "Shift+Tab artifacts", "Question 1/1")
 
 	session.quit(t)
 }
@@ -1101,9 +1097,10 @@ func TestTaskTUILongTaskDescriptionsKeepAwaitingFootersVisible(t *testing.T) {
 	session.confirm(t)
 	// Resize forces a full repaint; the incremental renderer skips
 	// unchanged right-side characters (like "Ctrl+C quit") otherwise.
+	before := session.markOutput()
 	session.resize(t, 150, 39)
 
-	session.waitForAll(t, 10*time.Second, "awaiting input", "Question 1/1", "Ctrl+C quit", "Write your own answer")
+	session.waitForFreshAll(t, 10*time.Second, before, "awaiting input", "Question 1/1", "Ctrl+C quit", "Write your own answer")
 
 	session.quit(t)
 }
@@ -1141,7 +1138,8 @@ func TestTaskTUILongTaskDescriptionsKeepFailedAndRunningFootersVisible(t *testin
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter confirm")
 
 	session.resetOutput()
-	session.confirm(t)
+	session.send(t, "\r")
+	session.resetOutput()
 	session.resize(t, 150, 39)
 
 	session.waitForAll(t, 10*time.Second, "Task failed", "Retry step", "Ctrl+C quit")
@@ -1153,14 +1151,24 @@ func TestTaskTUILongTaskDescriptionsKeepFailedAndRunningFootersVisible(t *testin
 	session.quit(t)
 }
 
-type tuiSession struct {
-	t      *testing.T
-	cmd    *exec.Cmd
-	ptmx   *os.File
-	exitCh chan error
+type tuiOutputMark struct {
+	version uint64
+	output  string
+}
 
-	bufferMu sync.Mutex
-	buffer   strings.Builder
+type tuiSession struct {
+	t        *testing.T
+	cmd      *exec.Cmd
+	ptmx     *os.File
+	waitDone chan struct{}
+
+	bufferMu     sync.Mutex
+	buffer       strings.Builder
+	outputSeq    uint64
+	outputCh     chan struct{}
+	waitMu       sync.Mutex
+	waitErr      error
+	ptyCloseOnce sync.Once
 }
 
 func startTUISession(t *testing.T, binaryPath, workDir string, args ...string) *tuiSession {
@@ -1176,16 +1184,21 @@ func startTUISession(t *testing.T, binaryPath, workDir string, args ...string) *
 	require.NoError(t, pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 140}))
 
 	session := &tuiSession{
-		t:      t,
-		cmd:    cmd,
-		ptmx:   ptmx,
-		exitCh: make(chan error, 1),
+		t:        t,
+		cmd:      cmd,
+		ptmx:     ptmx,
+		waitDone: make(chan struct{}),
+		outputCh: make(chan struct{}, 1),
 	}
 	go func() {
 		_, _ = io.Copy(session, ptmx)
 	}()
 	go func() {
-		session.exitCh <- cmd.Wait()
+		err := cmd.Wait()
+		session.waitMu.Lock()
+		session.waitErr = err
+		session.waitMu.Unlock()
+		close(session.waitDone)
 	}()
 	t.Cleanup(func() {
 		session.forceClose()
@@ -1325,8 +1338,22 @@ func runTaskTUIE2EGit(t *testing.T, dir string, name string, args ...string) {
 
 func (s *tuiSession) Write(p []byte) (int, error) {
 	s.bufferMu.Lock()
-	defer s.bufferMu.Unlock()
-	return s.buffer.Write(p)
+	n, err := s.buffer.Write(p)
+	if err == nil && n > 0 {
+		s.outputSeq++
+	}
+	s.bufferMu.Unlock()
+	if n > 0 {
+		s.signalOutput()
+	}
+	return n, err
+}
+
+func (s *tuiSession) signalOutput() {
+	select {
+	case s.outputCh <- struct{}{}:
+	default:
+	}
 }
 
 func (s *tuiSession) send(t *testing.T, input string) {
@@ -1340,38 +1367,143 @@ func (s *tuiSession) sendBacktab(t *testing.T) {
 	s.send(t, "\x1b[Z")
 }
 
-func (s *tuiSession) pause(delay time.Duration) {
-	time.Sleep(delay)
+func (s *tuiSession) sendAndWait(t *testing.T, input string, timeout time.Duration) string {
+	t.Helper()
+	before := s.markOutput()
+	s.send(t, input)
+	return s.waitForOutputChange(t, timeout, before)
+}
+
+func (s *tuiSession) sendAndWaitForAll(t *testing.T, input string, timeout time.Duration, needles ...string) string {
+	t.Helper()
+	before := s.markOutput()
+	s.send(t, input)
+	return s.waitForFreshAll(t, timeout, before, needles...)
 }
 
 func (s *tuiSession) resize(t *testing.T, cols, rows uint16) {
 	t.Helper()
 	require.NoError(t, pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}))
-	time.Sleep(150 * time.Millisecond)
 }
 
 func (s *tuiSession) confirm(t *testing.T) {
 	t.Helper()
+	before := s.markOutput()
 	s.send(t, "\r")
-	time.Sleep(250 * time.Millisecond)
+	updated, ok := s.waitForOutputChangeWithin(t, time.Second, before)
+	if !ok {
+		s.send(t, "\r")
+		return
+	}
+	if !needsSecondConfirmInput(updated.output) {
+		return
+	}
+	if _, cleared := s.waitForConfirmStateExit(t, 500*time.Millisecond, updated); cleared {
+		return
+	}
 	s.send(t, "\r")
+	_, _ = s.waitForConfirmStateExit(t, time.Second, updated)
 }
 
 func (s *tuiSession) submitNewTask(t *testing.T, description string) {
 	t.Helper()
-	time.Sleep(150 * time.Millisecond)
-	for _, r := range description {
-		s.send(t, string(r))
-		time.Sleep(10 * time.Millisecond)
-	}
-	time.Sleep(100 * time.Millisecond)
+	s.typeText(t, description)
+	before := s.markOutput()
 	s.send(t, "\t")
+	s.waitForOutputChange(t, 5*time.Second, before)
+}
+
+func (s *tuiSession) typeText(t *testing.T, value string) {
+	t.Helper()
+	runes := []rune(value)
+	for start := 0; start < len(runes); start += 8 {
+		end := start + 8
+		if end > len(runes) {
+			end = len(runes)
+		}
+		before := s.markOutput()
+		s.send(t, string(runes[start:end]))
+		s.waitForOutputChange(t, time.Second, before)
+	}
+	s.waitForOutputIdle(200 * time.Millisecond)
+}
+
+func (s *tuiSession) waitForOutputChange(t *testing.T, timeout time.Duration, before tuiOutputMark) string {
+	t.Helper()
+	output, ok := s.waitForOutputChangeWithin(t, timeout, before)
+	if ok {
+		return output.output
+	}
+	t.Fatalf("timed out waiting for output to change\nbefore:\n%s\nafter:\n%s", before.output, s.output())
+	return ""
+}
+
+func (s *tuiSession) waitForOutputChangeWithin(t *testing.T, timeout time.Duration, before tuiOutputMark) (tuiOutputMark, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		output := s.markOutput()
+		if output.version > before.version {
+			return output, true
+		}
+		if err, exited := s.exitStatus(); exited {
+			require.NoErrorf(t, err, "muxagent exited before screen changed\n%s", output.output)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if !s.waitForOutputActivity(remaining) {
+			break
+		}
+	}
+	return s.markOutput(), false
+}
+
+func (s *tuiSession) waitForFreshAll(t *testing.T, timeout time.Duration, before tuiOutputMark, needles ...string) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		output := s.markOutput()
+		if output.version <= before.version {
+			if err, exited := s.exitStatus(); exited {
+				require.NoErrorf(t, err, "muxagent exited before screen changed\n%s", output.output)
+			}
+		} else {
+			fresh := output.output
+			if strings.HasPrefix(output.output, before.output) {
+				fresh = output.output[len(before.output):]
+			}
+			allFound := true
+			for _, needle := range needles {
+				if !strings.Contains(fresh, needle) {
+					allFound = false
+					break
+				}
+			}
+			if allFound {
+				return output.output
+			}
+			if err, exited := s.exitStatus(); exited {
+				require.NoErrorf(t, err, "muxagent exited before screen stabilized\n%s", output.output)
+			}
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if !s.waitForOutputActivity(remaining) {
+			break
+		}
+	}
+	t.Fatalf("timed out waiting for fresh %q\nbefore:\n%s\nafter:\n%s", strings.Join(needles, ", "), before.output, s.output())
+	return ""
 }
 
 func (s *tuiSession) waitForAll(t *testing.T, timeout time.Duration, needles ...string) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	for {
 		output := s.output()
 		allFound := true
 		for _, needle := range needles {
@@ -1383,80 +1515,199 @@ func (s *tuiSession) waitForAll(t *testing.T, timeout time.Duration, needles ...
 		if allFound {
 			return output
 		}
-		select {
-		case err := <-s.exitCh:
+		if err, exited := s.exitStatus(); exited {
 			require.NoErrorf(t, err, "muxagent exited before screen stabilized\n%s", output)
-		default:
 		}
-		time.Sleep(50 * time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if !s.waitForOutputActivity(remaining) {
+			break
+		}
 	}
 	t.Fatalf("timed out waiting for %q\n%s", strings.Join(needles, ", "), s.output())
 	return ""
 }
 
-func (s *tuiSession) output() string {
-	s.bufferMu.Lock()
-	defer s.bufferMu.Unlock()
-	clean := ansi.Strip(s.buffer.String())
+func sanitizeTUIOutput(raw string) string {
+	clean := ansi.Strip(raw)
 	clean = strings.ReplaceAll(clean, "\r", "\n")
 	clean = strings.ReplaceAll(clean, "\x00", "")
 	return clean
 }
 
-func (s *tuiSession) resetOutput() {
+func (s *tuiSession) markOutput() tuiOutputMark {
 	s.bufferMu.Lock()
 	defer s.bufferMu.Unlock()
+	return tuiOutputMark{
+		version: s.outputSeq,
+		output:  sanitizeTUIOutput(s.buffer.String()),
+	}
+}
+
+func (s *tuiSession) output() string {
+	return s.markOutput().output
+}
+
+func (s *tuiSession) resetOutput() tuiOutputMark {
+	s.bufferMu.Lock()
 	s.buffer.Reset()
+	mark := tuiOutputMark{version: s.outputSeq}
+	s.bufferMu.Unlock()
+	return mark
+}
+
+func needsSecondConfirmInput(output string) bool {
+	return strings.Contains(output, "Approve this plan?") ||
+		strings.Contains(output, "Question ") ||
+		strings.Contains(output, "Write your own answer") ||
+		strings.Contains(output, "Submit answers") ||
+		strings.Contains(output, "Enter confirm")
+}
+
+func (s *tuiSession) waitForOutputActivity(timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-s.outputCh:
+		return true
+	case <-s.waitDone:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (s *tuiSession) waitForOutputIdle(idle time.Duration) {
+	timer := time.NewTimer(idle)
+	defer timer.Stop()
+	for {
+		select {
+		case <-s.outputCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(idle)
+		case <-s.waitDone:
+			return
+		case <-timer.C:
+			return
+		}
+	}
+}
+
+func (s *tuiSession) waitForConfirmStateExit(t *testing.T, timeout time.Duration, before tuiOutputMark) (tuiOutputMark, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		current := s.markOutput()
+		if current.version > before.version && !needsSecondConfirmInput(current.output) {
+			return current, true
+		}
+		if err, exited := s.exitStatus(); exited {
+			require.NoErrorf(t, err, "muxagent exited while confirming\n%s", current.output)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if !s.waitForOutputActivity(remaining) {
+			break
+		}
+	}
+	return s.markOutput(), false
 }
 
 func (s *tuiSession) quit(t *testing.T) {
 	t.Helper()
-	if s.cmd.ProcessState != nil && s.cmd.ProcessState.Exited() {
+	if err, exited := s.exitStatus(); exited {
+		require.NoError(t, err)
+		require.NoError(t, s.closePTY())
 		return
 	}
 	s.send(t, "\x03")
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-s.exitCh:
+	for {
+		if err, exited := s.exitStatus(); exited {
 			require.NoError(t, err)
-			require.NoError(t, s.ptmx.Close())
+			require.NoError(t, s.closePTY())
 			return
-		default:
 		}
 		if strings.Contains(s.output(), "Quit muxagent?") {
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if !s.waitForOutputActivity(remaining) {
+			break
+		}
 	}
-	if s.cmd.ProcessState == nil || !s.cmd.ProcessState.Exited() {
+	if _, exited := s.exitStatus(); !exited {
 		if strings.Contains(s.output(), "Quit muxagent?") {
+			before := s.markOutput()
 			s.send(t, "\t")
-			time.Sleep(100 * time.Millisecond)
+			_, _ = s.waitForOutputChangeWithin(t, time.Second, before)
 			s.send(t, "\r")
 		} else {
 			s.send(t, "\x03")
 		}
 	}
-	select {
-	case err := <-s.exitCh:
+	if err, exited := s.waitForExit(5 * time.Second); exited {
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	} else {
 		t.Fatalf("muxagent did not exit after Ctrl+C\n%s", s.output())
 	}
-	require.NoError(t, s.ptmx.Close())
+	require.NoError(t, s.closePTY())
 }
 
 func (s *tuiSession) forceClose() {
-	if s.ptmx != nil {
-		_ = s.ptmx.Close()
-	}
-	if s.cmd != nil && s.cmd.Process != nil && (s.cmd.ProcessState == nil || !s.cmd.ProcessState.Exited()) {
-		_ = s.cmd.Process.Kill()
-		select {
-		case <-s.exitCh:
-		case <-time.After(2 * time.Second):
+	_ = s.closePTY()
+	if s.cmd != nil && s.cmd.Process != nil {
+		if _, exited := s.exitStatus(); exited {
+			return
 		}
+		_ = s.cmd.Process.Kill()
+		if _, exited := s.waitForExit(2 * time.Second); !exited {
+		}
+	}
+}
+
+func (s *tuiSession) closePTY() error {
+	var err error
+	s.ptyCloseOnce.Do(func() {
+		if s.ptmx != nil {
+			err = s.ptmx.Close()
+			s.ptmx = nil
+		}
+	})
+	return err
+}
+
+func (s *tuiSession) exitStatus() (error, bool) {
+	select {
+	case <-s.waitDone:
+		s.waitMu.Lock()
+		defer s.waitMu.Unlock()
+		return s.waitErr, true
+	default:
+		return nil, false
+	}
+}
+
+func (s *tuiSession) waitForExit(timeout time.Duration) (error, bool) {
+	select {
+	case <-s.waitDone:
+		s.waitMu.Lock()
+		defer s.waitMu.Unlock()
+		return s.waitErr, true
+	case <-time.After(timeout):
+		return nil, false
 	}
 }
 
@@ -1493,7 +1744,7 @@ func canonicalPath(t *testing.T, path string) string {
 
 func waitForPersistedTask(t *testing.T, workDir string, want taskdomain.TaskStatus) (taskdomain.Task, []taskdomain.NodeRun, taskdomain.TaskView) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		task, runs, view, err := loadSingleTaskState(workDir)
 		if err == nil && view.Status == want {
@@ -1509,7 +1760,7 @@ func waitForPersistedTask(t *testing.T, workDir string, want taskdomain.TaskStat
 
 func waitForNodeRunCounts(t *testing.T, workDir string, want map[string]int) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		_, runs, _, err := loadSingleTaskState(workDir)
 		if err == nil {

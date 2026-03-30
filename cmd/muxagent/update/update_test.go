@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/internal/codexbin"
 	"github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -400,7 +401,7 @@ func TestEnsureBundledRuntimeSkipsDownloadWhenCompanionMatches(t *testing.T) {
 	assert.Zero(t, reqs.count("/download/v1.2.3/"+bundleAssetName))
 }
 
-func TestEnsureRuntimeSkipsCompanionSetupForCodex(t *testing.T) {
+func TestEnsureRuntimeUsesManagedCodexRuntimeWithoutDownload(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -421,6 +422,11 @@ func TestEnsureRuntimeSkipsCompanionSetupForCodex(t *testing.T) {
 	require.NoError(t, err)
 	_, err = config.SaveTo(cfg, configPath)
 	require.NoError(t, err)
+
+	managedPath, err := codexbin.ManagedPath()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(managedPath), 0o755))
+	require.NoError(t, os.WriteFile(managedPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 
 	require.NoError(t, ensureRuntime(false))
 }

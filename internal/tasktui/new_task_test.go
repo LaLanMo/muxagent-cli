@@ -17,6 +17,9 @@ import (
 )
 
 func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+
 	service := &fakeService{
 		events: make(chan taskruntime.RunEvent, 8),
 	}
