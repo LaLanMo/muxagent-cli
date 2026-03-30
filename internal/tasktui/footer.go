@@ -231,7 +231,7 @@ func (m Model) detailHint(base string) string {
 		}
 		return joinHintParts(parts...)
 	case FocusRegionArtifactFiles:
-		parts := []string{"↑↓ files"}
+		parts := []string{"↑↓ files", "c copy path"}
 		if base != "" {
 			parts = append(parts, base)
 		}
@@ -243,7 +243,7 @@ func (m Model) detailHint(base string) string {
 		}
 		return joinHintParts(parts...)
 	case FocusRegionArtifactPreview:
-		parts := []string{"↑↓ scroll"}
+		parts := []string{"↑↓ scroll", "c copy"}
 		if base != "" {
 			parts = append(parts, base)
 		}
