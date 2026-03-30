@@ -21,7 +21,7 @@ func TestLoadDefaultConfig(t *testing.T) {
 
 	assert.Equal(t, 1, cfg.Version)
 	assert.Equal(t, appconfig.RuntimeCodex, cfg.Runtime)
-	assert.Equal(t, "upsert_plan", cfg.Topology.Entry)
+	assert.Equal(t, "draft_plan", cfg.Topology.Entry)
 	assert.Len(t, cfg.Topology.Nodes, 6)
 	assert.Equal(t, NodeTypeHuman, cfg.NodeDefinitions["approve_plan"].Type)
 	assert.Equal(t, NodeTypeAgent, cfg.NodeDefinitions["verify"].Type)
@@ -109,7 +109,7 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 		{
 			name:         "default",
 			builtinID:    BuiltinIDDefault,
-			entry:        "upsert_plan",
+			entry:        "draft_plan",
 			nodeCount:    6,
 			hasApproval:  true,
 			hasImplement: true,
@@ -118,7 +118,7 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 		{
 			name:         "plan-only",
 			builtinID:    BuiltinIDPlanOnly,
-			entry:        "upsert_plan",
+			entry:        "draft_plan",
 			nodeCount:    3,
 			hasApproval:  false,
 			hasImplement: false,
@@ -127,7 +127,7 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 		{
 			name:         "autonomous",
 			builtinID:    BuiltinIDAutonomous,
-			entry:        "upsert_plan",
+			entry:        "draft_plan",
 			nodeCount:    5,
 			hasApproval:  false,
 			hasImplement: true,
@@ -136,7 +136,7 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 		{
 			name:         "yolo",
 			builtinID:    BuiltinIDYolo,
-			entry:        "upsert_plan",
+			entry:        "draft_plan",
 			nodeCount:    6,
 			hasApproval:  false,
 			hasImplement: true,
@@ -212,12 +212,12 @@ func TestLoadBuiltinAutonomousAndYoloDisableClarification(t *testing.T) {
 		{
 			name:      "autonomous",
 			builtinID: BuiltinIDAutonomous,
-			nodes:     []string{"upsert_plan", "implement", "verify"},
+			nodes:     []string{"draft_plan", "implement", "verify"},
 		},
 		{
 			name:      "yolo",
 			builtinID: BuiltinIDYolo,
-			nodes:     []string{"upsert_plan", "review_plan", "implement", "verify", "evaluate_progress"},
+			nodes:     []string{"draft_plan", "review_plan", "implement", "verify", "evaluate_progress"},
 		},
 	}
 
@@ -237,7 +237,7 @@ func TestLoadBuiltinYoloUsesDedicatedPromptSet(t *testing.T) {
 	cfg, err := LoadBuiltin(BuiltinIDYolo)
 	require.NoError(t, err)
 
-	assert.Equal(t, "./prompts/yolo_upsert_plan.md", cfg.NodeDefinitions["upsert_plan"].SystemPrompt)
+	assert.Equal(t, "./prompts/yolo_draft_plan.md", cfg.NodeDefinitions["draft_plan"].SystemPrompt)
 	assert.Equal(t, "./prompts/yolo_review_plan.md", cfg.NodeDefinitions["review_plan"].SystemPrompt)
 	assert.Equal(t, "./prompts/yolo_implement.md", cfg.NodeDefinitions["implement"].SystemPrompt)
 	assert.Equal(t, "./prompts/yolo_verify.md", cfg.NodeDefinitions["verify"].SystemPrompt)
@@ -250,7 +250,7 @@ func TestLoadBuiltinYoloUsesAggressiveIterationBudget(t *testing.T) {
 
 	assert.Equal(t, 100, cfg.Topology.MaxIterations)
 	for _, node := range cfg.Topology.Nodes {
-		if node.Name == "upsert_plan" {
+		if node.Name == "draft_plan" {
 			assert.Zero(t, node.MaxIterations)
 		}
 	}
@@ -264,8 +264,8 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 		excludes []string
 	}{
 		{
-			name: "upsert_plan",
-			path: "defaults/prompts/yolo_upsert_plan.md",
+			name: "draft_plan",
+			path: "defaults/prompts/yolo_draft_plan.md",
 			contains: []string{
 				"Do not infer progress from the iteration number alone.",
 				"Wave Goal",
@@ -783,13 +783,13 @@ func TestMaterializeWritesConfigAndPrompts(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.FileExists(t, materialized.ConfigPath)
-	assert.FileExists(t, filepath.Join(materialized.PromptDir, "upsert_plan.md"))
+	assert.FileExists(t, filepath.Join(materialized.PromptDir, "draft_plan.md"))
 	assert.FileExists(t, filepath.Join(materialized.PromptDir, "review_plan.md"))
 
 	data, err := os.ReadFile(materialized.ConfigPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "runtime: codex")
-	assert.Contains(t, string(data), "./prompts/upsert_plan.md")
+	assert.Contains(t, string(data), "./prompts/draft_plan.md")
 }
 
 func TestMaterializePreservesBundleRelativePromptSubpaths(t *testing.T) {

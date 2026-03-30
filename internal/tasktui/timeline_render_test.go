@@ -100,17 +100,17 @@ func TestDetailScreenShowsIterationLabelsForRepeatedNodeRuns(t *testing.T) {
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusDone,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunDone, StartedAt: now}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone, StartedAt: now}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone, StartedAt: now.Add(time.Minute)}},
-			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunDone, StartedAt: now.Add(2 * time.Minute)}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone, StartedAt: now.Add(2 * time.Minute)}},
 		},
 	}
 	model.screen = ScreenComplete
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "✓ upsert_plan")
-	assert.Contains(t, view, "✓ upsert_plan (#2)")
+	assert.Contains(t, view, "✓ draft_plan")
+	assert.Contains(t, view, "✓ draft_plan (#2)")
 	assert.Contains(t, view, "✓ review_plan")
 	assert.NotContains(t, view, "review_plan (#")
 }
@@ -121,10 +121,10 @@ func TestTaskListMetaUsesHashIterationSuffixForRepeatedCurrentNode(t *testing.T)
 		Status:          taskdomain.TaskStatusAwaitingUser,
 		CurrentNodeName: "approve_plan",
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", NodeName: "upsert_plan"}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", NodeName: "draft_plan"}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-2", NodeName: "review_plan"}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-3", NodeName: "approve_plan"}},
-			{NodeRun: taskdomain.NodeRun{ID: "run-4", NodeName: "upsert_plan"}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-4", NodeName: "draft_plan"}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-5", NodeName: "review_plan"}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-6", NodeName: "approve_plan"}},
 		},
@@ -203,7 +203,7 @@ func TestTaskListDelegateRendersAwaitingChipAndActionCopy(t *testing.T) {
 		Task:            taskdomain.Task{ID: "task-2", Description: "clarify task"},
 		Status:          taskdomain.TaskStatusAwaitingUser,
 		CurrentNodeType: taskconfig.NodeTypeAgent,
-		CurrentNodeName: "upsert_plan",
+		CurrentNodeName: "draft_plan",
 	})
 
 	assert.Contains(t, approval, "awaiting approval")
@@ -213,7 +213,7 @@ func TestTaskListDelegateRendersAwaitingChipAndActionCopy(t *testing.T) {
 
 	assert.Contains(t, input, "awaiting clarification")
 	assert.Contains(t, input, "clarify task")
-	assert.Contains(t, input, "upsert_plan")
+	assert.Contains(t, input, "draft_plan")
 	assert.NotContains(t, input, "awaiting approval")
 }
 

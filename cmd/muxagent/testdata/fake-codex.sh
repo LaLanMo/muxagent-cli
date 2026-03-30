@@ -73,7 +73,7 @@ write_result() {
 }
 
 case "$node_name" in
-  upsert_plan)
+  draft_plan)
     if [ "$flow" = "clarify-once" ] && [ "$count" -eq 1 ] && [ "$resume_mode" -eq 0 ]; then
       cat > "$output" <<'JSON'
 {"kind":"clarification","result":null,"clarification":{"questions":[{"question":"Which path should we take?","why_it_matters":"The plan changes based on this choice.","options":[{"label":"A","description":"Option A"},{"label":"B","description":"Option B"}],"multi_select":false}]}}
@@ -120,7 +120,7 @@ JSON
     reason="Task complete"
     next_focus=""
     if [ "$flow" = "yolo-replan-once" ] && [ "$count" -eq 1 ]; then
-      next_node="upsert_plan"
+      next_node="draft_plan"
       reason="A follow-up planning wave is still required"
       next_focus="Plan the remaining work for the next wave"
     fi

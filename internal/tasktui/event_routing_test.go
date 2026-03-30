@@ -39,9 +39,9 @@ func TestBackgroundEventsDoNotLeaveTaskList(t *testing.T) {
 		Task:            baseTask,
 		Status:          taskdomain.TaskStatusAwaitingUser,
 		CurrentNodeType: taskconfig.NodeTypeAgent,
-		CurrentNodeName: "upsert_plan",
+		CurrentNodeName: "draft_plan",
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
 		},
 	}
 	doneView := taskdomain.TaskView{
@@ -135,17 +135,17 @@ func TestBackgroundEventsDoNotLeaveTaskList(t *testing.T) {
 					Type:      taskruntime.EventInputRequested,
 					TaskID:    "task-1",
 					NodeRunID: "run-2",
-					NodeName:  "upsert_plan",
+					NodeName:  "draft_plan",
 					TaskView:  &view,
 					InputRequest: &taskruntime.InputRequest{
 						Kind:      taskruntime.InputKindClarification,
 						TaskID:    "task-1",
 						NodeRunID: "run-2",
-						NodeName:  "upsert_plan",
+						NodeName:  "draft_plan",
 					},
 				}
 			},
-			wantSnips: []string{"Implement login", "awaiting clarification", "upsert_plan"},
+			wantSnips: []string{"Implement login", "awaiting clarification", "draft_plan"},
 		},
 		{
 			name: "task completed",

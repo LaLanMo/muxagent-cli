@@ -8,17 +8,17 @@ clarification:
 
 topology:
   max_iterations: 5
-  entry: upsert_plan
+  entry: draft_plan
   nodes:
-    - name: upsert_plan
+    - name: draft_plan
       max_iterations: 5
     - name: review_plan
     - name: done
   edges:
-    - from: upsert_plan
+    - from: draft_plan
       to: review_plan
     - from: review_plan
-      to: upsert_plan
+      to: draft_plan
       when:
         field: passed
         equals: false
@@ -29,8 +29,8 @@ topology:
         equals: true
 
 node_definitions:
-  upsert_plan:
-    system_prompt: ./prompts/upsert_plan.md
+  draft_plan:
+    system_prompt: ./prompts/draft_plan.md
     max_clarification_rounds: 3
     result_schema:
       type: object

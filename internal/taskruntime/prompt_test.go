@@ -22,19 +22,19 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 		},
 		Topology: taskconfig.Topology{
 			MaxIterations: 3,
-			Entry:         "upsert_plan",
+			Entry:         "draft_plan",
 			Nodes: []taskconfig.NodeRef{
-				{Name: "upsert_plan"},
+				{Name: "draft_plan"},
 				{Name: "review_plan"},
 			},
 			Edges: []taskconfig.Edge{
-				{From: "upsert_plan", To: "review_plan"},
+				{From: "draft_plan", To: "review_plan"},
 			},
 		},
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
-			"upsert_plan": func() taskconfig.NodeDefinition {
+			"draft_plan": func() taskconfig.NodeDefinition {
 				def := artifactAgentNode()
-				def.SystemPrompt = "./prompts/upsert_plan.md"
+				def.SystemPrompt = "./prompts/draft_plan.md"
 				return def
 			}(),
 			"review_plan": func() taskconfig.NodeDefinition {
@@ -45,7 +45,7 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 		},
 	}
 	configPath := writeOverrideConfig(t, cfg)
-	promptPath := filepath.Join(filepath.Dir(configPath), "prompts", "upsert_plan.md")
+	promptPath := filepath.Join(filepath.Dir(configPath), "prompts", "draft_plan.md")
 	template := strings.Join([]string{
 		"Task request:",
 		"{{TASK_DESCRIPTION}}",
@@ -64,7 +64,7 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 	runs := []taskdomain.NodeRun{
 		{
 			ID:       "upsert-1",
-			NodeName: "upsert_plan",
+			NodeName: "draft_plan",
 			Status:   taskdomain.NodeRunDone,
 			Result: map[string]interface{}{
 				"file_paths": []interface{}{"/tmp/plan-v1.md"},
@@ -81,7 +81,7 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 		},
 		{
 			ID:       "upsert-2",
-			NodeName: "upsert_plan",
+			NodeName: "draft_plan",
 			Status:   taskdomain.NodeRunRunning,
 		},
 	}
@@ -98,12 +98,12 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 
 	assert.Contains(t, prompt, "Create hello.txt")
 	assert.Contains(t, prompt, "\n2\n")
-	assert.Contains(t, prompt, "1. upsert_plan (#1)")
+	assert.Contains(t, prompt, "1. draft_plan (#1)")
 	assert.Contains(t, prompt, "2. review_plan (#1)")
 	assert.Contains(t, prompt, "/tmp/plan-v1.md")
 	assert.Contains(t, prompt, "/tmp/review-v1.md")
 	assert.Contains(t, prompt, "Clarification history:\n(none)")
-	assert.Less(t, strings.Index(prompt, "1. upsert_plan (#1)"), strings.Index(prompt, "2. review_plan (#1)"))
+	assert.Less(t, strings.Index(prompt, "1. draft_plan (#1)"), strings.Index(prompt, "2. review_plan (#1)"))
 	assert.Less(t, strings.Index(prompt, "/tmp/plan-v1.md"), strings.Index(prompt, "/tmp/review-v1.md"))
 }
 
@@ -118,7 +118,7 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 		excludes []string
 	}{
 		{
-			name: "upsert_plan",
+			name: "draft_plan",
 			contains: []string{
 				"Step: {{NODE_NAME}}",
 				"ArtifactDir: {{ARTIFACT_DIR}}",
@@ -204,8 +204,8 @@ func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 
 func TestBuildClarificationResumePromptUsesStableHeader(t *testing.T) {
 	run := taskdomain.NodeRun{
-		NodeName:  "upsert_plan",
-		SessionID: "thread-upsert_plan-1",
+		NodeName:  "draft_plan",
+		SessionID: "thread-draft_plan-1",
 		Clarifications: []taskdomain.ClarificationExchange{{
 			Request: taskdomain.ClarificationRequest{
 				Questions: []taskdomain.ClarificationQuestion{
@@ -230,13 +230,13 @@ func TestBuildClarificationResumePromptUsesStableHeader(t *testing.T) {
 	prompt, err := buildClarificationResumePrompt(
 		taskdomain.Task{Description: "Implement login"},
 		run,
-		"/tmp/task-artifacts/upsert-plan",
+		"/tmp/task-artifacts/draft-plan",
 		2,
 	)
 	require.NoError(t, err)
 
-	assert.Contains(t, prompt, "Step: upsert_plan")
-	assert.Contains(t, prompt, "ArtifactDir: /tmp/task-artifacts/upsert-plan")
+	assert.Contains(t, prompt, "Step: draft_plan")
+	assert.Contains(t, prompt, "ArtifactDir: /tmp/task-artifacts/draft-plan")
 	assert.Contains(t, prompt, "Iteration: 2")
 	assert.Contains(t, prompt, "Mission")
 	assert.Contains(t, prompt, "New clarification exchange")

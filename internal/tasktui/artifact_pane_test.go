@@ -426,9 +426,9 @@ func TestArtifactPaneLabelsFilesWithSourceNodeAndIteration(t *testing.T) {
 		Status:        taskdomain.TaskStatusDone,
 		ArtifactPaths: []string{firstPlan, secondPlan},
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{firstPlan}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{firstPlan}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone}},
-			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{secondPlan}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{secondPlan}},
 		},
 	}
 	model.screen = ScreenRunning
@@ -437,8 +437,8 @@ func TestArtifactPaneLabelsFilesWithSourceNodeAndIteration(t *testing.T) {
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "upsert_plan (#1)")
-	assert.Contains(t, view, "upsert_plan (#2)")
+	assert.Contains(t, view, "draft_plan (#1)")
+	assert.Contains(t, view, "draft_plan (#2)")
 }
 
 func TestMarkdownArtifactPreviewRendersMarkdownInsteadOfRawSource(t *testing.T) {

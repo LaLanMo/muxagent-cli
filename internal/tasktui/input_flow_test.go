@@ -68,7 +68,7 @@ func TestModelHandlesClarificationEvent(t *testing.T) {
 		Type:      taskruntime.EventInputRequested,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		TaskView: &taskdomain.TaskView{
 			Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 			Status: taskdomain.TaskStatusAwaitingUser,
@@ -77,7 +77,7 @@ func TestModelHandlesClarificationEvent(t *testing.T) {
 			Kind:      taskruntime.InputKindClarification,
 			TaskID:    "task-1",
 			NodeRunID: "run-1",
-			NodeName:  "upsert_plan",
+			NodeName:  "draft_plan",
 			Questions: []taskdomain.ClarificationQuestion{
 				{
 					Question:     "What should we do?",
@@ -102,9 +102,9 @@ func TestModelOpensAwaitingTaskIntoClarificationScreen(t *testing.T) {
 	view := taskdomain.TaskView{
 		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status:          taskdomain.TaskStatusAwaitingUser,
-		CurrentNodeName: "upsert_plan",
+		CurrentNodeName: "draft_plan",
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	service := &fakeService{
@@ -118,7 +118,7 @@ func TestModelOpensAwaitingTaskIntoClarificationScreen(t *testing.T) {
 				Kind:      taskruntime.InputKindClarification,
 				TaskID:    "task-1",
 				NodeRunID: "run-1",
-				NodeName:  "upsert_plan",
+				NodeName:  "draft_plan",
 				Questions: []taskdomain.ClarificationQuestion{
 					{
 						Question:     "What should we do?",
@@ -154,7 +154,7 @@ func TestClarificationMultiSelectSubmitsArrayAnswers(t *testing.T) {
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -162,7 +162,7 @@ func TestClarificationMultiSelectSubmitsArrayAnswers(t *testing.T) {
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{
 			{
 				Question:     "Which outputs should we include?",
@@ -223,7 +223,7 @@ func TestClarificationMultiSelectOtherSubmitsCustomAnswer(t *testing.T) {
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -240,7 +240,7 @@ func TestClarificationMultiSelectOtherSubmitsCustomAnswer(t *testing.T) {
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{question},
 	}
 	model.screen = ScreenClarification
@@ -321,7 +321,7 @@ func TestClarificationOtherInputIsAlwaysVisible(t *testing.T) {
 				Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 				Status: taskdomain.TaskStatusAwaitingUser,
 				NodeRuns: []taskdomain.NodeRunView{
-					{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+					{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 				},
 			}
 			model.activeTaskID = "task-1"
@@ -329,7 +329,7 @@ func TestClarificationOtherInputIsAlwaysVisible(t *testing.T) {
 				Kind:      taskruntime.InputKindClarification,
 				TaskID:    "task-1",
 				NodeRunID: "run-1",
-				NodeName:  "upsert_plan",
+				NodeName:  "draft_plan",
 				Questions: []taskdomain.ClarificationQuestion{tt.question},
 			}
 			model.screen = ScreenClarification
@@ -372,7 +372,7 @@ func TestClarificationFooterRemainsVisibleWithManyOptionsAndOtherInput(t *testin
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -380,7 +380,7 @@ func TestClarificationFooterRemainsVisibleWithManyOptionsAndOtherInput(t *testin
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{{
 			Question:     "What should we do?",
 			WhyItMatters: "Need direction",
@@ -419,7 +419,7 @@ func TestClarificationFooterDoesNotContainQuestionPanel(t *testing.T) {
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -427,7 +427,7 @@ func TestClarificationFooterDoesNotContainQuestionPanel(t *testing.T) {
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{{
 			Question:     "Which path should we take?",
 			WhyItMatters: "The plan changes based on this choice.",
@@ -461,7 +461,7 @@ func TestClarificationWithoutArtifactsDoesNotRenderArtifactLauncher(t *testing.T
 		Task:   taskdomain.Task{ID: "task-1", Description: "Need clarification"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -469,7 +469,7 @@ func TestClarificationWithoutArtifactsDoesNotRenderArtifactLauncher(t *testing.T
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{{
 			Question:     "Which path should we take?",
 			WhyItMatters: "The plan changes based on this choice.",
@@ -517,7 +517,7 @@ func TestClarificationTabReachesVisibleArtifactPane(t *testing.T) {
 		Status:        taskdomain.TaskStatusAwaitingUser,
 		ArtifactPaths: []string{artifactPath},
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{artifactPath}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{artifactPath}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
@@ -566,7 +566,7 @@ func TestClarificationCommandErrorKeepsInputVisibleAndShowsError(t *testing.T) {
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -574,7 +574,7 @@ func TestClarificationCommandErrorKeepsInputVisibleAndShowsError(t *testing.T) {
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{
 			{
 				Question:     "What should we do?",
@@ -624,9 +624,9 @@ func TestClarificationNodeStartedClearsSubmittedInputAndShowsRunningState(t *tes
 	model.current = &taskdomain.TaskView{
 		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status:          taskdomain.TaskStatusAwaitingUser,
-		CurrentNodeName: "upsert_plan",
+		CurrentNodeName: "draft_plan",
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -634,7 +634,7 @@ func TestClarificationNodeStartedClearsSubmittedInputAndShowsRunningState(t *tes
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{{Question: "What should we do?"}},
 	}
 	model.screen = ScreenClarification
@@ -644,16 +644,16 @@ func TestClarificationNodeStartedClearsSubmittedInputAndShowsRunningState(t *tes
 	runningView := taskdomain.TaskView{
 		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status:          taskdomain.TaskStatusRunning,
-		CurrentNodeName: "upsert_plan",
+		CurrentNodeName: "draft_plan",
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunRunning}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunRunning}},
 		},
 	}
 	next, _ = model.Update(taskruntime.RunEvent{
 		Type:      taskruntime.EventNodeStarted,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		TaskView:  &runningView,
 	})
 	model = next.(Model)
@@ -673,7 +673,7 @@ func TestSubmittingClarificationIgnoresUnrelatedNodeProgress(t *testing.T) {
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunRunning}},
 		},
 	}
@@ -682,7 +682,7 @@ func TestSubmittingClarificationIgnoresUnrelatedNodeProgress(t *testing.T) {
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{{Question: "What should we do?"}},
 	}
 	model.screen = ScreenClarification
@@ -929,7 +929,7 @@ func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *t
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	model.activeTaskID = "task-1"
@@ -945,7 +945,7 @@ func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *t
 		Kind:      taskruntime.InputKindClarification,
 		TaskID:    "task-1",
 		NodeRunID: "run-1",
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Questions: []taskdomain.ClarificationQuestion{question},
 	}
 	model.screen = ScreenClarification

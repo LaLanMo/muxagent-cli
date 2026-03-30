@@ -35,8 +35,8 @@ detect_node_name() {
     return
   fi
   case "$prompt" in
-    *"same upsert_plan step"*) echo "upsert_plan" ;;
-    *"Iteration "*" of planning."*) echo "upsert_plan" ;;
+    *"same draft_plan step"*) echo "draft_plan" ;;
+    *"Iteration "*" of planning."*) echo "draft_plan" ;;
     *"Iteration "*" of review."*) echo "review_plan" ;;
     *"Iteration "*" of implementation."*) echo "implement" ;;
     *"Iteration "*" of verification."*) echo "verify" ;;
@@ -96,7 +96,7 @@ write_result() {
 printf '{"type":"assistant","message":"running %s #%s","session_id":"%s"}\n' "$node_name" "$count" "$session_id"
 
 case "$node_name" in
-  upsert_plan)
+  draft_plan)
     if [ "$flow" = "clarify-once" ] && [ "$count" -eq 1 ] && [ "$resume_mode" -eq 0 ]; then
       printf '{"type":"result","subtype":"success","session_id":"%s","structured_output":{"kind":"clarification","result":null,"clarification":{"questions":[{"question":"Which path should we take?","why_it_matters":"The plan changes based on this choice.","options":[{"label":"A","description":"Option A"},{"label":"B","description":"Option B"}],"multi_select":false}]}}}\n' "$session_id"
       exit 0

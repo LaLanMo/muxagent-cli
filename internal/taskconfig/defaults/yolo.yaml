@@ -8,19 +8,19 @@ clarification:
 
 topology:
   max_iterations: 100
-  entry: upsert_plan
+  entry: draft_plan
   nodes:
-    - name: upsert_plan
+    - name: draft_plan
     - name: review_plan
     - name: implement
     - name: verify
     - name: evaluate_progress
     - name: done
   edges:
-    - from: upsert_plan
+    - from: draft_plan
       to: review_plan
     - from: review_plan
-      to: upsert_plan
+      to: draft_plan
       when:
         field: passed
         equals: false
@@ -42,10 +42,10 @@ topology:
         field: passed
         equals: true
     - from: evaluate_progress
-      to: upsert_plan
+      to: draft_plan
       when:
         field: next_node
-        equals: upsert_plan
+        equals: draft_plan
     - from: evaluate_progress
       to: done
       when:
@@ -53,8 +53,8 @@ topology:
         equals: done
 
 node_definitions:
-  upsert_plan:
-    system_prompt: ./prompts/yolo_upsert_plan.md
+  draft_plan:
+    system_prompt: ./prompts/yolo_draft_plan.md
     result_schema:
       type: object
       additionalProperties: false
@@ -125,7 +125,7 @@ node_definitions:
           type: string
           enum:
             - done
-            - upsert_plan
+            - draft_plan
         reason:
           type: string
         next_focus:

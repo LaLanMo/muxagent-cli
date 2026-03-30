@@ -36,12 +36,12 @@ func TestStoreRoundTripTaskAndNodeRuns(t *testing.T) {
 	run := taskdomain.NodeRun{
 		ID:            "run-1",
 		TaskID:        task.ID,
-		NodeName:      "upsert_plan",
+		NodeName:      "draft_plan",
 		Status:        taskdomain.NodeRunAwaitingUser,
 		SessionID:     "session-123",
 		FailureReason: "interrupted_by_user",
 		Result: map[string]interface{}{
-			"file_paths": []interface{}{"/tmp/project/.muxagent/tasks/task-1/artifacts/01-upsert_plan/plan.md"},
+			"file_paths": []interface{}{"/tmp/project/.muxagent/tasks/task-1/artifacts/01-draft_plan/plan.md"},
 		},
 		Clarifications: []taskdomain.ClarificationExchange{
 			{
@@ -139,7 +139,7 @@ func TestStoreSchemaRejectsInvalidJSONColumns(t *testing.T) {
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				tt.name,
 				task.ID,
-				"upsert_plan",
+				"draft_plan",
 				string(taskdomain.NodeRunDone),
 				nil,
 				tt.resultJSON,

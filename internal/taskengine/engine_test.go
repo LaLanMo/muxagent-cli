@@ -18,55 +18,55 @@ func TestEngineHappyPathDefaultFlow(t *testing.T) {
 	taskID := "task-1"
 	now := time.Now().UTC()
 
-	upsert := taskdomain.NodeRun{ID: "run-upsert", TaskID: taskID, NodeName: "upsert_plan", StartedAt: now, Status: taskdomain.NodeRunDone, Result: map[string]interface{}{"file_paths": []interface{}{"/tmp/plan.md"}}}
-	engine.RegisterEntryRun(taskID, upsert)
-	resolution, err := engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert}, upsert)
+	draft := taskdomain.NodeRun{ID: "run-draft", TaskID: taskID, NodeName: "draft_plan", StartedAt: now, Status: taskdomain.NodeRunDone, Result: map[string]interface{}{"file_paths": []interface{}{"/tmp/plan.md"}}}
+	engine.RegisterEntryRun(taskID, draft)
+	resolution, err := engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft}, draft)
 	require.NoError(t, err)
 	require.Len(t, resolution.Transitions, 1)
 	assert.Equal(t, "review_plan", resolution.Transitions[0].To)
 
-	review := taskdomain.NodeRun{ID: "run-review", TaskID: taskID, NodeName: "review_plan", StartedAt: now.Add(time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: upsert.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}
-	engine.RegisterTriggeredRun(taskID, review, upsert.ID)
-	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert, review}, review)
+	review := taskdomain.NodeRun{ID: "run-review", TaskID: taskID, NodeName: "review_plan", StartedAt: now.Add(time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: draft.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}
+	engine.RegisterTriggeredRun(taskID, review, draft.ID)
+	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft, review}, review)
 	require.NoError(t, err)
 	require.Len(t, resolution.Transitions, 1)
 	assert.Equal(t, "approve_plan", resolution.Transitions[0].To)
 
 	approve := taskdomain.NodeRun{ID: "run-approve", TaskID: taskID, NodeName: "approve_plan", StartedAt: now.Add(2 * time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: review.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"approved": true}}
 	engine.RegisterTriggeredRun(taskID, approve, review.ID)
-	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert, review, approve}, approve)
+	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft, review, approve}, approve)
 	require.NoError(t, err)
 	require.Len(t, resolution.Transitions, 1)
 	assert.Equal(t, "implement", resolution.Transitions[0].To)
 
 	implement := taskdomain.NodeRun{ID: "run-implement", TaskID: taskID, NodeName: "implement", StartedAt: now.Add(3 * time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: approve.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"file_paths": []interface{}{"/tmp/impl.md"}}}
 	engine.RegisterTriggeredRun(taskID, implement, approve.ID)
-	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert, review, approve, implement}, implement)
+	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft, review, approve, implement}, implement)
 	require.NoError(t, err)
 	require.Len(t, resolution.Transitions, 1)
 	assert.Equal(t, "verify", resolution.Transitions[0].To)
 
 	verify := taskdomain.NodeRun{ID: "run-verify", TaskID: taskID, NodeName: "verify", StartedAt: now.Add(4 * time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: implement.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/verify.md"}}}
 	engine.RegisterTriggeredRun(taskID, verify, implement.ID)
-	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert, review, approve, implement, verify}, verify)
+	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft, review, approve, implement, verify}, verify)
 	require.NoError(t, err)
 	require.Len(t, resolution.Transitions, 1)
 	assert.Equal(t, "done", resolution.Transitions[0].To)
 
 	done := taskdomain.NodeRun{ID: "run-done", TaskID: taskID, NodeName: "done", StartedAt: now.Add(5 * time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: verify.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{}}
 	engine.RegisterTriggeredRun(taskID, done, verify.ID)
-	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert, review, approve, implement, verify, done}, done)
+	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft, review, approve, implement, verify, done}, done)
 	require.NoError(t, err)
 	assert.True(t, resolution.TaskDone)
 }
 
-func TestEngineRejectLoopsBackToUpsertPlan(t *testing.T) {
+func TestEngineRejectLoopsBackToDraftPlan(t *testing.T) {
 	cfg, err := taskconfig.LoadDefault()
 	require.NoError(t, err)
 
 	engine := New()
 	taskID := "task-1"
-	entry := taskdomain.NodeRun{ID: "entry", TaskID: taskID, NodeName: "upsert_plan", StartedAt: time.Now().UTC(), Status: taskdomain.NodeRunDone, Result: map[string]interface{}{"file_paths": []interface{}{"/tmp/plan.md"}}}
+	entry := taskdomain.NodeRun{ID: "entry", TaskID: taskID, NodeName: "draft_plan", StartedAt: time.Now().UTC(), Status: taskdomain.NodeRunDone, Result: map[string]interface{}{"file_paths": []interface{}{"/tmp/plan.md"}}}
 	engine.RegisterEntryRun(taskID, entry)
 	resolution, err := engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{entry}, entry)
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestEngineRejectLoopsBackToUpsertPlan(t *testing.T) {
 	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{entry, review}, review)
 	require.NoError(t, err)
 	require.Len(t, resolution.Transitions, 1)
-	assert.Equal(t, "upsert_plan", resolution.Transitions[0].To)
+	assert.Equal(t, "draft_plan", resolution.Transitions[0].To)
 }
 
 func TestEngineApprovalRejectLoopIgnoresJoinOnReentry(t *testing.T) {
@@ -86,22 +86,22 @@ func TestEngineApprovalRejectLoopIgnoresJoinOnReentry(t *testing.T) {
 	taskID := "task-approval-reject"
 	now := time.Now().UTC()
 
-	upsert := taskdomain.NodeRun{ID: "run-upsert", TaskID: taskID, NodeName: "upsert_plan", StartedAt: now, Status: taskdomain.NodeRunDone, Result: map[string]interface{}{"file_paths": []interface{}{"/tmp/plan.md"}}}
-	engine.RegisterEntryRun(taskID, upsert)
-	resolution, err := engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert}, upsert)
+	draft := taskdomain.NodeRun{ID: "run-draft", TaskID: taskID, NodeName: "draft_plan", StartedAt: now, Status: taskdomain.NodeRunDone, Result: map[string]interface{}{"file_paths": []interface{}{"/tmp/plan.md"}}}
+	engine.RegisterEntryRun(taskID, draft)
+	resolution, err := engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft}, draft)
 	require.NoError(t, err)
 
-	review := taskdomain.NodeRun{ID: "run-review", TaskID: taskID, NodeName: "review_plan", StartedAt: now.Add(time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: upsert.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}
-	engine.RegisterTriggeredRun(taskID, review, upsert.ID)
-	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert, review}, review)
+	review := taskdomain.NodeRun{ID: "run-review", TaskID: taskID, NodeName: "review_plan", StartedAt: now.Add(time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: draft.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}
+	engine.RegisterTriggeredRun(taskID, review, draft.ID)
+	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft, review}, review)
 	require.NoError(t, err)
 
 	approve := taskdomain.NodeRun{ID: "run-approve", TaskID: taskID, NodeName: "approve_plan", StartedAt: now.Add(2 * time.Second), Status: taskdomain.NodeRunDone, TriggeredBy: &taskdomain.TriggeredBy{NodeRunID: review.ID, Reason: resolution.Transitions[0].Reason}, Result: map[string]interface{}{"approved": false, "feedback": "Need more detail"}}
 	engine.RegisterTriggeredRun(taskID, approve, review.ID)
-	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{upsert, review, approve}, approve)
+	resolution, err = engine.ResolveCompletion(cfg, taskID, []taskdomain.NodeRun{draft, review, approve}, approve)
 	require.NoError(t, err)
 	require.Len(t, resolution.Transitions, 1)
-	assert.Equal(t, "upsert_plan", resolution.Transitions[0].To)
+	assert.Equal(t, "draft_plan", resolution.Transitions[0].To)
 }
 
 func TestEngineJoinAllWaitsForAllTriggeredBranches(t *testing.T) {

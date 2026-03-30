@@ -85,14 +85,14 @@ func TestLongTaskDescriptionsKeepDetailFooterVisible(t *testing.T) {
 					Status:        taskdomain.TaskStatusAwaitingUser,
 					ArtifactPaths: []string{artifactPath},
 					NodeRuns: []taskdomain.NodeRunView{
-						{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunAwaitingUser}},
+						{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
 					},
 				}
 				model.currentInput = &taskruntime.InputRequest{
 					Kind:          taskruntime.InputKindClarification,
 					TaskID:        "task-1",
 					NodeRunID:     "run-1",
-					NodeName:      "upsert_plan",
+					NodeName:      "draft_plan",
 					ArtifactPaths: []string{artifactPath},
 					Questions: []taskdomain.ClarificationQuestion{{
 						Question:     "Which path should we take next?",
@@ -167,7 +167,7 @@ func TestDetailHeaderShowsWorktreeSummaryAndConnectorFreeStageStrip(t *testing.T
 	model.currentConfig = &taskconfig.Config{
 		Topology: taskconfig.Topology{
 			Nodes: []taskconfig.NodeRef{
-				{Name: "upsert_plan"},
+				{Name: "draft_plan"},
 				{Name: "review_plan"},
 				{Name: "approve_plan"},
 				{Name: "implement"},
@@ -188,7 +188,7 @@ func TestDetailHeaderShowsWorktreeSummaryAndConnectorFreeStageStrip(t *testing.T
 		CurrentNodeName: "approve_plan",
 		CurrentNodeType: taskconfig.NodeTypeHuman,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "upsert_plan", Status: taskdomain.NodeRunDone, StartedAt: now}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone, StartedAt: now}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone, StartedAt: now.Add(time.Minute)}},
 			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: now.Add(2 * time.Minute)}},
 		},
@@ -203,7 +203,7 @@ func TestDetailHeaderShowsWorktreeSummaryAndConnectorFreeStageStrip(t *testing.T
 	assert.Contains(t, header, "at approve_plan")
 	assert.Contains(t, header, "worktree")
 	assert.Contains(t, header, "config reviewer")
-	assert.Contains(t, header, "✓ upsert_plan")
+	assert.Contains(t, header, "✓ draft_plan")
 	assert.Contains(t, header, "✓ review_plan")
 	assert.Contains(t, header, "● approve_plan")
 	assert.Contains(t, header, "○ implement")

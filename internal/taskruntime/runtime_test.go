@@ -27,7 +27,7 @@ import (
 func TestServiceHappyPathCompletesDefaultFlow(t *testing.T) {
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"draft_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
 			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
 			"implement":   {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
 			"verify":      {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/verify.md"}}}},
@@ -113,7 +113,7 @@ func TestServiceAgentRunPersistsPromptInputArtifact(t *testing.T) {
 func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	executor := &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{
 					Kind: taskexecutor.ResultKindClarification,
 					Clarification: &taskdomain.ClarificationRequest{
@@ -144,9 +144,9 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	service.Dispatch(startTaskCommand(t, service, "Implement login"))
 	requested := waitForEvent(t, service.Events(), EventInputRequested)
 	require.Equal(t, InputKindClarification, requested.InputRequest.Kind)
-	upsertRequests := executor.requestsForNode("upsert_plan")
-	require.Len(t, upsertRequests, 1)
-	expectedInputPrefix := taskexecutor.AppendOutputContract(upsertRequests[0])
+	draftRequests := executor.requestsForNode("draft_plan")
+	require.Len(t, draftRequests, 1)
+	expectedInputPrefix := taskexecutor.AppendOutputContract(draftRequests[0])
 	task, err := service.store.GetTask(context.Background(), requested.TaskID)
 	require.NoError(t, err)
 	beforeRuns, err := service.store.ListNodeRunsByTask(context.Background(), requested.TaskID)
@@ -162,7 +162,7 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	requestInput := readTestFile(t, requestInputPath)
 	assert.True(t, strings.HasPrefix(requestInput, expectedInputPrefix))
 	assert.NotContains(t, requestInput, "## Prompt")
-	assert.Contains(t, requestInput, "Step: upsert_plan")
+	assert.Contains(t, requestInput, "Step: draft_plan")
 	assert.Contains(t, requestInput, "## Clarification History")
 	assert.Contains(t, requestInput, "Need a choice")
 	assert.Contains(t, requestInput, "Why it matters: Impacts plan")
@@ -185,7 +185,7 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	})
 	require.NotNil(t, resumed.TaskView)
 	assert.Equal(t, requested.TaskID, resumed.TaskID)
-	assert.Equal(t, "upsert_plan", resumed.NodeName)
+	assert.Equal(t, "draft_plan", resumed.NodeName)
 	assert.Equal(t, taskdomain.TaskStatusRunning, resumed.TaskView.Status)
 	waitForEvent(t, service.Events(), EventInputRequested)
 
@@ -193,7 +193,7 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 	require.NoError(t, err)
 	count := 0
 	for _, run := range afterRuns {
-		if run.NodeName == "upsert_plan" {
+		if run.NodeName == "draft_plan" {
 			count++
 			assert.Len(t, run.Clarifications, 1)
 			artifactPaths := taskdomain.ArtifactPaths(run.Result)
@@ -203,28 +203,28 @@ func TestServiceClarificationUsesSameNodeRun(t *testing.T) {
 			input := readTestFile(t, inputPath)
 			assert.True(t, strings.HasPrefix(input, expectedInputPrefix))
 			assert.NotContains(t, input, "## Prompt")
-			assert.Contains(t, input, "Step: upsert_plan")
+			assert.Contains(t, input, "Step: draft_plan")
 			assert.Contains(t, input, "## Clarification History")
 			assert.Contains(t, input, "\"A\"")
 		}
 	}
 	assert.Equal(t, 1, count)
 
-	upsertRequests = executor.requestsForNode("upsert_plan")
-	require.Len(t, upsertRequests, 2)
-	assert.Equal(t, appconfig.RuntimeCodex, upsertRequests[0].Runtime)
-	assert.Empty(t, upsertRequests[0].NodeRun.SessionID)
-	assert.Equal(t, appconfig.RuntimeCodex, upsertRequests[1].Runtime)
-	assert.Equal(t, upsertRequests[0].NodeRun.ID+"-session", upsertRequests[1].NodeRun.SessionID)
-	require.Len(t, upsertRequests[1].NodeRun.Clarifications, 1)
-	require.NotNil(t, upsertRequests[1].NodeRun.Clarifications[0].Response)
-	assert.Contains(t, upsertRequests[1].Prompt, "Step: upsert_plan")
-	assert.Contains(t, upsertRequests[1].Prompt, "ArtifactDir:")
-	assert.Contains(t, upsertRequests[1].Prompt, "Iteration: 1")
-	assert.Contains(t, upsertRequests[1].Prompt, "Mission")
-	assert.Contains(t, upsertRequests[1].Prompt, "Q: Need a choice")
-	assert.Contains(t, upsertRequests[1].Prompt, "User selected:")
-	assert.Contains(t, upsertRequests[1].Prompt, "Stay in the same thread context")
+	draftRequests = executor.requestsForNode("draft_plan")
+	require.Len(t, draftRequests, 2)
+	assert.Equal(t, appconfig.RuntimeCodex, draftRequests[0].Runtime)
+	assert.Empty(t, draftRequests[0].NodeRun.SessionID)
+	assert.Equal(t, appconfig.RuntimeCodex, draftRequests[1].Runtime)
+	assert.Equal(t, draftRequests[0].NodeRun.ID+"-session", draftRequests[1].NodeRun.SessionID)
+	require.Len(t, draftRequests[1].NodeRun.Clarifications, 1)
+	require.NotNil(t, draftRequests[1].NodeRun.Clarifications[0].Response)
+	assert.Contains(t, draftRequests[1].Prompt, "Step: draft_plan")
+	assert.Contains(t, draftRequests[1].Prompt, "ArtifactDir:")
+	assert.Contains(t, draftRequests[1].Prompt, "Iteration: 1")
+	assert.Contains(t, draftRequests[1].Prompt, "Mission")
+	assert.Contains(t, draftRequests[1].Prompt, "Q: Need a choice")
+	assert.Contains(t, draftRequests[1].Prompt, "User selected:")
+	assert.Contains(t, draftRequests[1].Prompt, "Stay in the same thread context")
 }
 
 func TestServicePersistsTaskConfigAlias(t *testing.T) {
@@ -233,7 +233,7 @@ func TestServicePersistsTaskConfigAlias(t *testing.T) {
 	configPath := writeOverrideConfig(t, cfg)
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"draft_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
 			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
 		},
 	})
@@ -393,10 +393,10 @@ func TestServiceStartTaskRequiresExplicitConfigIdentity(t *testing.T) {
 	}
 }
 
-func TestServiceReviewRejectLoopsBackToUpsertPlan(t *testing.T) {
+func TestServiceReviewRejectLoopsBackToDraftPlan(t *testing.T) {
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
 			},
@@ -418,24 +418,24 @@ func TestServiceReviewRejectLoopsBackToUpsertPlan(t *testing.T) {
 
 	runs, err := service.store.ListNodeRunsByTask(context.Background(), inputRequested.TaskID)
 	require.NoError(t, err)
-	upsertCount := 0
+	draftCount := 0
 	reviewCount := 0
 	for _, run := range runs {
 		switch run.NodeName {
-		case "upsert_plan":
-			upsertCount++
+		case "draft_plan":
+			draftCount++
 		case "review_plan":
 			reviewCount++
 		}
 	}
-	assert.Equal(t, 2, upsertCount)
+	assert.Equal(t, 2, draftCount)
 	assert.Equal(t, 2, reviewCount)
 }
 
 func TestServiceYoloVerifyFailureLoopsBackToImplement(t *testing.T) {
 	service := newTestServiceWithConfig(t, yoloRuntimeFixture(), &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
 			},
 			"review_plan": {
@@ -468,7 +468,7 @@ func TestServiceYoloVerifyFailureLoopsBackToImplement(t *testing.T) {
 	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"upsert_plan":       1,
+		"draft_plan":       1,
 		"review_plan":       1,
 		"implement":         2,
 		"verify":            2,
@@ -476,7 +476,7 @@ func TestServiceYoloVerifyFailureLoopsBackToImplement(t *testing.T) {
 		"done":              1,
 	})
 	assert.Equal(t, []string{
-		"upsert_plan",
+		"draft_plan",
 		"review_plan",
 		"implement",
 		"verify",
@@ -490,7 +490,7 @@ func TestServiceYoloVerifyFailureLoopsBackToImplement(t *testing.T) {
 func TestServiceYoloEvaluateProgressStartsNextPlanningWave(t *testing.T) {
 	service := newTestServiceWithConfig(t, yoloRuntimeFixture(), &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
 			},
@@ -507,7 +507,7 @@ func TestServiceYoloEvaluateProgressStartsNextPlanningWave(t *testing.T) {
 				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "summary": "wave two complete", "file_paths": []interface{}{"/tmp/verify-2.md"}}},
 			},
 			"evaluate_progress": {
-				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"next_node": "upsert_plan", "reason": "remaining daemon integration work", "next_focus": "plan the daemon integration wave", "file_paths": []interface{}{"/tmp/eval-1.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"next_node": "draft_plan", "reason": "remaining daemon integration work", "next_focus": "plan the daemon integration wave", "file_paths": []interface{}{"/tmp/eval-1.md"}}},
 				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"next_node": "done", "reason": "task complete", "next_focus": "", "file_paths": []interface{}{"/tmp/eval-2.md"}}},
 			},
 		},
@@ -526,7 +526,7 @@ func TestServiceYoloEvaluateProgressStartsNextPlanningWave(t *testing.T) {
 	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"upsert_plan":       2,
+		"draft_plan":       2,
 		"review_plan":       2,
 		"implement":         2,
 		"verify":            2,
@@ -534,12 +534,12 @@ func TestServiceYoloEvaluateProgressStartsNextPlanningWave(t *testing.T) {
 		"done":              1,
 	})
 	assert.Equal(t, []string{
-		"upsert_plan",
+		"draft_plan",
 		"review_plan",
 		"implement",
 		"verify",
 		"evaluate_progress",
-		"upsert_plan",
+		"draft_plan",
 		"review_plan",
 		"implement",
 		"verify",
@@ -551,7 +551,7 @@ func TestServiceYoloEvaluateProgressStartsNextPlanningWave(t *testing.T) {
 func TestServiceHumanNodeSubmissionCreatesAuditArtifactAndFeedsNextPrompt(t *testing.T) {
 	executor := &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
 			},
@@ -621,10 +621,10 @@ func TestServiceHumanNodeSubmissionCreatesAuditArtifactAndFeedsNextPrompt(t *tes
 	assert.Contains(t, input, "\"approved\": false")
 	assert.Contains(t, input, "\"feedback\": \"Need more detail\"")
 
-	upsertPrompts := executor.requestsForNode("upsert_plan")
-	require.Len(t, upsertPrompts, 2)
-	assert.NotContains(t, upsertPrompts[1].Prompt, outputPath)
-	assert.NotContains(t, upsertPrompts[1].Prompt, inputPath)
+	draftPrompts := executor.requestsForNode("draft_plan")
+	require.Len(t, draftPrompts, 2)
+	assert.NotContains(t, draftPrompts[1].Prompt, outputPath)
+	assert.NotContains(t, draftPrompts[1].Prompt, inputPath)
 
 	view, _, err := service.LoadTaskView(context.Background(), firstApproval.TaskID)
 	require.NoError(t, err)
@@ -683,7 +683,7 @@ func TestServicePublishesProgressAndPersistsSessionIDBeforeCompletion(t *testing
 func TestServiceRejectsCrossTaskNodeRunInput(t *testing.T) {
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
 			},
@@ -831,7 +831,7 @@ func TestServiceRejectsInvalidClarificationPayload(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			service := newTestService(t, &fakeExecutor{
 				steps: map[string][]taskexecutor.Result{
-					"upsert_plan": {
+					"draft_plan": {
 						{
 							Kind: taskexecutor.ResultKindClarification,
 							Clarification: &taskdomain.ClarificationRequest{
@@ -1062,7 +1062,7 @@ func TestServiceRetryNodeRequiresForceAfterMaxIterations(t *testing.T) {
 func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testing.T) {
 	service := newTestServiceWithConfig(t, reviewLoopLimitFixture(), &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
 			},
@@ -1080,7 +1080,7 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 
 	service.Dispatch(startTaskCommand(t, service, "loop hits limit"))
 	failed := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
-		return event.Type == EventTaskFailed && event.NodeName == "upsert_plan"
+		return event.Type == EventTaskFailed && event.NodeName == "draft_plan"
 	})
 	require.NotNil(t, failed.TaskView)
 	assert.Equal(t, taskdomain.TaskStatusFailed, failed.TaskView.Status)
@@ -1090,25 +1090,25 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	cfg, err := taskconfig.Load(taskstore.ConfigPath(service.workDir, failed.TaskID))
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"upsert_plan": 1,
+		"draft_plan": 1,
 		"review_plan": 1,
 	})
 	blockedSteps, err := taskengine.DeriveBlockedSteps(cfg, runs)
 	require.NoError(t, err)
 	require.Len(t, blockedSteps, 1)
-	blockedUpsert := blockedSteps[0]
+	blockedDraft := blockedSteps[0]
 	var review taskdomain.NodeRun
 	for _, run := range runs {
 		if run.NodeName == "review_plan" {
 			review = run
 		}
 	}
-	assert.Equal(t, "upsert_plan", blockedUpsert.NodeName)
-	assert.Equal(t, 2, blockedUpsert.Iteration)
-	assert.Contains(t, blockedUpsert.Reason, "exceeded max_iterations")
-	require.NotNil(t, blockedUpsert.TriggeredBy)
-	assert.Equal(t, review.ID, blockedUpsert.TriggeredBy.NodeRunID)
-	assert.Equal(t, "upsert_plan", failed.TaskView.CurrentNodeName)
+	assert.Equal(t, "draft_plan", blockedDraft.NodeName)
+	assert.Equal(t, 2, blockedDraft.Iteration)
+	assert.Contains(t, blockedDraft.Reason, "exceeded max_iterations")
+	require.NotNil(t, blockedDraft.TriggeredBy)
+	assert.Equal(t, review.ID, blockedDraft.TriggeredBy.NodeRunID)
+	assert.Equal(t, "draft_plan", failed.TaskView.CurrentNodeName)
 
 	err = service.continueBlockedStep(context.Background(), failed.TaskID)
 	require.NoError(t, err)
@@ -1126,16 +1126,16 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	runs, err = service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"upsert_plan": 2,
+		"draft_plan": 2,
 		"review_plan": 2,
 		"done":        1,
 	})
-	upsertRequests := service.executor.(*fakeExecutor).requestsForNode("upsert_plan")
-	require.Len(t, upsertRequests, 2)
-	lastUpsert := upsertRequests[len(upsertRequests)-1]
-	require.NotNil(t, lastUpsert.NodeRun.TriggeredBy)
-	assert.Equal(t, review.ID, lastUpsert.NodeRun.TriggeredBy.NodeRunID)
-	assert.Equal(t, taskdomain.TriggerReasonManualContinueForce, lastUpsert.NodeRun.TriggeredBy.Reason)
+	draftRequests := service.executor.(*fakeExecutor).requestsForNode("draft_plan")
+	require.Len(t, draftRequests, 2)
+	lastDraft := draftRequests[len(draftRequests)-1]
+	require.NotNil(t, lastDraft.NodeRun.TriggeredBy)
+	assert.Equal(t, review.ID, lastDraft.NodeRun.TriggeredBy.NodeRunID)
+	assert.Equal(t, taskdomain.TriggerReasonManualContinueForce, lastDraft.NodeRun.TriggeredBy.Reason)
 
 	blockedSteps, err = taskengine.DeriveBlockedSteps(cfg, runs)
 	require.NoError(t, err)
@@ -1149,7 +1149,7 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 
 	firstService, err := NewService(workDir, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-1.md")},
 			},
 			"review_plan": {
@@ -1169,7 +1169,7 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 		WorkDir:     workDir,
 	})
 	failed := waitForEventWhere(t, firstService.Events(), 5*time.Second, func(event RunEvent) bool {
-		return event.Type == EventTaskFailed && event.NodeName == "upsert_plan"
+		return event.Type == EventTaskFailed && event.NodeName == "draft_plan"
 	})
 	taskID := failed.TaskID
 	cancel()
@@ -1177,7 +1177,7 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 
 	secondService, err := NewService(workDir, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"upsert_plan": {
+			"draft_plan": {
 				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan-2.md")},
 			},
 			"review_plan": {
@@ -1193,7 +1193,7 @@ func TestBlockedStepCanBeReloadedAndContinuedAfterServiceRestart(t *testing.T) {
 	require.NotNil(t, view.CurrentIssue)
 	assert.Equal(t, taskdomain.TaskIssueBlockedStep, view.CurrentIssue.Kind)
 	require.Len(t, view.BlockedSteps, 1)
-	assert.Equal(t, "upsert_plan", view.BlockedSteps[0].NodeName)
+	assert.Equal(t, "draft_plan", view.BlockedSteps[0].NodeName)
 
 	err = secondService.continueBlockedStep(context.Background(), taskID)
 	require.NoError(t, err)
@@ -1227,7 +1227,7 @@ func TestNewServiceReconcilesStaleRunningRunsOnStartup(t *testing.T) {
 	require.NoError(t, store.SaveNodeRun(context.Background(), taskdomain.NodeRun{
 		ID:        "run-stale",
 		TaskID:    task.ID,
-		NodeName:  "upsert_plan",
+		NodeName:  "draft_plan",
 		Status:    taskdomain.NodeRunRunning,
 		StartedAt: now,
 	}))
@@ -1743,20 +1743,20 @@ func reviewLoopLimitFixture() *taskconfig.Config {
 		},
 		Topology: taskconfig.Topology{
 			MaxIterations: 3,
-			Entry:         "upsert_plan",
+			Entry:         "draft_plan",
 			Nodes: []taskconfig.NodeRef{
-				{Name: "upsert_plan", MaxIterations: 1},
+				{Name: "draft_plan", MaxIterations: 1},
 				{Name: "review_plan"},
 				{Name: "done"},
 			},
 			Edges: []taskconfig.Edge{
-				{From: "upsert_plan", To: "review_plan"},
-				{From: "review_plan", To: "upsert_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
+				{From: "draft_plan", To: "review_plan"},
+				{From: "review_plan", To: "draft_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
 				{From: "review_plan", To: "done", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: true}},
 			},
 		},
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
-			"upsert_plan": artifactAgentNode(),
+			"draft_plan": artifactAgentNode(),
 			"review_plan": {
 				Type:         taskconfig.NodeTypeAgent,
 				SystemPrompt: "./prompts/node.md",
@@ -1812,9 +1812,9 @@ func yoloRuntimeFixture() *taskconfig.Config {
 		},
 		Topology: taskconfig.Topology{
 			MaxIterations: 100,
-			Entry:         "upsert_plan",
+			Entry:         "draft_plan",
 			Nodes: []taskconfig.NodeRef{
-				{Name: "upsert_plan"},
+				{Name: "draft_plan"},
 				{Name: "review_plan"},
 				{Name: "implement"},
 				{Name: "verify"},
@@ -1822,18 +1822,18 @@ func yoloRuntimeFixture() *taskconfig.Config {
 				{Name: "done"},
 			},
 			Edges: []taskconfig.Edge{
-				{From: "upsert_plan", To: "review_plan"},
-				{From: "review_plan", To: "upsert_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
+				{From: "draft_plan", To: "review_plan"},
+				{From: "review_plan", To: "draft_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
 				{From: "review_plan", To: "implement", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: true}},
 				{From: "implement", To: "verify"},
 				{From: "verify", To: "implement", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: false}},
 				{From: "verify", To: "evaluate_progress", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "passed", Equals: true}},
-				{From: "evaluate_progress", To: "upsert_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "next_node", Equals: "upsert_plan"}},
+				{From: "evaluate_progress", To: "draft_plan", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "next_node", Equals: "draft_plan"}},
 				{From: "evaluate_progress", To: "done", When: taskconfig.EdgeCondition{Kind: taskconfig.ConditionWhen, Field: "next_node", Equals: "done"}},
 			},
 		},
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
-			"upsert_plan": artifactAgentNodeWithPrompt("./prompts/upsert_plan.md"),
+			"draft_plan": artifactAgentNodeWithPrompt("./prompts/draft_plan.md"),
 			"review_plan": {
 				Type:         taskconfig.NodeTypeAgent,
 				SystemPrompt: "./prompts/review_plan.md",
@@ -1872,7 +1872,7 @@ func yoloRuntimeFixture() *taskconfig.Config {
 					Properties: map[string]*taskconfig.JSONSchema{
 						"next_node": {
 							Type: "string",
-							Enum: []interface{}{"done", "upsert_plan"},
+							Enum: []interface{}{"done", "draft_plan"},
 						},
 						"reason":     {Type: "string"},
 						"next_focus": {Type: "string"},
