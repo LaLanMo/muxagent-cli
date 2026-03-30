@@ -906,6 +906,40 @@ func TestTaskTUISmallTerminalArtifactTabSwitching(t *testing.T) {
 	session.quit(t)
 }
 
+func TestTaskTUIArtifactFilesPaneShowsSuffixVisiblePaths(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 104, 28)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Show suffix-visible artifact rows")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab artifacts")
+
+	session.resetOutput()
+	output := session.sendAndWaitForAll(t, "\x1b[Z", 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·", "…01-draft_plan/plan-1.md")
+	assert.Contains(t, output, "…01-draft_plan/plan-1.md")
+	assert.NotContains(t, output, "Preview · 01-draft_plan/plan-1.md")
+
+	session.quit(t)
+}
+
 func TestTaskTUIApprovalArtifactsFooterAndEnterGuard(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)

@@ -564,6 +564,62 @@ func TestArtifactPaneShowsCompactFileWindow(t *testing.T) {
 	assert.Contains(t, ansi.Strip(lines[len(lines)-1]), "more file")
 }
 
+func TestArtifactDisplayPathKeepsArtifactRunDirectory(t *testing.T) {
+	workDir := t.TempDir()
+	taskPath := filepath.Join(workDir, ".muxagent", "tasks", "83c937d0-4c2b-4342-b20d-ab32733421fd", "artifacts", "01-draft_plan", "plan.md")
+	nonTaskPath := filepath.Join(workDir, "docs", "notes.md")
+
+	assert.Equal(t, ".muxagent/tasks/83c937d0/artifacts/01-draft_plan/plan.md", artifactDisplayPath(taskPath, workDir))
+	assert.Equal(t, filepath.ToSlash(filepath.Join("docs", "notes.md")), artifactDisplayPath(nonTaskPath, workDir))
+}
+
+func TestFormatArtifactFileLabel(t *testing.T) {
+	tests := []struct {
+		name  string
+		item  artifactItem
+		width int
+		want  string
+	}{
+		{
+			name:  "left truncates unlabeled path",
+			item:  artifactItem{DisplayPath: "artifacts/01-draft_plan/plan-1.md"},
+			width: 24,
+			want:  "…01-draft_plan/plan-1.md",
+		},
+		{
+			name: "keeps provenance when width allows",
+			item: artifactItem{
+				SourceLabel: "draft_plan (#1)",
+				DisplayPath: "artifacts/01-draft_plan/plan-1.md",
+			},
+			width: 42,
+			want:  "draft_plan (#1) · …01-draft_plan/plan-1.md",
+		},
+		{
+			name:  "short path stays unchanged",
+			item:  artifactItem{DisplayPath: "plan.md"},
+			width: 20,
+			want:  "plan.md",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatArtifactFileLabel(tt.item, tt.width))
+		})
+	}
+}
+
+func TestRenderArtifactFileLinesShowsSuffixVisibleSelectedRow(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	model.artifactItems = []artifactItem{{DisplayPath: "artifacts/01-draft_plan/plan-1.md"}}
+	model.artifactIndex = 0
+
+	lines := model.renderArtifactFileLines(26, 1)
+	require.Len(t, lines, 1)
+	assert.Equal(t, "> …01-draft_plan/plan-1.md", ansi.Strip(lines[0]))
+}
+
 func TestArtifactPaneLabelsFilesWithSourceNodeAndIteration(t *testing.T) {
 	tempDir := t.TempDir()
 	firstPlan := filepath.Join(tempDir, ".muxagent", "tasks", "task-1", "todo-first.md")

@@ -140,6 +140,78 @@ func artifactVisibleCapacity(total int) int {
 	return min(total, 3)
 }
 
+func formatArtifactFileLabel(item artifactItem, width int) string {
+	width = max(1, width)
+	path := artifactRowPath(item)
+	if item.SourceLabel == "" || path == "" {
+		return truncateLeftToWidth(path, width)
+	}
+
+	const separator = " · "
+	separatorWidth := ansi.StringWidth(separator)
+	minPathWidth := artifactMinimumPathWidth(path, width)
+	if minPathWidth+separatorWidth >= width {
+		return truncateLeftToWidth(path, width)
+	}
+
+	maxSourceWidth := width - minPathWidth - separatorWidth
+	if maxSourceWidth < 8 {
+		return truncateLeftToWidth(path, width)
+	}
+
+	source := ansi.Truncate(item.SourceLabel, maxSourceWidth, "…")
+	pathWidth := width - ansi.StringWidth(source) - separatorWidth
+	if pathWidth <= 0 {
+		return ansi.Truncate(item.SourceLabel, width, "…")
+	}
+	return source + separator + truncateLeftToWidth(path, pathWidth)
+}
+
+func artifactRowPath(item artifactItem) string {
+	switch {
+	case item.DisplayPath != "":
+		return item.DisplayPath
+	case item.Label != "":
+		return item.Label
+	default:
+		return item.Path
+	}
+}
+
+func artifactMinimumPathWidth(path string, width int) int {
+	essentialWidth := ansi.StringWidth(artifactEssentialPath(path))
+	fullWidth := ansi.StringWidth(path)
+	if essentialWidth < fullWidth {
+		essentialWidth++
+	}
+	return min(width, max(12, min(essentialWidth, fullWidth)))
+}
+
+func artifactEssentialPath(path string) string {
+	if idx := strings.Index(path, "/artifacts/"); idx >= 0 {
+		tail := path[idx+len("/artifacts/"):]
+		if tail != "" {
+			return tail
+		}
+	}
+	if base := path[strings.LastIndex(path, "/")+1:]; base != "" {
+		return base
+	}
+	return path
+}
+
+func truncateLeftToWidth(s string, width int) string {
+	if width <= 0 || s == "" {
+		return ""
+	}
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	const prefix = "…"
+	trimWidth := ansi.StringWidth(s) - width + ansi.StringWidth(prefix)
+	return ansi.TruncateLeft(s, trimWidth, prefix)
+}
+
 func (m Model) renderArtifactFileLines(width, rows int) []string {
 	if len(m.artifactItems) == 0 {
 		return []string{tuiTheme.Artifact.Empty.Render("No artifacts yet.")}
@@ -150,7 +222,7 @@ func (m Model) renderArtifactFileLines(width, rows int) []string {
 		lines = append(lines, tuiTheme.Artifact.Hint.Render(fmt.Sprintf("… %d earlier file(s)", start)))
 	}
 	for i := start; i < end; i++ {
-		label := ansi.Truncate(m.artifactItems[i].Label, max(10, width-2), "…")
+		label := formatArtifactFileLabel(m.artifactItems[i], max(1, width-2))
 		if i == m.artifactIndex {
 			lines = append(lines, tuiTheme.Artifact.FileActive.Render("> "+label))
 			continue

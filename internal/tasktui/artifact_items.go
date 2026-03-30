@@ -19,6 +19,7 @@ type artifactItem struct {
 	Path         string
 	SourceLabel  string
 	Label        string
+	DisplayPath  string
 	PreviewName  string
 	PreviewTitle string
 	Preview      string
@@ -75,6 +76,7 @@ func loadArtifactItem(path, workDir string) artifactItem {
 	item := artifactItem{
 		Path:         path,
 		Label:        shortenPath(path, workDir),
+		DisplayPath:  artifactDisplayPath(path, workDir),
 		PreviewName:  filepath.Base(path),
 		PreviewTitle: filepath.Base(path),
 		Markdown:     isMarkdownPreview(path),
@@ -112,6 +114,29 @@ func loadArtifactItem(path, workDir string) artifactItem {
 		item.Preview += "\n\n… Preview truncated"
 	}
 	return item
+}
+
+func artifactDisplayPath(path, workDir string) string {
+	if path == "" {
+		return ""
+	}
+	displayPath := path
+	if workDir != "" {
+		if rel, err := filepath.Rel(workDir, path); err == nil && rel != "" && !strings.HasPrefix(rel, "..") {
+			displayPath = rel
+		}
+	}
+	displayPath = filepath.ToSlash(displayPath)
+	parts := strings.Split(displayPath, "/")
+	if len(parts) >= 6 && parts[0] == ".muxagent" && parts[1] == "tasks" && parts[3] == "artifacts" {
+		taskID := parts[2]
+		if len(taskID) > 8 {
+			taskID = taskID[:8]
+		}
+		prefix := []string{".muxagent", "tasks", taskID, "artifacts"}
+		return strings.Join(append(prefix, parts[4:]...), "/")
+	}
+	return displayPath
 }
 
 func isPreviewableText(path string, data []byte) bool {
