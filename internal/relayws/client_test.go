@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,9 +33,40 @@ import (
 
 type blockingRuntime struct {
 	loadStarted chan struct{}
+	loadDone    chan struct{}
 	unblock     chan struct{}
 	runtimes    []runtimemanager.RuntimeInfo
+
+	mu          sync.Mutex
 	lastLoadCWD string
+}
+
+func signalBarrier(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func waitForBarrier(t *testing.T, ch <-chan struct{}, timeout time.Duration, description string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func requireNoSignalWithin[T any](t *testing.T, ch <-chan T, timeout time.Duration, description string) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatalf("%s completed before %v elapsed", description, timeout)
+	case <-time.After(timeout):
+	}
 }
 
 func (r *blockingRuntime) RuntimeList() []runtimemanager.RuntimeInfo {
@@ -53,11 +85,11 @@ func (r *blockingRuntime) NewSession(ctx context.Context, runtimeID, cwd string,
 }
 
 func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID, cwd, permissionMode, model string) (string, acpprotocol.LoadSessionResponse, error) {
+	r.mu.Lock()
 	r.lastLoadCWD = cwd
-	select {
-	case r.loadStarted <- struct{}{}:
-	default:
-	}
+	r.mu.Unlock()
+	signalBarrier(r.loadStarted)
+	defer signalBarrier(r.loadDone)
 
 	select {
 	case <-ctx.Done():
@@ -65,6 +97,12 @@ func (r *blockingRuntime) LoadSession(ctx context.Context, runtimeID, sessionID,
 	case <-r.unblock:
 		return runtimeID, acpprotocol.LoadSessionResponse{}, nil
 	}
+}
+
+func (r *blockingRuntime) currentLastLoadCWD() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastLoadCWD
 }
 
 func (r *blockingRuntime) ResolveSessions(ctx context.Context, runtimeID string, sessionIDs []string) ([]domain.SessionSummary, error) {
@@ -116,6 +154,7 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 	session := newSession("machine-1", key, 1)
 	rt := &blockingRuntime{
 		loadStarted: make(chan struct{}, 1),
+		loadDone:    make(chan struct{}, 1),
 		unblock:     make(chan struct{}),
 	}
 	client := &Client{
@@ -139,11 +178,7 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 		"runtime":   "claude-code",
 	})))
 
-	select {
-	case <-rt.loadStarted:
-	case <-time.After(time.Second):
-		t.Fatal("session.load did not start")
-	}
+	waitForBarrier(t, rt.loadStarted, 2*time.Second, "session.load to start")
 
 	require.NoError(t, relayConn.WriteJSON(encryptRPC(t, session, "machine-1", "msg-echo", "echo", map[string]any{
 		"message": "hello",
@@ -160,6 +195,7 @@ func TestRunProcessesRPCWhileAnotherRPCIsBlocked(t *testing.T) {
 	require.Equal(t, "hello", result["message"])
 
 	close(rt.unblock)
+	waitForBarrier(t, rt.loadDone, 2*time.Second, "session.load to finish")
 
 	msg = readEncryptedMessage(t, relayConn)
 	require.Equal(t, MessageTypeResponse, msg.Type)
@@ -1629,7 +1665,7 @@ func TestRpcLoadSessionUsesWorktreeRelativeCwdAndReturnsIt(t *testing.T) {
 		require.Empty(t, errStr)
 		load := result.(appwire.SessionLoadResult)
 		require.Equal(t, worktreeCWD, load.App.CWD)
-		require.Equal(t, worktreeCWD, runtime.lastLoadCWD)
+		require.Equal(t, worktreeCWD, runtime.currentLastLoadCWD())
 	}()
 
 	select {
@@ -1951,7 +1987,11 @@ func TestSendEventWaitsForActiveSessionPublicationBehindWriteLock(t *testing.T) 
 
 	client.writeMu.Lock()
 	errCh := make(chan error, 1)
+	ready := make(chan struct{})
 	go func() {
+		client.stateMu.RLock()
+		client.stateMu.RUnlock()
+		close(ready)
 		errCh <- client.SendEvent(appwire.Event{
 			Type:      appwire.EventRunFinished,
 			SessionID: "sid",
@@ -1962,11 +2002,10 @@ func TestSendEventWaitsForActiveSessionPublicationBehindWriteLock(t *testing.T) 
 		})
 	}()
 
-	select {
-	case err := <-errCh:
-		t.Fatalf("SendEvent returned before the handshake publication window closed: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
+	waitForBarrier(t, ready, time.Second, "SendEvent goroutine to reach call site")
+	require.Same(t, session, client.currentSession())
+	require.Nil(t, client.currentActiveSession())
+	requireNoSignalWithin(t, errCh, 100*time.Millisecond, "SendEvent while write lock held")
 
 	client.stateMu.Lock()
 	client.activeSession = session
@@ -1994,17 +2033,18 @@ func TestClearSessionWaitsForWriteLock(t *testing.T) {
 	}
 
 	client.writeMu.Lock()
+	ready := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
+		client.stateMu.RLock()
+		client.stateMu.RUnlock()
+		close(ready)
 		client.clearSession(session)
 		close(done)
 	}()
 
-	select {
-	case <-done:
-		t.Fatal("clearSession should wait for the write lock")
-	case <-time.After(100 * time.Millisecond):
-	}
+	waitForBarrier(t, ready, time.Second, "clearSession goroutine to reach call site")
+	requireNoSignalWithin(t, done, 100*time.Millisecond, "clearSession while write lock held")
 
 	require.Same(t, session, client.currentSession())
 	require.Same(t, session, client.currentActiveSession())
@@ -2031,16 +2071,17 @@ func TestDetachActiveConnectionWaitsForWriteLock(t *testing.T) {
 	}
 
 	client.writeMu.Lock()
+	ready := make(chan struct{})
 	done := make(chan *websocket.Conn, 1)
 	go func() {
+		client.stateMu.RLock()
+		client.stateMu.RUnlock()
+		close(ready)
 		done <- client.detachActiveConnection()
 	}()
 
-	select {
-	case <-done:
-		t.Fatal("detachActiveConnection should wait for the write lock")
-	case <-time.After(100 * time.Millisecond):
-	}
+	waitForBarrier(t, ready, time.Second, "detachActiveConnection goroutine to reach call site")
+	requireNoSignalWithin(t, done, 100*time.Millisecond, "detachActiveConnection while write lock held")
 
 	conn, epoch := client.currentConnection()
 	require.Same(t, clientConn, conn)
@@ -2120,7 +2161,7 @@ func TestConnectHandshakeIsolation(t *testing.T) {
 		require.Equal(t, MessageTypeChallengeResponse, resp.Type)
 		challengeRespSeen <- struct{}{}
 
-		require.NoError(t, conn.SetReadDeadline(time.Now().Add(200*time.Millisecond)))
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
 		var extra map[string]any
 		err = conn.ReadJSON(&extra)
 		require.Error(t, err)
@@ -2189,6 +2230,7 @@ func TestOldHandleRPCDoesNotWriteToNewConnection(t *testing.T) {
 	oldSession := newSession("machine-1", key, 1)
 	rt := &blockingRuntime{
 		loadStarted: make(chan struct{}, 1),
+		loadDone:    make(chan struct{}, 1),
 		unblock:     make(chan struct{}),
 	}
 	client := &Client{
@@ -2212,11 +2254,7 @@ func TestOldHandleRPCDoesNotWriteToNewConnection(t *testing.T) {
 		"runtime":   "claude-code",
 	})))
 
-	select {
-	case <-rt.loadStarted:
-	case <-time.After(time.Second):
-		t.Fatal("session.load did not start")
-	}
+	waitForBarrier(t, rt.loadStarted, 2*time.Second, "session.load to start")
 
 	require.NoError(t, client.Close())
 	select {
@@ -2232,12 +2270,8 @@ func TestOldHandleRPCDoesNotWriteToNewConnection(t *testing.T) {
 	require.NoError(t, client.installSession(newSession("machine-1", key, newEpoch)))
 
 	close(rt.unblock)
-
-	require.NoError(t, relayConn2.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
-	var msg map[string]any
-	err := relayConn2.ReadJSON(&msg)
-	require.Error(t, err)
-	require.True(t, isTimeoutErr(err), "expected timeout, got %v", err)
+	waitForBarrier(t, rt.loadDone, 2*time.Second, "session.load to finish")
+	requireNoJSONMessageWithin(t, relayConn2, time.Second)
 }
 
 func TestManyHandleRPCDoNotWriteToNewConnection(t *testing.T) {
@@ -2251,6 +2285,7 @@ func TestManyHandleRPCDoNotWriteToNewConnection(t *testing.T) {
 
 	rt := &blockingRuntime{
 		loadStarted: make(chan struct{}, rpcCount),
+		loadDone:    make(chan struct{}, rpcCount),
 		unblock:     make(chan struct{}),
 	}
 	client := &Client{
@@ -2284,11 +2319,7 @@ func TestManyHandleRPCDoNotWriteToNewConnection(t *testing.T) {
 	}
 
 	for i := 0; i < rpcCount; i++ {
-		select {
-		case <-rt.loadStarted:
-		case <-time.After(time.Second):
-			t.Fatalf("session.load %d did not start", i)
-		}
+		waitForBarrier(t, rt.loadStarted, 2*time.Second, fmt.Sprintf("session.load %d to start", i))
 	}
 
 	require.NoError(t, client.Close())
@@ -2305,12 +2336,11 @@ func TestManyHandleRPCDoNotWriteToNewConnection(t *testing.T) {
 	require.NoError(t, client.installSession(newSession("machine-1", key, newEpoch)))
 
 	close(rt.unblock)
+	for i := 0; i < rpcCount; i++ {
+		waitForBarrier(t, rt.loadDone, 2*time.Second, fmt.Sprintf("session.load %d to finish", i))
+	}
 
-	require.NoError(t, relayConn2.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
-	var msg map[string]any
-	err := relayConn2.ReadJSON(&msg)
-	require.Error(t, err)
-	require.True(t, isTimeoutErr(err), "expected timeout, got %v", err)
+	requireNoJSONMessageWithin(t, relayConn2, time.Second)
 }
 
 func TestCloseAndSendEventConcurrent(t *testing.T) {
@@ -2396,6 +2426,15 @@ func readEncryptedMessage(t *testing.T, conn *websocket.Conn) EncryptedMessage {
 	var msg EncryptedMessage
 	require.NoError(t, conn.ReadJSON(&msg))
 	return msg
+}
+
+func requireNoJSONMessageWithin(t *testing.T, conn *websocket.Conn, timeout time.Duration) {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(timeout)))
+	var msg map[string]any
+	err := conn.ReadJSON(&msg)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err), "expected timeout, got %v", err)
 }
 
 func decryptResponse(t *testing.T, session *Session, msg EncryptedMessage) map[string]any {
