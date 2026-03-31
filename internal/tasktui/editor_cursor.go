@@ -63,7 +63,7 @@ func (m Model) newTaskEditorCursorOffset() (int, int, bool) {
 	}
 	metrics := m.computeScreenMetrics()
 	header := m.renderAppHeader(metrics.innerWidth)
-	footer := renderFooterHintBar(metrics.innerWidth, m.newTaskModalHint())
+	footer := m.renderNewTaskFooter(surfaceRect{Width: metrics.innerWidth})
 	layout := m.computeNewTaskScreenLayout(header, footer)
 	panel := m.buildNewTaskPanel(layout.modalInnerWidth)
 	if !panel.HasEditor {

@@ -924,6 +924,33 @@ func TestTaskTUIListShowsOnlyFirstLineOfMultilineDescriptions(t *testing.T) {
 	session.quit(t)
 }
 
+func TestTaskTUINarrowTerminalKeepsNewTaskStartHintVisible(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 40, 24)
+	session.waitForAll(t, 10*time.Second, "new task", "task configs")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Task description", "Tab start", "Ctrl+C quit")
+
+	session.quit(t)
+}
+
 func TestTaskTUISmallTerminalArtifactTabSwitching(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)

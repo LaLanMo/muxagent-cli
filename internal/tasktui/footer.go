@@ -28,8 +28,12 @@ func renderFooterHintText(text string) string {
 	return tuiTheme.Footer.Hint.Render(text)
 }
 
+func renderFooterHintRow(width int, left, right string) string {
+	return joinHorizontal(renderFooterHintText(left), renderFooterHintText(right), width)
+}
+
 func renderFooterHintBar(width int, left string) string {
-	return joinHorizontal(renderFooterHintText(left), renderFooterHintText(quitHint), width)
+	return renderFooterHintRow(width, left, quitHint)
 }
 
 func renderFooterWithStats(width int, left, right, hint string) string {
@@ -49,13 +53,29 @@ func (m Model) taskListHint() string {
 	return joinHintParts("↑↓ navigate", "Enter select")
 }
 
-func (m Model) newTaskModalHint() string {
+func (m Model) newTaskPrimaryHint() string {
+	return joinHintParts("Tab start", "Enter newline", "Esc cancel")
+}
+
+func (m Model) newTaskSecondaryHint() string {
 	parts := []string{"Ctrl+P prev config", "Ctrl+N next config"}
 	if m.worktreeLaunchAvailable {
 		parts = append(parts, "Ctrl+T worktree "+m.newTaskWorktreeToggleLabel())
 	}
-	parts = append(parts, "Enter newline", "Tab start", "Esc cancel")
 	return joinHintParts(parts...)
+}
+
+func (m Model) renderNewTaskFooter(surface surfaceRect) string {
+	primary := m.newTaskPrimaryHint()
+	secondary := m.newTaskSecondaryHint()
+	if strings.TrimSpace(secondary) == "" {
+		return renderFooterHintBar(surface.Width, primary)
+	}
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		renderFooterHintRow(surface.Width, primary, ""),
+		renderFooterHintBar(surface.Width, secondary),
+	)
 }
 
 func (m Model) newTaskWorktreeStatusLabel() string {
@@ -286,7 +306,7 @@ func (m Model) detailHint(base string) string {
 		return joinHintParts(parts...)
 	case FocusRegionComposer:
 		if m.screen == ScreenNewTask {
-			return joinHintParts("Enter newline", "Tab start", "Esc cancel")
+			return m.newTaskPrimaryHint()
 		}
 		parts := []string{"Enter newline", "Esc choices"}
 		if next := m.nextFocusHint(); next != "" {

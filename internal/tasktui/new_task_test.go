@@ -54,6 +54,20 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	assert.NotContains(t, strippedView(view.Content), "Enter select")
 }
 
+func TestNewTaskFooterKeepsStartHintVisibleOnNarrowTerminal(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	model = next.(Model)
+
+	model = openNewTaskModal(t, model)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Tab start")
+	assert.Contains(t, view, "Ctrl+C quit")
+	assert.NotContains(t, view, "Enter select")
+}
+
 func TestModelViewUsesThemeBackgroundColor(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	service := &fakeService{
@@ -492,7 +506,7 @@ func TestNewTaskEditorWidthMatchesFieldInnerWidth(t *testing.T) {
 
 	metrics := model.computeScreenMetrics()
 	header := model.renderAppHeader(metrics.innerWidth)
-	footer := renderFooterHintBar(metrics.innerWidth, model.newTaskModalHint())
+	footer := model.renderNewTaskFooter(surfaceRect{Width: metrics.innerWidth})
 	layout := model.computeNewTaskScreenLayout(header, footer)
 	fieldWidth := max(18, layout.modalInnerWidth)
 

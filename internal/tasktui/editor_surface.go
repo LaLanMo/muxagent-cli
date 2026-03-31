@@ -107,7 +107,7 @@ func (m Model) currentEditorSurfaceSpec() editorSurfaceSpec {
 	case ScreenNewTask:
 		metrics := m.computeScreenMetrics()
 		header := m.renderAppHeader(metrics.innerWidth)
-		footer := renderFooterHintBar(metrics.innerWidth, m.newTaskModalHint())
+		footer := m.renderNewTaskFooter(surfaceRect{Width: metrics.innerWidth})
 		layout := m.computeNewTaskScreenLayout(header, footer)
 		spec.FieldWidth = max(18, layout.modalInnerWidth)
 		spec.Rows = layout.editorRows

@@ -64,7 +64,7 @@ func (m Model) renderTaskConfigListScreen(width, height int) string {
 func (m Model) renderNewTaskScreen(width, height int) string {
 	metrics := m.computeScreenMetrics()
 	header := m.renderAppHeader(metrics.innerWidth)
-	footer := renderFooterHintBar(metrics.innerWidth, m.newTaskModalHint())
+	footer := m.renderNewTaskFooter(surfaceRect{Width: metrics.innerWidth})
 	layout := m.computeNewTaskScreenLayout(header, footer)
 	body := lipgloss.Place(layout.innerWidth, layout.bodyHeight, lipgloss.Center, lipgloss.Center, m.renderNewTaskModal(layout))
 	return renderCanvasLayout(layout.screenMetrics, layout.bodyHeight, header, body, footer)

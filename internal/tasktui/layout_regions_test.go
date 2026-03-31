@@ -56,16 +56,24 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	assert.Equal(t, taskListLayout.innerWidth, model.taskList.Width())
 	assert.Equal(t, taskListLayout.bodyHeight, model.taskList.Height())
 
+	next, _ = model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	model = next.(Model)
 	model.screen = ScreenNewTask
 	model.syncComponents()
-	newTaskHeader := model.renderAppHeader(metrics.innerWidth)
-	newTaskFooter := renderFooterHintBar(metrics.innerWidth, model.newTaskModalHint())
+	narrowMetrics := model.computeScreenMetrics()
+	newTaskHeader := model.renderAppHeader(narrowMetrics.innerWidth)
+	newTaskFooter := model.renderNewTaskFooter(surfaceRect{Width: narrowMetrics.innerWidth})
 	newTaskLayout := model.computeNewTaskScreenLayout(newTaskHeader, newTaskFooter)
+	assert.Equal(t, lipgloss.Height(newTaskFooter), newTaskLayout.footerHeight)
+	assert.Equal(t, 2, newTaskLayout.footerHeight)
 	assert.Equal(t, editorFieldInnerWidth(max(18, newTaskLayout.modalInnerWidth)), model.editor.input.Width())
 	assert.Equal(t, newTaskLayout.editorRows, model.editor.Height())
 
+	next, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
 	model.screen = ScreenRunning
 	model.syncComponents()
+	metrics = model.computeScreenMetrics()
 
 	contentWidth := detailContentWidth(metrics.innerWidth, model.activeDetailTab)
 	snapshot := model.computeDetailLayoutSnapshot()
