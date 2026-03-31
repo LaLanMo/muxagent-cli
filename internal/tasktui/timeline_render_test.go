@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDetailScreenShowsLatestFourRunningStreamMessagesAndThreadID(t *testing.T) {
+func TestDetailScreenMovesRunningOutputToLivePaneAndRetainsFullBuffer(t *testing.T) {
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 18})
 	model = next.(Model)
 	now := time.Now().UTC()
 	model.current = &taskdomain.TaskView{
@@ -39,7 +39,7 @@ func TestDetailScreenShowsLatestFourRunningStreamMessagesAndThreadID(t *testing.
 		NodeName:  "implement",
 		Progress:  &taskruntime.ProgressInfo{SessionID: "thread-123"},
 	})
-	for _, message := range []string{"stream-one", "stream-two", "stream-three", "stream-four", "stream-five"} {
+	for _, message := range []string{"stream-one", "stream-two", "stream-three", "stream-four", "stream-five", "stream-six", "stream-seven", "stream-eight"} {
 		model.handleEvent(taskruntime.RunEvent{
 			Type:      taskruntime.EventNodeProgress,
 			TaskID:    "task-1",
@@ -50,14 +50,33 @@ func TestDetailScreenShowsLatestFourRunningStreamMessagesAndThreadID(t *testing.
 	}
 	model.syncComponents()
 
+	leftPane := strippedView(model.detailViewport.GetContent())
+	assert.Contains(t, leftPane, "● implement")
+	assert.Contains(t, leftPane, "live output")
+	assert.NotContains(t, leftPane, "thread: thread-123")
+	assert.NotContains(t, leftPane, "stream-eight")
+
+	liveContent := strippedView(model.liveOutput.GetContent())
+	assert.Contains(t, liveContent, "stream-one")
+	assert.Contains(t, liveContent, "stream-eight")
+	assert.Equal(t, []string{
+		"thread: thread-123",
+		"stream-one",
+		"stream-two",
+		"stream-three",
+		"stream-four",
+		"stream-five",
+		"stream-six",
+		"stream-seven",
+		"stream-eight",
+	}, model.liveOutputSnapshot())
+
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "▌ ● implement")
+	assert.Contains(t, view, "Output · implement")
 	assert.Contains(t, view, "thread: thread-123")
 	assert.NotContains(t, view, "stream-one")
-	assert.Contains(t, view, "stream-two")
-	assert.Contains(t, view, "stream-three")
-	assert.Contains(t, view, "stream-four")
-	assert.Contains(t, view, "stream-five")
+	assert.Contains(t, view, "stream-seven")
+	assert.Contains(t, view, "stream-eight")
 }
 
 func TestProgressLinesTruncateLongMessagesInsteadOfWrapping(t *testing.T) {
@@ -123,6 +142,7 @@ func TestDetailScreenRendersStructuredProgressEvents(t *testing.T) {
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Output · implement")
 	assert.Contains(t, view, "thread: thread-123")
 	assert.Contains(t, view, "plan: 1/2 complete, next Update file")
 	assert.Contains(t, view, "✓ edit  /tmp/project/sample.txt")
@@ -193,6 +213,7 @@ func TestDetailScreenPreservesCodexBaselineLabels(t *testing.T) {
 	model.syncComponents()
 
 	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Output · implement")
 	assert.Contains(t, view, "plan: 1/2 complete, next editing files")
 	assert.Contains(t, view, "✓ shell  /bin/zsh -lc 'go test ./...'")
 	assert.Contains(t, view, "✓ files  A artifact.md")
@@ -220,6 +241,45 @@ func TestCompletedDetailShowsThreadIDWithoutOldStreamMessages(t *testing.T) {
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "thread: thread-123")
 	assert.NotContains(t, view, "old-stream")
+}
+
+func TestDetailScreenUsesNewestRunningNodeForLiveOutputPane(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	model = next.(Model)
+	now := time.Now().UTC()
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusRunning,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: now}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "verify", Status: taskdomain.NodeRunRunning, StartedAt: now}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.screen = ScreenRunning
+	model.handleEvent(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "implement",
+		Progress:  &taskruntime.ProgressInfo{SessionID: "thread-implement", Message: "implement output"},
+	})
+	model.handleEvent(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-2",
+		NodeName:  "verify",
+		Progress:  &taskruntime.ProgressInfo{SessionID: "thread-verify", Message: "verify output"},
+	})
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Output · verify")
+	assert.Contains(t, view, "thread: thread-verify")
+	assert.Contains(t, view, "verify output")
+	assert.NotContains(t, view, "thread: thread-implement")
+	assert.NotContains(t, view, "implement output")
 }
 
 func TestDetailScreenShowsIterationLabelsForRepeatedNodeRuns(t *testing.T) {

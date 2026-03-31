@@ -71,12 +71,19 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	snapshot := model.computeDetailLayoutSnapshot()
 
 	assert.Equal(t, contentWidth, snapshot.ContentWidth)
+	assert.True(t, snapshot.Surfaces.TimelineSplit)
 	assert.Equal(t, snapshot.Surfaces.Timeline.Width, model.detailViewport.Width())
 	assert.Equal(t, snapshot.Surfaces.Timeline.Height, model.detailViewport.Height())
+	assert.Equal(t, snapshot.Surfaces.LiveOutputViewport.Width, model.liveOutput.Width())
+	assert.Equal(t, snapshot.Surfaces.LiveOutputViewport.Height, model.liveOutput.Height())
 	assert.Equal(t, snapshot.Surfaces.Preview.Width, model.artifactPreview.Width())
 	assert.Equal(t, snapshot.Surfaces.Preview.Height, model.artifactPreview.Height())
 	assert.Equal(t, lipgloss.Height(snapshot.Footer), snapshot.Surfaces.Footer.Height)
 	assert.Equal(t, lipgloss.Height(snapshot.PanelView.View), snapshot.Surfaces.Panel.Rect.Height)
+	assert.Equal(t, artifactPaneSidebarWidth(snapshot.Body.detailWidth), snapshot.Surfaces.Timeline.Width)
+	assert.Equal(t, snapshot.Body.topBodyHeight, snapshot.Surfaces.Timeline.Height)
+	assert.Equal(t, snapshot.Body.topBodyHeight, snapshot.Surfaces.LiveOutputPane.Height)
+	assert.Equal(t, snapshot.Body.detailWidth-snapshot.Surfaces.Timeline.Width-1, snapshot.Surfaces.LiveOutputPane.Width)
 
 	occupied := snapshot.Surfaces.Timeline.Height
 	if snapshot.Surfaces.Panel.Rect.Height > 0 {
@@ -84,6 +91,7 @@ func TestSyncComponentsUsesSharedLayoutRegions(t *testing.T) {
 	}
 	assert.Equal(t, snapshot.Frame.bodyHeight, occupied)
 	assert.Equal(t, model.renderDetailTimeline(snapshot.Surfaces.Timeline), model.detailViewport.GetContent())
+	assert.Equal(t, model.renderLiveOutputContent(snapshot.Surfaces.LiveOutputViewport), model.liveOutput.GetContent())
 }
 
 func TestFailedDetailPanelUsesContentDrivenHeight(t *testing.T) {
@@ -245,37 +253,46 @@ func TestArtifactTabUsesFullWidthAndFullPreviewHeight(t *testing.T) {
 	assert.Equal(t, snapshot.Surfaces.Artifact.Rect.Height-1, snapshot.Surfaces.Preview.Height)
 }
 
-func TestTimelineDetailUsesFullWidthSurface(t *testing.T) {
+func TestTimelineDetailUsesSplitSurfaceOnlyWhileRunning(t *testing.T) {
 	tempDir := t.TempDir()
-	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 180, Height: 32})
-	model = next.(Model)
-	model.current = &taskdomain.TaskView{
-		Task:   taskdomain.Task{ID: "task-1", Description: "Inspect wide timeline layout", WorkDir: tempDir},
-		Status: taskdomain.TaskStatusRunning,
-		NodeRuns: []taskdomain.NodeRunView{
-			{
-				NodeRun: taskdomain.NodeRun{
-					ID:        "run-1",
-					TaskID:    "task-1",
-					NodeName:  "implement",
-					Status:    taskdomain.NodeRunRunning,
-					StartedAt: time.Now().UTC(),
+	buildModel := func(status taskdomain.NodeRunStatus, screen Screen) Model {
+		model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+		next, _ := model.Update(tea.WindowSizeMsg{Width: 180, Height: 32})
+		model = next.(Model)
+		model.current = &taskdomain.TaskView{
+			Task:   taskdomain.Task{ID: "task-1", Description: "Inspect wide timeline layout", WorkDir: tempDir},
+			Status: taskdomain.TaskStatusRunning,
+			NodeRuns: []taskdomain.NodeRunView{
+				{
+					NodeRun: taskdomain.NodeRun{
+						ID:        "run-1",
+						TaskID:    "task-1",
+						NodeName:  "implement",
+						Status:    status,
+						StartedAt: time.Now().UTC(),
+					},
 				},
 			},
-		},
+		}
+		model.screen = screen
+		model.activeDetailTab = DetailTabTimeline
+		model.focusRegion = FocusRegionDetail
+		model.syncComponents()
+		return model
 	}
-	model.screen = ScreenRunning
-	model.activeDetailTab = DetailTabTimeline
-	model.focusRegion = FocusRegionDetail
-	model.syncComponents()
 
-	metrics := model.computeScreenMetrics()
-	snapshot := model.computeDetailLayoutSnapshot()
+	running := buildModel(taskdomain.NodeRunRunning, ScreenRunning)
+	runningSnapshot := running.computeDetailLayoutSnapshot()
+	assert.True(t, runningSnapshot.Surfaces.TimelineSplit)
+	assert.Equal(t, artifactPaneSidebarWidth(runningSnapshot.Body.detailWidth), runningSnapshot.Surfaces.Timeline.Width)
+	assert.Equal(t, runningSnapshot.Surfaces.Timeline.Width, running.detailViewport.Width())
 
-	assert.Equal(t, metrics.innerWidth, snapshot.ContentWidth)
-	assert.Equal(t, metrics.innerWidth, snapshot.Surfaces.Timeline.Width)
-	assert.Equal(t, snapshot.Surfaces.Timeline.Width, model.detailViewport.Width())
+	completed := buildModel(taskdomain.NodeRunDone, ScreenComplete)
+	completedSnapshot := completed.computeDetailLayoutSnapshot()
+	assert.False(t, completedSnapshot.Surfaces.TimelineSplit)
+	assert.Equal(t, completedSnapshot.ContentWidth, completedSnapshot.Surfaces.Timeline.Width)
+	assert.Zero(t, completedSnapshot.Surfaces.LiveOutputPane.Width)
+	assert.Zero(t, completedSnapshot.Surfaces.LiveOutputViewport.Width)
 }
 
 func TestWideDetailPanelEditorUsesSoftWidthCap(t *testing.T) {

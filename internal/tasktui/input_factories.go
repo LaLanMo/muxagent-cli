@@ -59,7 +59,7 @@ func newArtifactPreviewViewport() viewport.Model {
 	return model
 }
 
-func newDetailViewport() viewport.Model {
+func newStreamingViewport() viewport.Model {
 	model := viewport.New()
 	model.SoftWrap = true
 	model.FillHeight = true
@@ -72,4 +72,12 @@ func newDetailViewport() viewport.Model {
 	model.KeyMap.Left = key.NewBinding()
 	model.KeyMap.Right = key.NewBinding()
 	return model
+}
+
+func newDetailViewport() viewport.Model {
+	return newStreamingViewport()
+}
+
+func newLiveOutputViewport() viewport.Model {
+	return newStreamingViewport()
 }

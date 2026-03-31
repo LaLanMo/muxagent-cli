@@ -162,6 +162,7 @@ func (m *Model) syncDetailViewport() {
 		m.detailViewport.GotoBottom()
 		m.autoScrollDetail = false
 	}
+	m.syncLiveOutputViewport(surfaces.LiveOutputViewport)
 	m.syncArtifactPreview(surfaces.Preview)
 
 	taskListHeader := m.renderTaskListHeader(metrics.innerWidth)
@@ -173,4 +174,18 @@ func (m *Model) syncDetailViewport() {
 	configListFooter := m.renderTaskConfigListFooter(surfaceRect{Width: metrics.innerWidth})
 	configListLayout := m.computeTaskListScreenLayout(configListHeader, configListFooter)
 	m.configList.SetSize(configListLayout.innerWidth, configListLayout.bodyHeight)
+}
+
+func (m *Model) syncLiveOutputViewport(surface surfaceRect) {
+	if surface.Width <= 0 || surface.Height <= 0 {
+		m.liveOutput.SetWidth(0)
+		m.liveOutput.SetHeight(0)
+		m.liveOutput.SetContent("")
+		m.liveOutput.GotoTop()
+		return
+	}
+	m.liveOutput.SetWidth(surface.Width)
+	m.liveOutput.SetHeight(surface.Height)
+	m.liveOutput.SetContent(m.renderLiveOutputContent(surface))
+	m.liveOutput.GotoBottom()
 }

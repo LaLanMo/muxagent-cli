@@ -28,13 +28,16 @@ type detailLayoutSnapshot struct {
 }
 
 type detailScreenSurfaces struct {
-	Frame    detailFrameLayout
-	Body     detailBodyLayout
-	Timeline surfaceRect
-	Panel    panelSurface
-	Artifact artifactSurface
-	Preview  surfaceRect
-	Footer   surfaceRect
+	Frame              detailFrameLayout
+	Body               detailBodyLayout
+	Timeline           surfaceRect
+	TimelineSplit      bool
+	LiveOutputPane     surfaceRect
+	LiveOutputViewport surfaceRect
+	Panel              panelSurface
+	Artifact           artifactSurface
+	Preview            surfaceRect
+	Footer             surfaceRect
 }
 
 func (m Model) computeTaskListBodySurface(layout taskListScreenLayout) surfaceRect {
@@ -83,8 +86,36 @@ func (m Model) computeDetailScreenSurfacesWithPanel(frame detailFrameLayout, bod
 		Preview: surfaceRect{Width: body.previewWidth, Height: 0},
 		Footer:  surfaceRect{Width: frame.contentWidth, Height: frame.footerHeight},
 	}
+	if splitPane, outputViewport, ok := m.computeTimelineSplitSurfaces(body); ok {
+		surfaces.TimelineSplit = true
+		surfaces.Timeline = splitPane
+		surfaces.LiveOutputPane = surfaceRect{Width: body.detailWidth - splitPane.Width - 1, Height: body.topBodyHeight}
+		surfaces.LiveOutputViewport = outputViewport
+	}
 	if body.previewWidth > 0 && body.topBodyHeight > 0 {
 		surfaces.Preview = artifactPanePreviewRect(surfaces.Artifact.Rect.Width, surfaces.Artifact.Rect.Height)
 	}
 	return surfaces
+}
+
+func (m Model) computeTimelineSplitSurfaces(body detailBodyLayout) (surfaceRect, surfaceRect, bool) {
+	if !m.timelineSplitEnabled() || body.topBodyHeight <= 0 {
+		return surfaceRect{}, surfaceRect{}, false
+	}
+	timelineWidth := artifactPaneSidebarWidth(body.detailWidth)
+	maxTimelineWidth := body.detailWidth - 13
+	if maxTimelineWidth < 16 {
+		return surfaceRect{}, surfaceRect{}, false
+	}
+	if timelineWidth > maxTimelineWidth {
+		timelineWidth = maxTimelineWidth
+	}
+	outputWidth := body.detailWidth - timelineWidth - 1
+	if outputWidth < 12 {
+		return surfaceRect{}, surfaceRect{}, false
+	}
+	return surfaceRect{Width: timelineWidth, Height: body.topBodyHeight}, surfaceRect{
+		Width:  max(10, outputWidth-2),
+		Height: max(1, body.topBodyHeight-2),
+	}, true
 }

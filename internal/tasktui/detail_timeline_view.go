@@ -2,8 +2,10 @@ package tasktui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
@@ -37,7 +39,7 @@ func (m Model) renderDetailTimeline(surface surfaceRect) string {
 	for _, entry := range detailTimelineEntries(*m.current) {
 		switch {
 		case entry.run != nil:
-			lines = append(lines, m.renderNodeRunBlock(*entry.run, width)...)
+			lines = append(lines, m.renderNodeRunBlock(*entry.run)...)
 		case entry.blocked != nil:
 			lines = append(lines, m.renderBlockedStepBlock(*entry.blocked, width)...)
 		}
@@ -52,7 +54,7 @@ func (m Model) renderDetailTimeline(surface surfaceRect) string {
 	return strings.Join(trimTrailingBlank(lines), "\n")
 }
 
-func (m Model) renderNodeRunBlock(run taskdomain.NodeRunView, width int) []string {
+func (m Model) renderNodeRunBlock(run taskdomain.NodeRunView) []string {
 	timeLabel := relativeTime(nodeRunTimestamp(run))
 	nodeLabel := m.nodeRunLabel(run)
 	switch run.Status {
@@ -94,7 +96,11 @@ func (m Model) renderNodeRunBlock(run taskdomain.NodeRunView, width int) []strin
 		}
 		return lines
 	default:
-		return []string{m.renderRunningStreamPanel(run, nodeLabel, width)}
+		lines := []string{renderTimelineHeadline(tuiTheme.Status.Running, "●", nodeLabel, "running…", "")}
+		if active := m.activeRunningNodeRun(); active != nil && active.ID == run.ID && m.timelineSplitEnabled() {
+			lines = append(lines, tuiTheme.Text.Muted.Render("  ↳ live output →"))
+		}
+		return lines
 	}
 }
 
@@ -106,25 +112,114 @@ func (m Model) renderBlockedStepBlock(step taskdomain.BlockedStep, width int) []
 	}
 }
 
-func (m Model) renderRunningStreamPanel(run taskdomain.NodeRunView, nodeLabel string, width int) string {
-	panelWidth := max(24, width)
-	contentWidth := max(12, panelWidth-4)
-	lines := []string{
-		renderTimelineHeadline(tuiTheme.Status.Running, "●", nodeLabel, "running…", ""),
+func (m Model) timelineSplitEnabled() bool {
+	return m.activeDetailTab == DetailTabTimeline && m.activeRunningNodeRun() != nil
+}
+
+func (m Model) activeRunningNodeRun() *taskdomain.NodeRunView {
+	if m.current == nil {
+		return nil
 	}
-	if sessionID := m.nodeRunSessionID(run); sessionID != "" {
-		lines = append(lines, tuiTheme.Stream.Thread.Render(ansi.Wrap("thread: "+sessionID, contentWidth, "")))
+	winner := -1
+	for i := range m.current.NodeRuns {
+		run := &m.current.NodeRuns[i]
+		if run.Status != taskdomain.NodeRunRunning {
+			continue
+		}
+		if winner < 0 {
+			winner = i
+			continue
+		}
+		candidate := &m.current.NodeRuns[winner]
+		switch {
+		case run.StartedAt.After(candidate.StartedAt):
+			winner = i
+		case run.StartedAt.Equal(candidate.StartedAt) && run.ID > candidate.ID:
+			winner = i
+		}
 	}
+	if winner < 0 {
+		return nil
+	}
+	return &m.current.NodeRuns[winner]
+}
+
+func (m Model) renderLiveOutputContent(surface surfaceRect) string {
+	run := m.activeRunningNodeRun()
+	if run == nil {
+		return ""
+	}
+	contentWidth := max(12, surface.Width)
+	lines := []string{}
 	if events := m.streamByRun[run.ID]; len(events) > 0 {
-		for _, line := range progressEventLines(events, contentWidth) {
-			lines = append(lines, line)
+		lines = append(lines, progressEventLines(events, contentWidth)...)
+	} else if progress := m.progressByRun[run.ID]; len(progress) > 0 {
+		lines = append(lines, progressLines(progress, contentWidth)...)
+	} else {
+		lines = append(lines, tuiTheme.Artifact.Empty.Render("Waiting for live output…"))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderLiveOutputPane(surface surfaceRect) string {
+	if surface.Width <= 0 || surface.Height <= 0 {
+		return ""
+	}
+	run := m.activeRunningNodeRun()
+	if run == nil {
+		return lipgloss.Place(surface.Width, surface.Height, lipgloss.Left, lipgloss.Top, "")
+	}
+	title := m.renderArtifactPaneTitle("Output · "+m.nodeRunLabel(*run), false)
+	threadLine := tuiTheme.Stream.Thread.Render(ansi.Wrap(m.liveOutputThreadLabel(*run), max(12, surface.Width-2), ""))
+	bodyHeight := max(1, surface.Height-2)
+	body := lipgloss.Place(max(10, surface.Width-2), bodyHeight, lipgloss.Left, lipgloss.Top, m.liveOutput.View())
+	return lipgloss.NewStyle().
+		Width(surface.Width).
+		Height(surface.Height).
+		PaddingLeft(1).
+		Render(lipgloss.JoinVertical(lipgloss.Left, title, threadLine, body))
+}
+
+func (m Model) liveOutputThreadLabel(run taskdomain.NodeRunView) string {
+	if sessionID := m.nodeRunSessionID(run); sessionID != "" {
+		return "thread: " + sessionID
+	}
+	return "thread: pending"
+}
+
+func (m Model) liveOutputSnapshot() []string {
+	run := m.activeRunningNodeRun()
+	if run == nil {
+		return nil
+	}
+	lines := []string{m.liveOutputThreadLabel(*run)}
+	if events := m.streamByRun[run.ID]; len(events) > 0 {
+		for _, line := range progressEventLines(events, 400) {
+			lines = append(lines, ansi.Strip(line))
 		}
 	} else {
-		for _, line := range progressLines(m.progressByRun[run.ID], contentWidth) {
-			lines = append(lines, line)
+		lines = append(lines, m.progressByRun[run.ID]...)
+	}
+	return lines
+}
+
+func (m Model) sortedRunningNodeRuns() []taskdomain.NodeRunView {
+	if m.current == nil {
+		return nil
+	}
+	runs := make([]taskdomain.NodeRunView, 0, len(m.current.NodeRuns))
+	for _, run := range m.current.NodeRuns {
+		if run.Status == taskdomain.NodeRunRunning {
+			runs = append(runs, run)
 		}
 	}
-	return tuiTheme.Stream.Panel.Width(panelWidth).Render(strings.Join(lines, "\n"))
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].StartedAt.Equal(runs[j].StartedAt) {
+			return runs[i].ID > runs[j].ID
+		}
+		return runs[i].StartedAt.After(runs[j].StartedAt)
+	})
+	return runs
 }
 
 func (m Model) nodeRunSessionID(run taskdomain.NodeRunView) string {

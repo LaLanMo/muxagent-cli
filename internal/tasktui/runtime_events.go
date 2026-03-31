@@ -190,9 +190,6 @@ func appendProgressMessage(messages []string, raw string) []string {
 		}
 		messages = append(messages, item)
 	}
-	if len(messages) > 4 {
-		messages = append([]string(nil), messages[len(messages)-4:]...)
-	}
 	return messages
 }
 
@@ -214,10 +211,7 @@ func appendProgressEvent(events []taskexecutor.StreamEvent, next taskexecutor.St
 }
 
 func trimProgressEvents(events []taskexecutor.StreamEvent) []taskexecutor.StreamEvent {
-	if len(events) <= 6 {
-		return events
-	}
-	return append([]taskexecutor.StreamEvent(nil), events[len(events)-6:]...)
+	return events
 }
 
 func (m *Model) upsertTask(view taskdomain.TaskView) {

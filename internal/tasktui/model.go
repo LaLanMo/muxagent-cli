@@ -101,6 +101,7 @@ type Model struct {
 	configList      list.Model
 	editor          EditorController
 	detailViewport  viewport.Model
+	liveOutput      viewport.Model
 	artifactPreview viewport.Model
 	taskConfigs     taskConfigManagerState
 }
@@ -142,6 +143,7 @@ func newModel(service RuntimeService, workDir string, configCatalog *taskconfig.
 			Rows:        6,
 		}),
 		detailViewport:   newDetailViewport(),
+		liveOutput:       newLiveOutputViewport(),
 		artifactPreview:  newArtifactPreviewViewport(),
 		progressByRun:    map[string][]string{},
 		streamByRun:      map[string][]taskexecutor.StreamEvent{},
