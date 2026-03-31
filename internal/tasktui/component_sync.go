@@ -119,6 +119,7 @@ func (m *Model) syncArtifactPane() {
 	if len(m.artifactItems) == 0 {
 		m.artifactIndex = 0
 		m.artifactErrorText = ""
+		m.clearArtifactCopyStatus()
 		m.artifactPreviewPath = ""
 		m.artifactPreview.SetContent("")
 		m.artifactPreview.GotoTop()

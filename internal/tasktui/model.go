@@ -81,6 +81,8 @@ type Model struct {
 	artifactIndex       int
 	artifactPreviewPath string
 	artifactErrorText   string
+	artifactCopyStatus  string
+	artifactCopyToken   int
 	autoScrollDetail    bool
 	errorText           string
 	pendingRuntimeCmd   *pendingRuntimeCommand
@@ -215,6 +217,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.syncComponents()
+		return m, nil
+	case artifactCopyFeedbackExpiredMsg:
+		if msg.token == m.artifactCopyToken {
+			m.clearArtifactCopyStatus()
+			m.syncComponents()
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)

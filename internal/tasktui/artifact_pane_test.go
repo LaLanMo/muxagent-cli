@@ -439,6 +439,49 @@ func TestArtifactCopyCopiesPathAndRawContents(t *testing.T) {
 	assert.Empty(t, model.artifactErrorText)
 }
 
+func TestArtifactCopyShowsTransientFooterFeedback(t *testing.T) {
+	model := artifactTabTestModel(t, ScreenComplete, taskdomain.TaskStatusDone, "")
+
+	next, cmd := model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "copied", model.artifactCopyStatus)
+
+	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+	assert.Contains(t, footer, "↑↓ files  copied  Esc back  Tab artifacts  Shift+Tab timeline")
+	assert.NotContains(t, footer, "c copy path")
+
+	next, _ = model.Update(artifactCopyFeedbackExpiredMsg{token: model.artifactCopyToken})
+	model = next.(Model)
+	assert.Empty(t, model.artifactCopyStatus)
+
+	footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+	assert.Contains(t, footer, "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline")
+}
+
+func TestArtifactPreviewCopyShowsTransientFooterFeedback(t *testing.T) {
+	model := artifactTabTestModel(t, ScreenComplete, taskdomain.TaskStatusDone, "")
+
+	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = next.(Model)
+
+	next, cmd := model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "copied", model.artifactCopyStatus)
+
+	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+	assert.Contains(t, footer, "↑↓ scroll  copied  Esc back  Tab files  Shift+Tab timeline")
+	assert.NotContains(t, footer, "c copy")
+
+	next, _ = model.Update(artifactCopyFeedbackExpiredMsg{token: model.artifactCopyToken})
+	model = next.(Model)
+	assert.Empty(t, model.artifactCopyStatus)
+
+	footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+	assert.Contains(t, footer, "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline")
+}
+
 func TestArtifactCopyFailureBannerClearsOnSelectionChange(t *testing.T) {
 	setTaskTUIRuntimePath(t)
 
@@ -474,6 +517,27 @@ func TestArtifactCopyFailureBannerClearsOnSelectionChange(t *testing.T) {
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = next.(Model)
 	assert.Empty(t, model.artifactErrorText)
+}
+
+func TestArtifactCopyFailureClearsSuccessFeedback(t *testing.T) {
+	_ = installFakeClipboard(t)
+	model := artifactTabTestModel(t, ScreenComplete, taskdomain.TaskStatusDone, "")
+
+	next, cmd := model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "copied", model.artifactCopyStatus)
+
+	setTaskTUIRuntimePath(t)
+
+	next, _ = model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
+	model = next.(Model)
+	assert.Empty(t, model.artifactCopyStatus)
+	assert.Contains(t, model.artifactErrorText, "Unable to copy artifact path")
+
+	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+	assert.Contains(t, footer, "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline")
+	assert.NotContains(t, footer, "copied")
 }
 
 func TestArtifactPaneFocusReusesSharedDividerWithoutShiftingPreview(t *testing.T) {

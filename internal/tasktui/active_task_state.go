@@ -18,6 +18,7 @@ func (m *Model) activateTask(view taskdomain.TaskView, cfg *taskconfig.Config, i
 	m.currentInput = input
 	m.resetInputState()
 	m.artifactErrorText = ""
+	m.clearArtifactCopyStatus()
 	m.setDetailScreen(detailScreenForActiveTask(m.current, m.currentInput), true)
 }
 
@@ -29,6 +30,7 @@ func (m *Model) clearActiveTask() {
 	m.currentInput = nil
 	m.startupText = ""
 	m.artifactErrorText = ""
+	m.clearArtifactCopyStatus()
 	m.errorText = ""
 	m.failure.action = failureActionNone
 	m.activeDetailTab = DetailTabTimeline
