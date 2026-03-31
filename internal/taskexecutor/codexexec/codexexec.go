@@ -315,6 +315,19 @@ func codexStreamEvent(rawLine, kind string, payload map[string]interface{}) task
 				Paths:        paths,
 			},
 		}
+	case "web_search":
+		return taskexecutor.StreamEvent{
+			Kind: taskexecutor.StreamEventKindTool,
+			Raw:  rawLine,
+			Tool: &taskexecutor.ToolCall{
+				CallID:       asString(item["id"]),
+				Name:         "web_search",
+				Kind:         taskexecutor.ToolKindFetch,
+				Title:        "web search",
+				Status:       status,
+				InputSummary: codexWebSearchSummary(item),
+			},
+		}
 	case "agent_message":
 		text := asString(item["text"])
 		if summary, ok := codexAgentEnvelopeSummary(text); ok {
@@ -440,6 +453,22 @@ func summarizeChangedPath(change map[string]interface{}) string {
 	default:
 		return "M " + label
 	}
+}
+
+func codexWebSearchSummary(item map[string]interface{}) string {
+	if query := strings.TrimSpace(asString(item["query"])); query != "" {
+		return query
+	}
+	action := asMap(item["action"])
+	if query := strings.TrimSpace(asString(action["query"])); query != "" {
+		return query
+	}
+	for _, rawQuery := range asSlice(action["queries"]) {
+		if query := strings.TrimSpace(asString(rawQuery)); query != "" {
+			return query
+		}
+	}
+	return ""
 }
 
 func asMap(value interface{}) map[string]interface{} {

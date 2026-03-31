@@ -222,6 +222,66 @@ func TestDetailScreenPreservesCodexBaselineLabels(t *testing.T) {
 	assert.NotContains(t, view, "other")
 }
 
+func TestDetailScreenRendersMergedFetchEventForCodexWebSearch(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	model = next.(Model)
+	now := time.Now().UTC()
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Inspect latest release"},
+		Status: taskdomain.TaskStatusRunning,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunRunning, StartedAt: now}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.screen = ScreenRunning
+	model.handleEvent(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "draft_plan",
+		Progress: &taskruntime.ProgressInfo{
+			SessionID: "thread-123",
+			Events: []taskexecutor.StreamEvent{{
+				Kind: taskexecutor.StreamEventKindTool,
+				Tool: &taskexecutor.ToolCall{
+					CallID: "ws_123",
+					Name:   "web_search",
+					Kind:   taskexecutor.ToolKindFetch,
+					Title:  "web search",
+					Status: taskexecutor.ToolStatusInProgress,
+				},
+			}},
+		},
+	})
+	model.handleEvent(taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "draft_plan",
+		Progress: &taskruntime.ProgressInfo{
+			Events: []taskexecutor.StreamEvent{{
+				Kind: taskexecutor.StreamEventKindTool,
+				Tool: &taskexecutor.ToolCall{
+					CallID:       "ws_123",
+					Name:         "web_search",
+					Kind:         taskexecutor.ToolKindFetch,
+					Status:       taskexecutor.ToolStatusCompleted,
+					InputSummary: "latest github release announcement",
+				},
+			}},
+		},
+	})
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Output · draft_plan")
+	assert.Contains(t, view, "✓ fetch  latest github release announcement")
+	assert.NotContains(t, view, `{"type":"item.completed"`)
+	assert.NotContains(t, view, "web_search")
+}
+
 func TestCompletedDetailShowsThreadIDWithoutOldStreamMessages(t *testing.T) {
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 28})

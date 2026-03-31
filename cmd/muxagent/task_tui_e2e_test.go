@@ -924,6 +924,42 @@ func TestTaskTUIListShowsOnlyFirstLineOfMultilineDescriptions(t *testing.T) {
 	session.quit(t)
 }
 
+func TestTaskTUIRendersCodexWebSearchAsFetchInLiveOutput(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+	fakeCodexFixture := filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh")
+	basePath := os.Getenv("PATH")
+
+	workDir := canonicalPath(t, t.TempDir())
+	homeDir := t.TempDir()
+	fakeDir := t.TempDir()
+	fakeCodexPath := filepath.Join(fakeDir, "codex")
+	copyExecutable(t, fakeCodexFixture, fakeCodexPath)
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "web-search")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 140, 40)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Inspect release search")
+	session.waitForAll(t, 10*time.Second, "Task: Inspect release search", "draft_plan", "Output · draft_plan", "thread: thread-draft_plan-1", "fetch", "latest github release announcement")
+
+	output := session.output()
+	assert.Contains(t, output, "fetch")
+	assert.Contains(t, output, "latest github release announcement")
+	assert.NotContains(t, output, `"type":"item.started","item":{"id":"ws_123"`)
+	assert.NotContains(t, output, `"type":"item.completed","item":{"id":"ws_123"`)
+	assert.NotContains(t, output, "web_search")
+
+	session.forceClose()
+}
+
 func TestTaskTUINarrowTerminalKeepsNewTaskStartHintVisible(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)

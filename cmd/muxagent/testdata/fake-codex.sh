@@ -86,6 +86,12 @@ JSON
 JSON
       exit 0
     fi
+    if [ "$flow" = "web-search" ] && [ "$resume_mode" -eq 0 ]; then
+      echo '{"type":"item.started","item":{"id":"ws_123","type":"web_search","query":"","action":{"type":"other"}}}'
+      sleep 0.2
+      echo '{"type":"item.completed","item":{"id":"ws_123","type":"web_search","query":"latest github release announcement","action":{"type":"search","query":"latest github release announcement","queries":["latest github release announcement"]}}}'
+      sleep 0.4
+    fi
     write_result "plan-${count}.md" ""
     ;;
   review_plan)
