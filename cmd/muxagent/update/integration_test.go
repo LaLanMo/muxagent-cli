@@ -119,14 +119,11 @@ func TestIntegrationE2EUpdateFlow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v0.0.2\n", string(out), "new binary should print v0.0.2")
 
-	// Backup should exist
-	assert.FileExists(t, exePath+".bak")
-	bakContent, _ := os.ReadFile(exePath + ".bak")
-	assert.Equal(t, oldBinary, bakContent, "backup should contain old binary")
-
-	// Exec should have been called
-	assert.True(t, execCalled)
-	assert.Equal(t, exePath, execPath)
+	// Manual update should clean backup artifacts in-process and avoid a second exec hop.
+	_, err = os.Stat(exePath + ".bak")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.False(t, execCalled)
+	assert.Empty(t, execPath)
 
 	// All expected URLs should have been hit
 	assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+releaseManifestName))
@@ -321,6 +318,55 @@ func TestIntegrationSigningToolCLI(t *testing.T) {
 	assert.Equal(t, expectedHash, parsed.Entries[assetName])
 
 	t.Logf("Signing tool CLI test passed. Public key: %s", base64.StdEncoding.EncodeToString(pub))
+}
+
+func TestIntegrationStartupUpdateReexecsBareMuxagent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("self-update not supported on Windows")
+	}
+	t.Parallel()
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	exePath := filepath.Join(dir, "muxagent")
+	require.NoError(t, os.WriteFile(exePath, []byte("#!/bin/sh\necho v0.0.1\n"), 0o755))
+
+	newBinary := []byte("#!/bin/sh\necho v0.0.2\n")
+	runtimeBinary := []byte("#!/bin/sh\necho runtime\n")
+	bundleAssetName := fmt.Sprintf("muxagent-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	bundleBytes := createTarGzBundle(t, "muxagent", newBinary, "claude-agent-acp", runtimeBinary)
+	server, reqs := startReleaseServer(t, "v0.0.2", "v0.0.2", bundleAssetName, bundleBytes, priv, false, nil)
+	defer server.Close()
+
+	var resumedEnv []string
+	var resumedArgs []string
+	u := &updater{
+		client:                 server.Client(),
+		latestReleaseURL:       server.URL + "/latest",
+		releaseDownloadBaseURL: server.URL + "/download",
+		releaseSigningKeys:     []ed25519.PublicKey{pub},
+		resolveExecutablePath:  func() (string, error) { return exePath, nil },
+		exec: func(path string, args []string, env []string) error {
+			resumedArgs = append([]string(nil), args...)
+			resumedEnv = append([]string(nil), env...)
+			return nil
+		},
+		environ:         func() []string { return []string{"PATH=/usr/bin"} },
+		runtimePlatform: testRuntimePlatform(runtime.GOOS, runtime.GOARCH),
+		goos:            runtime.GOOS,
+		goarch:          runtime.GOARCH,
+	}
+	u.client.Timeout = 5 * time.Second
+
+	err = u.installWithMode(context.Background(), "v0.0.2", true)
+	require.NoError(t, err)
+	assert.Equal(t, []string{exePath}, resumedArgs)
+	assert.Equal(t, startupOutcomeSuccess, envValue(resumedEnv, startupOutcomeEnvVar))
+	assert.Equal(t, "v0.0.2", envValue(resumedEnv, startupOutcomeVersionEnvVar))
+	assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+releaseManifestName))
+	assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+bundleAssetName))
 }
 
 func findRepoRoot(t *testing.T) string {

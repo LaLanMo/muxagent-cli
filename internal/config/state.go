@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/crypto"
 	"github.com/LaLanMo/muxagent-cli/internal/localkey"
@@ -31,6 +32,12 @@ type DaemonState struct {
 
 type TaskLaunchPreferences struct {
 	UseWorktree bool `json:"use_worktree"`
+}
+
+type StartupUpdateState struct {
+	LastCheckedAt  time.Time `json:"last_checked_at,omitempty"`
+	LastFailedAt   time.Time `json:"last_failed_at,omitempty"`
+	SkippedVersion string    `json:"skipped_version,omitempty"`
 }
 
 // SetToken encrypts and stores the token.
@@ -103,6 +110,14 @@ func TaskLaunchPreferencesPath() (string, error) {
 	return filepath.Join(home, ".muxagent", "task-launch-preferences.json"), nil
 }
 
+func StartupUpdateStatePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".muxagent", "startup-update-state.json"), nil
+}
+
 func SaveState(state DaemonState) (string, error) {
 	path, err := StatePath()
 	if err != nil {
@@ -136,6 +151,28 @@ func SaveTaskLaunchPreferences(prefs TaskLaunchPreferences) (string, error) {
 	}
 
 	payload, err := json.MarshalIndent(prefs, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
+func SaveStartupUpdateState(state StartupUpdateState) (string, error) {
+	path, err := StartupUpdateStatePath()
+	if err != nil {
+		return "", err
+	}
+
+	if err := privdir.Ensure(filepath.Dir(path)); err != nil {
+		return "", err
+	}
+
+	payload, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -183,6 +220,25 @@ func LoadTaskLaunchPreferences() TaskLaunchPreferences {
 	}
 
 	return prefs
+}
+
+func LoadStartupUpdateState() StartupUpdateState {
+	path, err := StartupUpdateStatePath()
+	if err != nil {
+		return StartupUpdateState{}
+	}
+
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return StartupUpdateState{}
+	}
+
+	var state StartupUpdateState
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return StartupUpdateState{}
+	}
+
+	return state
 }
 
 func ClearState() error {

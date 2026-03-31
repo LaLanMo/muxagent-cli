@@ -8,10 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/update"
 	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	cliversion "github.com/LaLanMo/muxagent-cli/internal/version"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -327,6 +330,367 @@ func TestLoadTaskConfigCatalogAllowsBrokenRegistryConfigAtStartup(t *testing.T) 
 	assert.Equal(t, filepath.Join(bundleDir, "config.yaml"), entry.Path)
 }
 
+func TestRootSkipsStartupUpdateWhenNotInteractive(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	checkCalled := false
+	launchCalled := false
+	cmd := newRootCmd(rootOptions{
+		isInteractive: func(cmd *cobra.Command) bool { return false },
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			checkCalled = true
+			return update.StartupCheckResult{}, nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			launchCalled = true
+			return nil
+		},
+	})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.False(t, checkCalled)
+	assert.True(t, launchCalled)
+}
+
+func TestRootSkipsStartupUpdateForDevBuild(t *testing.T) {
+	checkCalled := false
+	cmd := newRootCmd(rootOptions{
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			checkCalled = true
+			return update.StartupCheckResult{}, nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.False(t, checkCalled)
+}
+
+func TestRootSkipsStartupUpdateWithinCadence(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	checkCalled := false
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		loadStartupUpdateState: func() appconfig.StartupUpdateState {
+			return appconfig.StartupUpdateState{LastCheckedAt: now.Add(-time.Hour)}
+		},
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			checkCalled = true
+			return update.StartupCheckResult{}, nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.False(t, checkCalled)
+}
+
+func TestRootSkipsStartupUpdateWithinFailureBackoff(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	checkCalled := false
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		loadStartupUpdateState: func() appconfig.StartupUpdateState {
+			return appconfig.StartupUpdateState{LastFailedAt: now.Add(-time.Hour)}
+		},
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			checkCalled = true
+			return update.StartupCheckResult{}, nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.False(t, checkCalled)
+}
+
+func TestRootWarnsOnStartupUpdateCheckFailureButStillLaunches(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	var saved appconfig.StartupUpdateState
+	launchCalled := false
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			return update.StartupCheckResult{}, errors.New("network down")
+		},
+		saveStartupUpdateState: func(state appconfig.StartupUpdateState) (string, error) {
+			saved = state
+			return "", nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			launchCalled = true
+			return nil
+		},
+	})
+	var errOut bytes.Buffer
+	cmd.SetErr(&errOut)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, launchCalled)
+	assert.True(t, saved.LastFailedAt.Equal(now))
+	assert.Contains(t, errOut.String(), "Warning: Failed to check for updates")
+}
+
+func TestRootLaterPersistsStartupUpdateState(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	var saved appconfig.StartupUpdateState
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			return update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true}, nil
+		},
+		promptForStartupUpdate: func(cmd *cobra.Command, result update.StartupCheckResult) startupUpdateChoice {
+			return startupUpdateChoiceLater
+		},
+		saveStartupUpdateState: func(state appconfig.StartupUpdateState) (string, error) {
+			saved = state
+			return "", nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, saved.LastCheckedAt.Equal(now))
+	assert.True(t, saved.LastFailedAt.IsZero())
+	assert.Empty(t, saved.SkippedVersion)
+}
+
+func TestRootSkipVersionPersistsStartupUpdateState(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	var saved appconfig.StartupUpdateState
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			return update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true}, nil
+		},
+		promptForStartupUpdate: func(cmd *cobra.Command, result update.StartupCheckResult) startupUpdateChoice {
+			return startupUpdateChoiceSkipVersion
+		},
+		saveStartupUpdateState: func(state appconfig.StartupUpdateState) (string, error) {
+			saved = state
+			return "", nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, saved.LastCheckedAt.Equal(now))
+	assert.Equal(t, "v1.2.0", saved.SkippedVersion)
+}
+
+func TestRootWarnsWhenStartupUpdateInstallFails(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	var saved appconfig.StartupUpdateState
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			return update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true}, nil
+		},
+		promptForStartupUpdate: func(cmd *cobra.Command, result update.StartupCheckResult) startupUpdateChoice {
+			return startupUpdateChoiceUpdateNow
+		},
+		installStartupUpdate: func(ctx context.Context, latest string) error {
+			return errors.New("install boom")
+		},
+		saveStartupUpdateState: func(state appconfig.StartupUpdateState) (string, error) {
+			saved = state
+			return "", nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+	var errOut bytes.Buffer
+	cmd.SetErr(&errOut)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, saved.LastFailedAt.Equal(now))
+	assert.Contains(t, errOut.String(), "Warning: Automatic update failed")
+}
+
+func TestRootStartupResumeSuccessPersistsCheckedState(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	var saved appconfig.StartupUpdateState
+	checkCalled := false
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		consumeStartupResumeOutcome: func() update.StartupResumeOutcome {
+			return update.StartupResumeOutcome{Resumed: true, Version: "v1.2.0"}
+		},
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			checkCalled = true
+			return update.StartupCheckResult{}, nil
+		},
+		saveStartupUpdateState: func(state appconfig.StartupUpdateState) (string, error) {
+			saved = state
+			return "", nil
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.False(t, checkCalled)
+	assert.True(t, saved.LastCheckedAt.Equal(now))
+	assert.Empty(t, saved.SkippedVersion)
+}
+
+func TestRootWarnsWhenStartupUpdateStateSaveFails(t *testing.T) {
+	originalVersion := cliversion.Version
+	cliversion.Version = "v1.0.0"
+	t.Cleanup(func() {
+		cliversion.Version = originalVersion
+	})
+
+	now := time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC)
+	cmd := newRootCmd(rootOptions{
+		now:           func() time.Time { return now },
+		isInteractive: func(cmd *cobra.Command) bool { return true },
+		checkForStartupUpdate: func(ctx context.Context) (update.StartupCheckResult, error) {
+			return update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true}, nil
+		},
+		promptForStartupUpdate: func(cmd *cobra.Command, result update.StartupCheckResult) startupUpdateChoice {
+			return startupUpdateChoiceLater
+		},
+		saveStartupUpdateState: func(state appconfig.StartupUpdateState) (string, error) {
+			return "", errors.New("disk full")
+		},
+		launchTUI: func(ctx context.Context, workDir string, launch taskTUILaunchOptions) error {
+			return nil
+		},
+	})
+	var errOut bytes.Buffer
+	cmd.SetErr(&errOut)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, errOut.String(), "Warning: Failed to save update state")
+}
+
+func TestDefaultPromptForStartupUpdateEmptyInputDefaultsToLater(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(bytes.NewBufferString("\n"))
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+
+	choice := defaultPromptForStartupUpdate(cmd, update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true})
+
+	assert.Equal(t, startupUpdateChoiceLater, choice)
+	assert.Contains(t, out.String(), "Update available: v1.0.0 -> v1.2.0")
+	assert.Empty(t, errOut.String())
+}
+
+func TestDefaultPromptForStartupUpdateRetriesInvalidInput(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(bytes.NewBufferString("laterer\n3\n"))
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+
+	choice := defaultPromptForStartupUpdate(cmd, update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true})
+
+	assert.Equal(t, startupUpdateChoiceSkipVersion, choice)
+	assert.Contains(t, errOut.String(), "Please enter 1, 2, or 3.")
+}
+
+func TestDefaultPromptForStartupUpdateAcceptsUpdateNow(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(bytes.NewBufferString("1\n"))
+
+	choice := defaultPromptForStartupUpdate(cmd, update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true})
+
+	assert.Equal(t, startupUpdateChoiceUpdateNow, choice)
+}
+
+func TestDefaultPromptForStartupUpdateWarnsOnReadError(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(errReader{err: errors.New("boom")})
+	var errOut bytes.Buffer
+	cmd.SetErr(&errOut)
+
+	choice := defaultPromptForStartupUpdate(cmd, update.StartupCheckResult{CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", UpdateAvailable: true})
+
+	assert.Equal(t, startupUpdateChoiceLater, choice)
+	assert.Contains(t, errOut.String(), "Warning: Failed to read update choice")
+}
+
 func initRootTestGitRepo(t *testing.T) string {
 	t.Helper()
 
@@ -343,4 +707,12 @@ func runRootGit(t *testing.T, dir string, name string, args ...string) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "command %s %v failed: %s", name, args, string(out))
+}
+
+type errReader struct {
+	err error
+}
+
+func (r errReader) Read(p []byte) (int, error) {
+	return 0, r.err
 }

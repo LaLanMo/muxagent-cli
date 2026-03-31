@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -148,6 +149,34 @@ func TestLatestReleaseUsesSignedLatestManifest(t *testing.T) {
 	assert.Equal(t, "v1.2.3", latest)
 }
 
+func TestStartupUpdateHTTPClientUsesShortTimeout(t *testing.T) {
+	t.Parallel()
+
+	client := newStartupUpdateHTTPClient()
+	assert.Equal(t, startupCheckHTTPTimeout, client.Timeout)
+}
+
+func TestCheckForStartupUpdateUsesSignedLatestManifest(t *testing.T) {
+	t.Parallel()
+
+	pub, priv := generateSigningKeypair(t)
+	exePath, _ := writeExecutable(t, "old-binary")
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("new-binary"), "claude-agent-acp", []byte("runtime-binary"))
+	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, false, nil)
+	defer server.Close()
+
+	u := newTestUpdater(server, pub, exePath)
+	u.latestReleaseURL = ""
+	u.client = newStartupUpdateHTTPClient()
+
+	result, err := checkForStartupUpdateWithUpdater(context.Background(), u, "v1.0.0")
+	require.NoError(t, err)
+	assert.True(t, result.UpdateAvailable)
+	assert.Equal(t, "v1.0.0", result.CurrentVersion)
+	assert.Equal(t, "v1.2.3", result.LatestVersion)
+	assert.Equal(t, 1, reqs.count("/latest/download/"+releaseManifestName))
+}
+
 func TestLatestReleaseUsesLatestPrereleaseFromReleaseList(t *testing.T) {
 	t.Parallel()
 
@@ -225,14 +254,10 @@ func TestInstallSuccessReplacesBinary(t *testing.T) {
 	server, reqs := startReleaseServer(t, "v1.2.3", "v1.2.3", bundleAssetName, bundleBytes, priv, false, nil)
 	defer server.Close()
 
-	var execPath string
-	var execArgs []string
-	var execEnv []string
+	execCalled := false
 	u := newTestUpdater(server, pub, exePath)
 	u.exec = func(path string, args []string, env []string) error {
-		execPath = path
-		execArgs = append([]string(nil), args...)
-		execEnv = append([]string(nil), env...)
+		execCalled = true
 		return nil
 	}
 
@@ -246,15 +271,16 @@ func TestInstallSuccessReplacesBinary(t *testing.T) {
 	gotRuntime, err := os.ReadFile(runtimePath)
 	require.NoError(t, err)
 	assert.Equal(t, runtimeContent, gotRuntime)
-	assert.FileExists(t, exePath+".bak")
-	assert.Equal(t, exePath, execPath)
-	assert.Equal(t, []string{exePath, "update", "--ensure-runtime"}, execArgs)
-	assert.Contains(t, strings.Join(execEnv, "\n"), updatedBackupEnvVar+"="+exePath+".bak")
+	assert.False(t, execCalled)
+	_, err = os.Stat(exePath + ".bak")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(exePath + ".lock")
+	assert.ErrorIs(t, err, os.ErrNotExist)
 	assert.Equal(t, 1, reqs.count("/download/v1.2.3/"+bundleAssetName))
 	assert.NotEqual(t, newContent, oldContent)
 }
 
-func TestInstallRollsBackWhenExecFails(t *testing.T) {
+func TestInstallWithModeRollsBackWhenStartupResumeExecFails(t *testing.T) {
 	t.Parallel()
 
 	pub, priv := generateSigningKeypair(t)
@@ -269,7 +295,7 @@ func TestInstallRollsBackWhenExecFails(t *testing.T) {
 		return errors.New("exec failed")
 	}
 
-	err := u.install(context.Background(), "v1.2.3")
+	err := u.installWithMode(context.Background(), "v1.2.3", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "re-exec updated binary")
 
@@ -278,6 +304,33 @@ func TestInstallRollsBackWhenExecFails(t *testing.T) {
 	assert.Equal(t, oldContent, got)
 	_, statErr := os.Stat(exePath + ".bak")
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestInstallWithModeSetsStartupEnv(t *testing.T) {
+	t.Parallel()
+
+	pub, priv := generateSigningKeypair(t)
+	exePath, _ := writeExecutable(t, "old-binary")
+	newContent := []byte("#!/bin/sh\necho new\n")
+	bundleBytes := createTarGzBundle(t, "muxagent", newContent, "claude-agent-acp", []byte("#!/bin/sh\necho runtime\n"))
+	server, _ := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, false, nil)
+	defer server.Close()
+
+	var execArgs []string
+	var execEnv []string
+	u := newTestUpdater(server, pub, exePath)
+	u.exec = func(path string, args []string, env []string) error {
+		execArgs = append([]string(nil), args...)
+		execEnv = append([]string(nil), env...)
+		return nil
+	}
+
+	err := u.installWithMode(context.Background(), "v1.2.3", true)
+	require.NoError(t, err)
+	assert.Equal(t, []string{exePath}, execArgs)
+	assert.Equal(t, startupOutcomeSuccess, envValue(execEnv, startupOutcomeEnvVar))
+	assert.Equal(t, "v1.2.3", envValue(execEnv, startupOutcomeVersionEnvVar))
+	assert.Equal(t, exePath+".bak", envValue(execEnv, updatedBackupEnvVar))
 }
 
 func TestInstallRejectsManifestVersionMismatchWithoutDownloadingBinary(t *testing.T) {
@@ -431,6 +484,39 @@ func TestEnsureRuntimeUsesManagedCodexRuntimeWithoutDownload(t *testing.T) {
 	require.NoError(t, ensureRuntime(false))
 }
 
+func TestEnsureRuntimeWithOptionsReturnsLoadConfigError(t *testing.T) {
+	t.Parallel()
+
+	err := ensureRuntimeWithOptions(false, ensureRuntimeOptions{
+		loadConfig: func() (config.Config, error) {
+			return config.Config{}, errors.New("config boom")
+		},
+		newUpdater: func() (*updater, error) {
+			t.Fatal("newUpdater should not be called when config load fails")
+			return nil, nil
+		},
+		version: "v1.2.3",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config boom")
+}
+
+func TestEnsureRuntimeWithOptionsReturnsUpdaterError(t *testing.T) {
+	t.Parallel()
+
+	err := ensureRuntimeWithOptions(false, ensureRuntimeOptions{
+		loadConfig: func() (config.Config, error) {
+			return config.Default(), nil
+		},
+		newUpdater: func() (*updater, error) {
+			return nil, errors.New("updater boom")
+		},
+		version: "v1.2.3",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "updater boom")
+}
+
 func TestDownloadVerifiedBinaryRejectsOversizedBinary(t *testing.T) {
 	t.Parallel()
 
@@ -475,6 +561,45 @@ func TestInstallFailsWhenLockHeld(t *testing.T) {
 	err = u.install(context.Background(), "v1.2.3")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already running")
+}
+
+func TestNewDefaultUpdaterUsesReleaseBaseURLEnv(t *testing.T) {
+	t.Setenv(releaseBaseURLEnvVar, "http://127.0.0.1:8080/releases/download/")
+
+	u, err := newDefaultUpdater()
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:8080/releases/download", u.releaseDownloadBaseURL)
+	assert.Equal(t, "http://127.0.0.1:8080/releases/latest/download/"+releaseManifestName, u.releaseLatestAssetURL(releaseManifestName))
+}
+
+func TestNewDefaultUpdaterUsesReleaseSigningKeysEnv(t *testing.T) {
+	pub, _ := generateSigningKeypair(t)
+	t.Setenv(releaseSigningKeysEnvVar, base64.StdEncoding.EncodeToString(pub))
+
+	u, err := newDefaultUpdater()
+	require.NoError(t, err)
+	require.Len(t, u.releaseSigningKeys, 1)
+	assert.Equal(t, []byte(pub), []byte(u.releaseSigningKeys[0]))
+}
+
+func TestNewDefaultUpdaterRejectsInvalidReleaseSigningKeysEnv(t *testing.T) {
+	t.Setenv(releaseSigningKeysEnvVar, "not-base64")
+
+	_, err := newDefaultUpdater()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid release signing keys")
+}
+
+func TestConsumeStartupResumeOutcomeClearsEnv(t *testing.T) {
+	t.Setenv(startupOutcomeEnvVar, startupOutcomeSuccess)
+	t.Setenv(startupOutcomeVersionEnvVar, "v1.2.3")
+
+	outcome := ConsumeStartupResumeOutcome()
+
+	assert.True(t, outcome.Resumed)
+	assert.Equal(t, "v1.2.3", outcome.Version)
+	assert.Empty(t, os.Getenv(startupOutcomeEnvVar))
+	assert.Empty(t, os.Getenv(startupOutcomeVersionEnvVar))
 }
 
 func TestCleanupUpdatedBackup(t *testing.T) {
@@ -547,12 +672,56 @@ func TestRunWithUpdaterCheckOnlyDoesNotDowngrade(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRunWithUpdaterPrintsSuccessAfterInstall(t *testing.T) {
+	pub, priv := generateSigningKeypair(t)
+	exePath, _ := writeExecutable(t, "old-binary")
+	bundleBytes := createTarGzBundle(t, "muxagent", []byte("#!/bin/sh\necho new\n"), "claude-agent-acp", []byte("#!/bin/sh\necho runtime\n"))
+	server, _ := startReleaseServer(t, "v1.2.3", "v1.2.3", "muxagent-darwin-arm64.tar.gz", bundleBytes, priv, false, nil)
+	defer server.Close()
+
+	u := newTestUpdater(server, pub, exePath)
+	output := captureStdout(t, func() {
+		err := runWithUpdater(u, false, "1.0.0")
+		require.NoError(t, err)
+	})
+
+	assert.Contains(t, output, "Updating muxagent... (v1.0.0")
+	assert.Contains(t, output, "Updated muxagent to v1.2.3")
+}
+
 func generateSigningKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	return pub, priv
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	originalStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = writePipe
+	t.Cleanup(func() {
+		os.Stdout = originalStdout
+	})
+
+	outputCh := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, readPipe)
+		outputCh <- buf.String()
+	}()
+
+	fn()
+
+	require.NoError(t, writePipe.Close())
+	os.Stdout = originalStdout
+	output := <-outputCh
+	require.NoError(t, readPipe.Close())
+	return output
 }
 
 func writeExecutable(t *testing.T, content string) (string, []byte) {

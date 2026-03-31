@@ -3,8 +3,19 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1093,7 +1104,7 @@ func TestTaskTUIApprovalArtifactsFooterAndEnterGuard(t *testing.T) {
 	copiedPath := waitForClipboardContents(t, clipboardPath)
 	assert.Contains(t, view.ArtifactPaths, copiedPath)
 
-	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Tab files", "Shift+Tab timeline")
+	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Tab response")
 	require.NoError(t, os.Remove(clipboardPath))
 	session.send(t, "c")
 	copiedContents := waitForClipboardContents(t, clipboardPath)
@@ -1430,6 +1441,79 @@ type tuiSession struct {
 	ptyCloseOnce sync.Once
 }
 
+func TestTaskTUIStartupUpdatePromptScenarios(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+
+	t.Run("later", func(t *testing.T) {
+		workDir := t.TempDir()
+		binaryPath := buildMuxagentBinaryWithVersion(t, moduleRoot, "v0.0.1")
+		updatedBinaryPath := buildMuxagentBinaryWithVersion(t, moduleRoot, "v0.0.2")
+		homeDir := setupStartupUpdateTUIRuntime(t, moduleRoot, workDir)
+
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		require.NoError(t, err)
+
+		assetName := startupUpdateBundleAssetName(t)
+		bundleBytes := createStartupUpdateBundle(t, updatedBinaryPath)
+		server, reqs := startStartupUpdateReleaseServer(t, "v0.0.2", assetName, bundleBytes, priv)
+		defer server.Close()
+
+		t.Setenv("MUXAGENT_RELEASE_BASE_URL", server.URL+"/download")
+		t.Setenv("MUXAGENT_RELEASE_SIGNING_PUBLIC_KEYS", base64.StdEncoding.EncodeToString(pub))
+
+		session := startTUISession(t, binaryPath, workDir)
+		session.waitForAll(t, 15*time.Second, "Update available: v0.0.1 -> v0.0.2", "Choose [1] Update now, [2] Later, [3] Skip this version")
+		session.send(t, "\r")
+		session.waitForAll(t, 15*time.Second, "No tasks in this working directory yet.", "new task")
+		session.quit(t)
+
+		statePath := filepath.Join(homeDir, ".muxagent", "startup-update-state.json")
+		assert.FileExists(t, statePath)
+		state := appconfig.LoadStartupUpdateState()
+		assert.False(t, state.LastCheckedAt.IsZero())
+		assert.True(t, state.LastFailedAt.IsZero())
+		assert.Equal(t, 1, reqs.count("/latest/download/"+startupReleaseManifestName))
+		assert.Zero(t, reqs.count("/download/v0.0.2/"+assetName))
+	})
+
+	t.Run("update now", func(t *testing.T) {
+		workDir := t.TempDir()
+		binaryPath := buildMuxagentBinaryWithVersion(t, moduleRoot, "v0.0.1")
+		updatedBinaryPath := buildMuxagentBinaryWithVersion(t, moduleRoot, "v0.0.2")
+		homeDir := setupStartupUpdateTUIRuntime(t, moduleRoot, workDir)
+
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		require.NoError(t, err)
+
+		assetName := startupUpdateBundleAssetName(t)
+		bundleBytes := createStartupUpdateBundle(t, updatedBinaryPath)
+		server, reqs := startStartupUpdateReleaseServer(t, "v0.0.2", assetName, bundleBytes, priv)
+		defer server.Close()
+
+		t.Setenv("MUXAGENT_RELEASE_BASE_URL", server.URL+"/download")
+		t.Setenv("MUXAGENT_RELEASE_SIGNING_PUBLIC_KEYS", base64.StdEncoding.EncodeToString(pub))
+
+		session := startTUISession(t, binaryPath, workDir)
+		session.waitForAll(t, 15*time.Second, "Update available: v0.0.1 -> v0.0.2", "Choose [1] Update now, [2] Later, [3] Skip this version")
+		session.send(t, "1\r")
+		session.waitForAll(t, 30*time.Second, "No tasks in this working directory yet.", "new task")
+		session.quit(t)
+
+		statePath := filepath.Join(homeDir, ".muxagent", "startup-update-state.json")
+		assert.FileExists(t, statePath)
+		state := appconfig.LoadStartupUpdateState()
+		assert.False(t, state.LastCheckedAt.IsZero())
+		assert.True(t, state.LastFailedAt.IsZero())
+		assert.Equal(t, 1, reqs.count("/latest/download/"+startupReleaseManifestName))
+		assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+startupReleaseManifestName))
+		assert.Equal(t, 1, reqs.count("/download/v0.0.2/"+assetName))
+
+		out, err := exec.Command(binaryPath, "version").CombinedOutput()
+		require.NoError(t, err, string(out))
+		assert.Contains(t, string(out), "v0.0.2")
+	})
+}
+
 func startTUISession(t *testing.T, binaryPath, workDir string, args ...string) *tuiSession {
 	t.Helper()
 
@@ -1463,6 +1547,112 @@ func startTUISession(t *testing.T, binaryPath, workDir string, args ...string) *
 		session.forceClose()
 	})
 	return session
+}
+
+func setupStartupUpdateTUIRuntime(t *testing.T, moduleRoot, workDir string) string {
+	t.Helper()
+
+	fakeDir := t.TempDir()
+	basePath := os.Getenv("PATH")
+	copyExecutable(t, filepath.Join(moduleRoot, "cmd", "muxagent", "testdata", "fake-codex.sh"), filepath.Join(fakeDir, "codex"))
+	linkRuntimeCommands(t, fakeDir, "basename", "cat", "dirname", "mkdir", "sleep")
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+basePath)
+	t.Setenv("FAKE_CODEX_FLOW", "happy")
+	t.Setenv("FAKE_CODEX_STATE_DIR", filepath.Join(workDir, ".fake-codex-state"))
+	t.Setenv("TERM", "xterm-256color")
+	return homeDir
+}
+
+const startupReleaseManifestName = "SHA256SUMS"
+
+type startupReleaseRequests struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (r *startupReleaseRequests) add(path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.counts[path]++
+}
+
+func (r *startupReleaseRequests) count(path string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counts[path]
+}
+
+func startupUpdateBundleAssetName(t *testing.T) string {
+	t.Helper()
+
+	name := fmt.Sprintf("muxagent-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "linux" {
+		if matches, _ := filepath.Glob("/lib/ld-musl-*"); len(matches) > 0 {
+			name += "-musl"
+		}
+	}
+	return name + ".tar.gz"
+}
+
+func createStartupUpdateBundle(t *testing.T, cliBinaryPath string) []byte {
+	t.Helper()
+
+	cliBody, err := os.ReadFile(cliBinaryPath)
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tarWriter := tar.NewWriter(gz)
+
+	write := func(name string, body []byte) {
+		header := &tar.Header{
+			Name: name,
+			Mode: 0o755,
+			Size: int64(len(body)),
+		}
+		require.NoError(t, tarWriter.WriteHeader(header))
+		_, err := tarWriter.Write(body)
+		require.NoError(t, err)
+	}
+
+	write("muxagent", cliBody)
+	write("claude-agent-acp", []byte("#!/bin/sh\nexit 0\n"))
+	write("codex-acp", []byte("#!/bin/sh\nexit 0\n"))
+	require.NoError(t, tarWriter.Close())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
+}
+
+func startStartupUpdateReleaseServer(t *testing.T, version, assetName string, bundleBytes []byte, signer ed25519.PrivateKey) (*httptest.Server, *startupReleaseRequests) {
+	t.Helper()
+
+	hash := sha256.Sum256(bundleBytes)
+	manifest := []byte(fmt.Sprintf("# muxagent %s\n%s  %s\n", version, hex.EncodeToString(hash[:]), assetName))
+	signature := ed25519.Sign(signer, manifest)
+	sigBase64 := []byte(base64.StdEncoding.EncodeToString(signature))
+
+	reqs := &startupReleaseRequests{counts: make(map[string]int)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqs.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/latest/download/" + startupReleaseManifestName:
+			_, _ = w.Write(manifest)
+		case "/latest/download/" + startupReleaseManifestName + ".sig":
+			_, _ = w.Write(sigBase64)
+		case "/download/" + version + "/" + startupReleaseManifestName:
+			_, _ = w.Write(manifest)
+		case "/download/" + version + "/" + startupReleaseManifestName + ".sig":
+			_, _ = w.Write(sigBase64)
+		case "/download/" + version + "/" + assetName:
+			_, _ = w.Write(bundleBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	return server, reqs
 }
 
 func writeOverrideConfig(t *testing.T, workDir, fileName string, cfg *taskconfig.Config) string {
@@ -1971,9 +2161,18 @@ func (s *tuiSession) waitForExit(timeout time.Duration) (error, bool) {
 }
 
 func buildMuxagentBinary(t *testing.T, moduleRoot string) string {
+	return buildMuxagentBinaryWithVersion(t, moduleRoot, "")
+}
+
+func buildMuxagentBinaryWithVersion(t *testing.T, moduleRoot, version string) string {
 	t.Helper()
 	binaryPath := filepath.Join(t.TempDir(), "muxagent")
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/muxagent")
+	args := []string{"build"}
+	if version != "" {
+		args = append(args, "-ldflags", "-X github.com/LaLanMo/muxagent-cli/internal/version.Version="+version)
+	}
+	args = append(args, "-o", binaryPath, "./cmd/muxagent")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = moduleRoot
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))

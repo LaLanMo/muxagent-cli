@@ -28,21 +28,27 @@ import (
 )
 
 const (
-	cliRepo                    = "LaLanMo/muxagent-cli"
-	releaseManifestName        = "SHA256SUMS"
-	releaseManifestSigName     = "SHA256SUMS.sig"
-	releaseLatestMaxBytes      = 1 << 20
-	releaseManifestMaxBytes    = 1 << 20
-	releaseSignatureMaxBytes   = 64 << 10
-	releaseBundleMaxBytes      = 500 << 20
-	updateHTTPTimeout          = 5 * time.Minute
-	maxRedirects               = 10
-	updatedBackupEnvVar        = "MUXAGENT_UPDATED_BACKUP"
-	updatedClaudeRuntimeBakEnv = "MUXAGENT_UPDATED_CLAUDE_RUNTIME_BACKUP"
-	updatedCodexRuntimeBakEnv  = "MUXAGENT_UPDATED_CODEX_RUNTIME_BACKUP"
-	updatedLockEnvVar          = "MUXAGENT_UPDATED_LOCK_FILE"
-	updatedStageDirEnvVar      = "MUXAGENT_UPDATED_STAGE_DIR"
-	releaseManifestHeaderBase  = "# muxagent "
+	cliRepo                     = "LaLanMo/muxagent-cli"
+	releaseManifestName         = "SHA256SUMS"
+	releaseManifestSigName      = "SHA256SUMS.sig"
+	releaseLatestMaxBytes       = 1 << 20
+	releaseManifestMaxBytes     = 1 << 20
+	releaseSignatureMaxBytes    = 64 << 10
+	releaseBundleMaxBytes       = 500 << 20
+	startupCheckHTTPTimeout     = 3 * time.Second
+	updateHTTPTimeout           = 5 * time.Minute
+	maxRedirects                = 10
+	updatedBackupEnvVar         = "MUXAGENT_UPDATED_BACKUP"
+	updatedClaudeRuntimeBakEnv  = "MUXAGENT_UPDATED_CLAUDE_RUNTIME_BACKUP"
+	updatedCodexRuntimeBakEnv   = "MUXAGENT_UPDATED_CODEX_RUNTIME_BACKUP"
+	updatedLockEnvVar           = "MUXAGENT_UPDATED_LOCK_FILE"
+	updatedStageDirEnvVar       = "MUXAGENT_UPDATED_STAGE_DIR"
+	releaseManifestHeaderBase   = "# muxagent "
+	releaseBaseURLEnvVar        = "MUXAGENT_RELEASE_BASE_URL"
+	releaseSigningKeysEnvVar    = "MUXAGENT_RELEASE_SIGNING_PUBLIC_KEYS"
+	startupOutcomeEnvVar        = "MUXAGENT_STARTUP_UPDATE_OUTCOME"
+	startupOutcomeVersionEnvVar = "MUXAGENT_STARTUP_UPDATE_OUTCOME_VERSION"
+	startupOutcomeSuccess       = "success"
 )
 
 var releaseSigningPublicKeyStrings = []string{
@@ -52,6 +58,17 @@ var releaseSigningPublicKeyStrings = []string{
 type releaseManifest struct {
 	Version string
 	Entries map[string]string
+}
+
+type StartupCheckResult struct {
+	CurrentVersion  string
+	LatestVersion   string
+	UpdateAvailable bool
+}
+
+type StartupResumeOutcome struct {
+	Resumed bool
+	Version string
 }
 
 type updater struct {
@@ -101,6 +118,44 @@ func run(checkOnly bool, prerelease bool) error {
 	return runWithUpdater(u, checkOnly, version.Version)
 }
 
+func CheckForStartupUpdate(ctx context.Context) (StartupCheckResult, error) {
+	u, err := newDefaultUpdater()
+	if err != nil {
+		return StartupCheckResult{}, err
+	}
+	u.client = newStartupUpdateHTTPClient()
+	return checkForStartupUpdateWithUpdater(ctx, u, version.Version)
+}
+
+func InstallStartupUpdate(ctx context.Context, latest string) error {
+	u, err := newDefaultUpdater()
+	if err != nil {
+		return err
+	}
+	if u.goos == "windows" {
+		return fmt.Errorf("self-update is not supported on windows")
+	}
+	return u.installWithMode(ctx, latest, true)
+}
+
+func ConsumeStartupResumeOutcome() StartupResumeOutcome {
+	outcomeValue := strings.TrimSpace(os.Getenv(startupOutcomeEnvVar))
+	versionValue := strings.TrimSpace(os.Getenv(startupOutcomeVersionEnvVar))
+
+	_ = os.Unsetenv(startupOutcomeEnvVar)
+	_ = os.Unsetenv(startupOutcomeVersionEnvVar)
+
+	switch outcomeValue {
+	case startupOutcomeSuccess:
+		return StartupResumeOutcome{
+			Resumed: true,
+			Version: versionValue,
+		}
+	default:
+		return StartupResumeOutcome{}
+	}
+}
+
 func runWithUpdater(u *updater, checkOnly bool, currentVersion string) error {
 	if currentVersion == "dev" {
 		fmt.Println("Running development build. Skipping update.")
@@ -110,19 +165,13 @@ func runWithUpdater(u *updater, checkOnly bool, currentVersion string) error {
 		return fmt.Errorf("self-update is not supported on windows")
 	}
 
-	current, err := normalizeVersion(currentVersion)
+	current, latest, cmp, err := checkForUpdateWithUpdater(context.Background(), u, currentVersion)
 	if err != nil {
-		return fmt.Errorf("invalid current version: %w", err)
-	}
-
-	latest, err := u.latestRelease(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to check for updates: %w", err)
+		return err
 	}
 
 	currentClean := displayVersion(current)
 	latestClean := displayVersion(latest)
-	cmp := semver.Compare(latest, current)
 
 	if checkOnly {
 		if cmp <= 0 {
@@ -146,29 +195,74 @@ func runWithUpdater(u *updater, checkOnly bool, currentVersion string) error {
 	if err := u.install(context.Background(), latest); err != nil {
 		return err
 	}
+	fmt.Printf("Updated muxagent to v%s\n", latestClean)
 	return nil
 }
 
+func checkForStartupUpdateWithUpdater(ctx context.Context, u *updater, currentVersion string) (StartupCheckResult, error) {
+	current, latest, cmp, err := checkForUpdateWithUpdater(ctx, u, currentVersion)
+	if err != nil {
+		return StartupCheckResult{}, err
+	}
+	return StartupCheckResult{
+		CurrentVersion:  current,
+		LatestVersion:   latest,
+		UpdateAvailable: cmp > 0,
+	}, nil
+}
+
+func checkForUpdateWithUpdater(ctx context.Context, u *updater, currentVersion string) (string, string, int, error) {
+	if currentVersion == "dev" {
+		return "", "", 0, fmt.Errorf("development builds do not support self-update")
+	}
+
+	current, err := normalizeVersion(currentVersion)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("invalid current version: %w", err)
+	}
+
+	latest, err := u.latestRelease(ctx)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to check for updates: %w", err)
+	}
+
+	return current, latest, semver.Compare(latest, current), nil
+}
+
 func ensureRuntime(forceBundleInstall bool) error {
-	cfg, err := config.LoadEffective()
+	return ensureRuntimeWithOptions(forceBundleInstall, ensureRuntimeOptions{
+		loadConfig: config.LoadEffective,
+		newUpdater: newDefaultUpdater,
+		version:    version.Version,
+	})
+}
+
+type ensureRuntimeOptions struct {
+	loadConfig func() (config.Config, error)
+	newUpdater func() (*updater, error)
+	version    string
+}
+
+func ensureRuntimeWithOptions(forceBundleInstall bool, opts ensureRuntimeOptions) error {
+	cfg, err := opts.loadConfig()
 	if err != nil {
 		return err
 	}
 
 	runtimeIDs := cfg.ConfiguredRuntimeIDs()
 	if len(runtimeIDs) == 0 {
-		fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
+		fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(opts.version, "v"))
 		return nil
 	}
 
 	var updaterInstance *updater
 	var currentTag string
-	if version.Version != "dev" {
-		updaterInstance, err = newDefaultUpdater()
+	if opts.version != "dev" {
+		updaterInstance, err = opts.newUpdater()
 		if err != nil {
 			return err
 		}
-		currentTag, _ = normalizeVersion(version.Version)
+		currentTag, _ = normalizeVersion(opts.version)
 	}
 
 	for _, runtimeID := range runtimeIDs {
@@ -176,7 +270,7 @@ func ensureRuntime(forceBundleInstall bool) error {
 			return err
 		}
 	}
-	fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(version.Version, "v"))
+	fmt.Printf("Updated muxagent to v%s\n", strings.TrimPrefix(opts.version, "v"))
 	return nil
 }
 
@@ -288,17 +382,65 @@ func cleanupStageDir(envVar, parentDir string) {
 	_ = os.RemoveAll(cleanStageDir)
 }
 
+func cleanupInstalledArtifacts(exePath, backupPath string, runtimeBackupPaths map[config.RuntimeID]string) {
+	removeFileIfExists(backupPath)
+	for _, runtimeBackupPath := range runtimeBackupPaths {
+		removeFileIfExists(runtimeBackupPath)
+	}
+	removeFileIfExists(exePath + ".lock")
+}
+
+func removeFileIfExists(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+}
+
+func buildStartupResumeEnv(env []string, exePath, backupPath, stageDir, version string, runtimeBackupPaths map[config.RuntimeID]string) []string {
+	updated := setEnv(env, updatedBackupEnvVar, backupPath)
+	for runtimeID, runtimeBackupPath := range runtimeBackupPaths {
+		if runtimeBackupPath == "" {
+			continue
+		}
+		if envVar := runtimeBackupEnvVar(runtimeID); envVar != "" {
+			updated = setEnv(updated, envVar, runtimeBackupPath)
+		}
+	}
+	updated = setEnv(updated, updatedLockEnvVar, exePath+".lock")
+	updated = setEnv(updated, updatedStageDirEnvVar, stageDir)
+	updated = setEnv(updated, startupOutcomeEnvVar, startupOutcomeSuccess)
+	if strings.TrimSpace(version) != "" {
+		updated = setEnv(updated, startupOutcomeVersionEnvVar, version)
+	} else {
+		updated = unsetEnv(updated, startupOutcomeVersionEnvVar)
+	}
+	return updated
+}
+
 func newDefaultUpdater() (*updater, error) {
-	signingKeys, err := decodeSigningPublicKeys(releaseSigningPublicKeyStrings)
+	signingKeysRaw := releaseSigningPublicKeyStrings
+	if envValue := strings.TrimSpace(os.Getenv(releaseSigningKeysEnvVar)); envValue != "" {
+		signingKeysRaw = splitSigningPublicKeys(envValue)
+	}
+
+	signingKeys, err := decodeSigningPublicKeys(signingKeysRaw)
 	if err != nil {
-		return nil, fmt.Errorf("invalid embedded release signing keys: %w", err)
+		return nil, fmt.Errorf("invalid release signing keys: %w", err)
+	}
+
+	releaseDownloadBaseURL := strings.TrimSpace(os.Getenv(releaseBaseURLEnvVar))
+	if releaseDownloadBaseURL == "" {
+		releaseDownloadBaseURL = fmt.Sprintf("https://github.com/%s/releases/download", cliRepo)
 	}
 
 	return &updater{
 		client:                 newUpdateHTTPClient(),
 		latestReleaseURL:       "",
 		releasesURL:            fmt.Sprintf("https://api.github.com/repos/%s/releases", cliRepo),
-		releaseDownloadBaseURL: fmt.Sprintf("https://github.com/%s/releases/download", cliRepo),
+		releaseDownloadBaseURL: strings.TrimRight(releaseDownloadBaseURL, "/"),
 		releaseSigningKeys:     signingKeys,
 		resolveExecutablePath:  currentExecutablePath,
 		exec:                   syscall.Exec,
@@ -312,6 +454,13 @@ func newDefaultUpdater() (*updater, error) {
 func newUpdateHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout:       updateHTTPTimeout,
+		CheckRedirect: httpsOnlyRedirectPolicy,
+	}
+}
+
+func newStartupUpdateHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       startupCheckHTTPTimeout,
 		CheckRedirect: httpsOnlyRedirectPolicy,
 	}
 }
@@ -335,6 +484,10 @@ func currentExecutablePath() (string, error) {
 }
 
 func decodeSigningPublicKeys(keys []string) ([]ed25519.PublicKey, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no public keys configured")
+	}
+
 	decoded := make([]ed25519.PublicKey, 0, len(keys))
 	for _, key := range keys {
 		raw, err := base64.StdEncoding.DecodeString(key)
@@ -347,6 +500,19 @@ func decodeSigningPublicKeys(keys []string) ([]ed25519.PublicKey, error) {
 		decoded = append(decoded, ed25519.PublicKey(raw))
 	}
 	return decoded, nil
+}
+
+func splitSigningPublicKeys(raw string) []string {
+	parts := strings.Split(raw, ",")
+	keys := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		keys = append(keys, part)
+	}
+	return keys
 }
 
 func normalizeVersion(raw string) (string, error) {
@@ -439,6 +605,10 @@ func (u *updater) latestPrerelease(ctx context.Context) (string, error) {
 }
 
 func (u *updater) install(ctx context.Context, latest string) error {
+	return u.installWithMode(ctx, latest, false)
+}
+
+func (u *updater) installWithMode(ctx context.Context, latest string, startupMode bool) error {
 	exePath, err := u.resolveExecutablePath()
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)
@@ -531,31 +701,28 @@ func (u *updater) install(ctx context.Context, latest string) error {
 		}
 	}
 
-	env := setEnv(u.environ(), updatedBackupEnvVar, bakPath)
-	for runtimeID, backupPath := range runtimeBakPaths {
-		if !hadRuntime[runtimeID] {
-			continue
-		}
-		env = setEnv(env, runtimeBackupEnvVar(runtimeID), backupPath)
-	}
-	env = setEnv(env, updatedLockEnvVar, exePath+".lock")
-	env = setEnv(env, updatedStageDirEnvVar, stageDir)
-	if err := u.exec(exePath, []string{exePath, "update", "--ensure-runtime"}, env); err != nil {
-		for runtimeID, runtimePath := range runtimePaths {
-			runtimeBakPath := runtimeBakPaths[runtimeID]
-			if hadRuntime[runtimeID] {
-				if restoreErr := restoreFile(runtimePath, runtimeBakPath); restoreErr != nil {
-					return fmt.Errorf("re-exec failed: %v (%s runtime rollback failed: %w)", err, runtimeID, restoreErr)
+	if startupMode {
+		env := buildStartupResumeEnv(u.environ(), exePath, bakPath, stageDir, latest, runtimeBakPaths)
+		if err := u.exec(exePath, []string{exePath}, env); err != nil {
+			for runtimeID, runtimePath := range runtimePaths {
+				runtimeBakPath := runtimeBakPaths[runtimeID]
+				if hadRuntime[runtimeID] {
+					if restoreErr := restoreFile(runtimePath, runtimeBakPath); restoreErr != nil {
+						return fmt.Errorf("re-exec failed: %v (%s runtime rollback failed: %w)", err, runtimeID, restoreErr)
+					}
+				} else {
+					_ = os.Remove(runtimePath)
 				}
-			} else {
-				_ = os.Remove(runtimePath)
 			}
+			if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
+				return fmt.Errorf("re-exec failed: %v (rollback failed: %w)", err, restoreErr)
+			}
+			return fmt.Errorf("re-exec updated binary: %w", err)
 		}
-		if restoreErr := restoreExecutable(exePath, bakPath); restoreErr != nil {
-			return fmt.Errorf("re-exec failed: %v (rollback failed: %w)", err, restoreErr)
-		}
-		return fmt.Errorf("re-exec updated binary: %w", err)
+		return nil
 	}
+
+	cleanupInstalledArtifacts(exePath, bakPath, runtimeBakPaths)
 	return nil
 }
 
@@ -943,4 +1110,26 @@ func setEnv(env []string, key, value string) []string {
 		updated = append(updated, prefix+value)
 	}
 	return updated
+}
+
+func unsetEnv(env []string, key string) []string {
+	prefix := key + "="
+	updated := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		updated = append(updated, entry)
+	}
+	return updated
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
 }
