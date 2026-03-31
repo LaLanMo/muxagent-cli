@@ -54,6 +54,9 @@ func summarizeNodeRun(run taskdomain.NodeRunView, current *taskdomain.TaskView) 
 	}
 	if run.Result != nil {
 		if approved, ok := run.Result["approved"].(bool); ok {
+			if feedback, ok := run.Result["feedback"].(string); ok && feedback != "" {
+				return fmt.Sprintf("approved: %t · feedback: %s", approved, feedback)
+			}
 			return fmt.Sprintf("approved: %t", approved)
 		}
 		if passed, ok := run.Result["passed"].(bool); ok {

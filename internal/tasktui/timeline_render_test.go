@@ -265,6 +265,23 @@ func TestTaskListMetaUsesHashIterationSuffixForRepeatedCurrentNode(t *testing.T)
 	assert.Contains(t, meta, "approve_plan (#2)")
 }
 
+func TestSummarizeNodeRunIncludesApprovalFeedback(t *testing.T) {
+	run := taskdomain.NodeRunView{
+		NodeRun: taskdomain.NodeRun{
+			ID:       "run-1",
+			NodeName: "approve_plan",
+			Result: map[string]interface{}{
+				"approved": true,
+				"feedback": "Looks good to me",
+			},
+		},
+	}
+
+	summary := summarizeNodeRun(run, nil)
+
+	assert.Equal(t, "approved: true · feedback: Looks good to me", summary)
+}
+
 func TestTaskListMetaPlacesWorktreeBeforeConfig(t *testing.T) {
 	view := taskdomain.TaskView{
 		Task: taskdomain.Task{

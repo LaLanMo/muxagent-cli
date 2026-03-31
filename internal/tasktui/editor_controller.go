@@ -71,6 +71,17 @@ func (e EditorController) Value() string {
 	return e.input.Value()
 }
 
+func (e EditorController) DraftValue(slot string) (string, bool) {
+	if slot == "" {
+		return "", false
+	}
+	if e.slot == slot {
+		return e.input.Value(), true
+	}
+	value, ok := e.draft[slot]
+	return value, ok
+}
+
 func (e *EditorController) SetValue(value string) {
 	e.input.SetValue(value)
 	if e.slot != "" {

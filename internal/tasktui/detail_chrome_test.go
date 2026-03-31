@@ -73,7 +73,7 @@ func TestLongTaskDescriptionsKeepDetailFooterVisible(t *testing.T) {
 				}
 				model.screen = ScreenApproval
 			},
-			want: []string{"Approve this plan?", "Ctrl+C quit", "Enter confirm"},
+			want: []string{"Approve this plan?", "Ctrl+C quit", "Enter submit"},
 		},
 		{
 			name:   "clarification with split artifacts",

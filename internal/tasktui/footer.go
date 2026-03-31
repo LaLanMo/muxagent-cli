@@ -187,8 +187,14 @@ func (m Model) nextFocusHint() string {
 	}
 	switch next {
 	case FocusRegionChoices:
+		if m.screen == ScreenClarification {
+			return "Tab response"
+		}
 		return "Tab type"
 	case FocusRegionActionPanel:
+		if m.screen == ScreenApproval {
+			return "Tab response"
+		}
 		return "Tab actions"
 	case FocusRegionComposer:
 		return "Tab composer"

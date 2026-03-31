@@ -27,7 +27,14 @@ func (m Model) detailEditorSurfaceSpec(surface panelSurface) editorSurfaceSpec {
 	spec.FieldWidth = detailFormMeasureWidth(availableFieldWidth)
 	switch m.screen {
 	case ScreenClarification:
-		spec.Rows = 1
+		switch {
+		case surface.MaxHeight >= 14:
+			spec.Rows = 3
+		case surface.MaxHeight >= 11:
+			spec.Rows = 2
+		default:
+			spec.Rows = 1
+		}
 	case ScreenApproval:
 		switch {
 		case surface.MaxHeight >= 12:
@@ -62,11 +69,11 @@ func (m Model) currentEditorBindingSpec() editorBindingSpec {
 			Label:       "Task description",
 		}
 	case ScreenApproval:
-		if m.approval.choice == 1 {
+		if m.currentInput != nil {
 			return editorBindingSpec{
 				Visible:     true,
 				Slot:        approvalEditorSlot(m.currentInput),
-				Placeholder: "Explain what needs to change…",
+				Placeholder: "Add optional feedback…",
 				Label:       "Feedback",
 			}
 		}

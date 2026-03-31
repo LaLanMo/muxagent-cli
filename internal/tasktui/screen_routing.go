@@ -73,7 +73,7 @@ func (m Model) forwardToActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.dialog != nil {
 		return m, nil
 	}
-	if m.focusRegion == FocusRegionComposer && m.activeEditorSlot() != "" {
+	if m.editor.Focused() && m.activeEditorSlot() != "" {
 		cmd := m.editor.Update(msg)
 		m.syncComponents()
 		return m, cmd

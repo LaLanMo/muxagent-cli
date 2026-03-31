@@ -9,6 +9,10 @@ type appKeyMap struct {
 	confirm         key.Binding
 	up              key.Binding
 	down            key.Binding
+	left            key.Binding
+	right           key.Binding
+	prevQuestion    key.Binding
+	nextQuestion    key.Binding
 	copy            key.Binding
 	nextFocus       key.Binding
 	toggleDetailTab key.Binding
@@ -27,6 +31,10 @@ func newAppKeyMap() appKeyMap {
 		confirm:         key.NewBinding(key.WithKeys("enter")),
 		up:              key.NewBinding(key.WithKeys("up")),
 		down:            key.NewBinding(key.WithKeys("down")),
+		left:            key.NewBinding(key.WithKeys("left")),
+		right:           key.NewBinding(key.WithKeys("right")),
+		prevQuestion:    key.NewBinding(key.WithKeys("ctrl+p")),
+		nextQuestion:    key.NewBinding(key.WithKeys("ctrl+n")),
 		copy:            key.NewBinding(key.WithKeys("c")),
 		nextFocus:       key.NewBinding(key.WithKeys("tab")),
 		toggleDetailTab: key.NewBinding(key.WithKeys("shift+tab")),

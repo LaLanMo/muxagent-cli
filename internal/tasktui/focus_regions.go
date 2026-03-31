@@ -50,16 +50,9 @@ func (m Model) availableFocusRegions() []FocusRegion {
 	case ScreenNewTask:
 		return []FocusRegion{FocusRegionComposer}
 	case ScreenApproval:
-		regions := []FocusRegion{FocusRegionActionPanel}
-		if m.composerRegionVisible() {
-			regions = append(regions, FocusRegionComposer)
-		}
-		regions = append(regions, FocusRegionDetail)
-		return regions
+		return []FocusRegion{FocusRegionActionPanel, FocusRegionDetail}
 	case ScreenClarification:
-		regions := []FocusRegion{FocusRegionChoices, FocusRegionComposer, FocusRegionActionPanel}
-		regions = append(regions, FocusRegionDetail)
-		return regions
+		return []FocusRegion{FocusRegionChoices, FocusRegionDetail}
 	case ScreenFailed:
 		regions := make([]FocusRegion, 0, 4)
 		if len(m.availableFailureActions()) > 0 {

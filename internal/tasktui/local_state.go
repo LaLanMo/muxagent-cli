@@ -7,10 +7,11 @@ type approvalState struct {
 }
 
 type clarificationState struct {
-	question int
-	option   int
-	answers  []taskdomain.ClarificationAnswer
-	other    bool
+	question        int
+	option          int
+	headerSelection int
+	answers         []taskdomain.ClarificationAnswer
+	other           map[int]bool
 }
 
 type newTaskState struct {

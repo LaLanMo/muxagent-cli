@@ -184,19 +184,9 @@ func TestClarificationMultiSelectSubmitsArrayAnswers(t *testing.T) {
 	assert.Empty(t, service.dispatched)
 	assert.Contains(t, strippedView(model.View().Content), "[x] API")
 
-	for range 2 {
+	for range 3 {
 		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 		model = next.(Model)
-	}
-	for range 2 {
-		next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-		model = next.(Model)
-		if cmd != nil {
-			if msg := cmd(); msg != nil {
-				next, _ = model.Update(msg)
-				model = next.(Model)
-			}
-		}
 	}
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
@@ -244,31 +234,20 @@ func TestClarificationMultiSelectOtherSubmitsCustomAnswer(t *testing.T) {
 		Questions: []taskdomain.ClarificationQuestion{question},
 	}
 	model.screen = ScreenClarification
-	model.focusRegion = FocusRegionComposer
 	model.syncComponents()
-	_ = model.syncInputFocus()
-
-	model = typeText(t, model, "Docs only")
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = next.(Model)
-	if cmd != nil {
-		_ = cmd()
-	}
-	assert.Equal(t, FocusRegionChoices, model.focusRegion)
 
 	for range 2 {
-		next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 		model = next.(Model)
-		if cmd != nil {
-			if msg := cmd(); msg != nil {
-				next, _ = model.Update(msg)
-				model = next.(Model)
-			}
-		}
 	}
-	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
+	assert.Equal(t, clarificationOtherRowIndex(question), model.clarification.option)
+	model = typeText(t, model, "Docs only")
 
-	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = next.(Model)
+	assert.Equal(t, clarificationContinueRowIndex(question), model.clarification.option)
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.NotNil(t, cmd)
 	require.Nil(t, cmd())
@@ -279,6 +258,163 @@ func TestClarificationMultiSelectOtherSubmitsCustomAnswer(t *testing.T) {
 			map[string]interface{}{"selected": []string{"Docs only"}},
 		},
 	}, service.dispatched[0].Payload)
+}
+
+func TestClarificationMultiQuestionHeaderNavigationAndSubmitGuard(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:      taskruntime.InputKindClarification,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "draft_plan",
+		Questions: []taskdomain.ClarificationQuestion{
+			{
+				Question:     "Which path should we take?",
+				WhyItMatters: "The plan changes based on this choice.",
+				Options: []taskdomain.ClarificationOption{
+					{Label: "A", Description: "Option A"},
+					{Label: "B", Description: "Option B"},
+				},
+			},
+			{
+				Question:     "Which reviewer should we use?",
+				WhyItMatters: "The review style changes the prompt.",
+				Options: []taskdomain.ClarificationOption{
+					{Label: "Sidekick", Description: "Ship quickly"},
+					{Label: "Strict", Description: "Push harder"},
+				},
+			},
+		},
+	}
+	model.screen = ScreenClarification
+	model.focusRegion = FocusRegionChoices
+	model.syncComponents()
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "□ Submit")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model = next.(Model)
+	assert.Equal(t, 1, model.clarification.question)
+	assert.Equal(t, 1, model.clarification.headerSelection)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	assert.Equal(t, 1, model.clarification.question)
+	assert.Equal(t, "Sidekick", clarificationAnswerAt(model.clarification.answers, 1).Selected)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model = next.(Model)
+	assert.True(t, model.clarificationSubmitSelected())
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	assert.Nil(t, cmd)
+	assert.Empty(t, service.dispatched)
+	assert.Equal(t, 0, model.clarification.question)
+	assert.Equal(t, "Answer every question before submitting.", model.errorText)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	assert.Equal(t, 1, model.clarification.question, "single-select answers should still auto-advance to the next question")
+
+	view = strippedView(model.View().Content)
+	assert.Contains(t, view, "✓ Submit")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model = next.(Model)
+	assert.True(t, model.clarificationSubmitSelected())
+
+	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, map[string]interface{}{
+		"answers": []interface{}{
+			map[string]interface{}{"selected": "A"},
+			map[string]interface{}{"selected": "Sidekick"},
+		},
+	}, service.dispatched[0].Payload)
+}
+
+func TestClarificationOtherRowUsesCtrlPNForQuestionNavigation(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:      taskruntime.InputKindClarification,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "draft_plan",
+		Questions: []taskdomain.ClarificationQuestion{
+			{
+				Question:     "Which path should we take?",
+				WhyItMatters: "The plan changes based on this choice.",
+				Options: []taskdomain.ClarificationOption{
+					{Label: "A", Description: "Option A"},
+					{Label: "B", Description: "Option B"},
+				},
+			},
+			{
+				Question:     "What should we tell the reviewer?",
+				WhyItMatters: "This changes the review guidance.",
+				Options: []taskdomain.ClarificationOption{
+					{Label: "Strict", Description: "Push harder"},
+				},
+			},
+		},
+	}
+	model.screen = ScreenClarification
+	model.focusRegion = FocusRegionChoices
+	model.syncComponents()
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	assert.Equal(t, 1, model.clarification.question)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = next.(Model)
+	assert.Equal(t, clarificationOtherRowIndex(model.currentInput.Questions[1]), model.clarification.option)
+
+	model = typeText(t, model, "Need docs")
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Ctrl+P/N questions")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	model = next.(Model)
+	assert.Equal(t, 1, model.clarification.question)
+	assert.Equal(t, "Need docs", model.editor.Value())
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = next.(Model)
+	assert.Equal(t, 0, model.clarification.question)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	assert.Equal(t, 1, model.clarification.question)
+	assert.Equal(t, clarificationOtherRowIndex(model.currentInput.Questions[1]), model.clarification.option)
+	assert.Equal(t, "Need docs", model.editor.Value())
 }
 
 func TestClarificationOtherInputIsAlwaysVisible(t *testing.T) {
@@ -337,19 +473,16 @@ func TestClarificationOtherInputIsAlwaysVisible(t *testing.T) {
 
 			view := strippedView(model.View().Content)
 			assert.Contains(t, view, "Other")
-			assert.Contains(t, view, "Write your own answer")
+			assert.NotContains(t, view, "Write your own answer")
 			assert.Equal(t, FocusRegionChoices, model.focusRegion)
 
-			next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-			model = next.(Model)
-			if cmd != nil {
-				if msg := cmd(); msg != nil {
-					next, _ = model.Update(msg)
-					model = next.(Model)
-				}
+			for range 2 {
+				next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+				model = next.(Model)
 			}
-
-			assert.Equal(t, FocusRegionComposer, model.focusRegion)
+			assert.Equal(t, clarificationOtherRowIndex(tt.question), model.clarification.option)
+			view = strippedView(model.View().Content)
+			assert.Contains(t, view, "Write your own answer")
 			assert.Empty(t, service.dispatched)
 			assert.Equal(t, "Write your own answer…", model.editor.Placeholder())
 		})
@@ -393,15 +526,11 @@ func TestClarificationFooterRemainsVisibleWithManyOptionsAndOtherInput(t *testin
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Ctrl+C quit")
 	assert.Contains(t, view, "↑↓ select")
-	assert.Contains(t, view, "Write your own answer")
+	assert.NotContains(t, view, "Write your own answer")
 
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = next.(Model)
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			next, _ = model.Update(msg)
-			model = next.(Model)
-		}
+	for range len(options) {
+		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = next.(Model)
 	}
 
 	view = strippedView(model.View().Content)
@@ -486,7 +615,7 @@ func TestClarificationWithoutArtifactsDoesNotRenderArtifactLauncher(t *testing.T
 	assert.Contains(t, view, "Question 1/1")
 	assert.Contains(t, view, "Ctrl+C quit")
 	assert.NotContains(t, view, "Artifacts (0)")
-	assert.Contains(t, view, "Write your own answer")
+	assert.Contains(t, view, "Other")
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
@@ -498,7 +627,7 @@ func TestClarificationWithoutArtifactsDoesNotRenderArtifactLauncher(t *testing.T
 	}
 
 	view = strippedView(model.View().Content)
-	assert.Contains(t, view, "Write your own answer")
+	assert.Contains(t, view, "Other")
 	assert.Contains(t, view, "Ctrl+C quit")
 	assert.NotContains(t, view, "Artifacts (0)")
 }
@@ -590,11 +719,6 @@ func TestClarificationCommandErrorKeepsInputVisibleAndShowsError(t *testing.T) {
 	model.syncComponents()
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(Model)
-	require.Nil(t, cmd)
-	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
-
-	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.NotNil(t, cmd)
 	require.Nil(t, cmd())
@@ -704,7 +828,7 @@ func TestSubmittingClarificationIgnoresUnrelatedNodeProgress(t *testing.T) {
 	assert.Equal(t, ScreenClarification, model.screen)
 }
 
-func TestFocusedComposerTakesPriorityOverArtifactPaneKeys(t *testing.T) {
+func TestFocusedFeedbackRowTakesPriorityOverArtifactPaneKeys(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "plan.md")
 	require.NoError(t, os.WriteFile(artifactPath, []byte("# Plan\n"), 0o644))
@@ -715,7 +839,7 @@ func TestFocusedComposerTakesPriorityOverArtifactPaneKeys(t *testing.T) {
 	model = next.(Model)
 
 	model.screen = ScreenApproval
-	model.approval.choice = 1
+	model.approval.choice = approvalRowFeedback
 	model.current = &taskdomain.TaskView{
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
 		Status: taskdomain.TaskStatusAwaitingUser,
@@ -727,7 +851,7 @@ func TestFocusedComposerTakesPriorityOverArtifactPaneKeys(t *testing.T) {
 		NodeName:      "approve_plan",
 		ArtifactPaths: []string{artifactPath},
 	}
-	model.focusRegion = FocusRegionComposer
+	model.focusRegion = FocusRegionActionPanel
 	model.activeTaskID = "task-1"
 	model.syncComponents()
 	_ = model.syncInputFocus()
@@ -736,11 +860,11 @@ func TestFocusedComposerTakesPriorityOverArtifactPaneKeys(t *testing.T) {
 	next, _ = model.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	model = next.(Model)
 
-	assert.Equal(t, "", model.editor.Value(), "ctrl+u should reach the focused composer instead of the artifact pane")
+	assert.Equal(t, "", model.editor.Value(), "ctrl+u should reach the focused feedback row instead of the artifact pane")
 	assert.NotContains(t, strippedView(model.View().Content), "Ctrl+U/Ctrl+D preview")
 }
 
-func TestFocusedComposerShiftTabDoesNotToggleDetailTabs(t *testing.T) {
+func TestFocusedResponseEditorShiftTabTogglesDetailTabs(t *testing.T) {
 	tempDir := t.TempDir()
 	artifactPath := filepath.Join(tempDir, "plan.md")
 	require.NoError(t, os.WriteFile(artifactPath, []byte("# Plan\n"), 0o644))
@@ -753,11 +877,11 @@ func TestFocusedComposerShiftTabDoesNotToggleDetailTabs(t *testing.T) {
 		wantEditorText string
 	}{
 		{
-			name:     "approval composer",
+			name:     "approval feedback row",
 			nodeName: "approve_plan",
 			screen:   ScreenApproval,
 			setup: func(model *Model) {
-				model.approval.choice = 1
+				model.approval.choice = approvalRowFeedback
 				model.currentInput = &taskruntime.InputRequest{
 					Kind:          taskruntime.InputKindHumanNode,
 					TaskID:        "task-1",
@@ -769,7 +893,7 @@ func TestFocusedComposerShiftTabDoesNotToggleDetailTabs(t *testing.T) {
 			wantEditorText: "Need more detail",
 		},
 		{
-			name:     "clarification composer",
+			name:     "clarification other row",
 			nodeName: "implement",
 			screen:   ScreenClarification,
 			setup: func(model *Model) {
@@ -788,6 +912,8 @@ func TestFocusedComposerShiftTabDoesNotToggleDetailTabs(t *testing.T) {
 						},
 					}},
 				}
+				model.clarification.option = 2
+				model.clarification.other = map[int]bool{0: true}
 			},
 			wantEditorText: "Custom answer",
 		},
@@ -808,7 +934,12 @@ func TestFocusedComposerShiftTabDoesNotToggleDetailTabs(t *testing.T) {
 				},
 			}
 			model.screen = tt.screen
-			model.focusRegion = FocusRegionComposer
+			switch tt.screen {
+			case ScreenApproval:
+				model.focusRegion = FocusRegionActionPanel
+			case ScreenClarification:
+				model.focusRegion = FocusRegionChoices
+			}
 			model.activeTaskID = "task-1"
 			tt.setup(&model)
 			model.syncComponents()
@@ -818,14 +949,13 @@ func TestFocusedComposerShiftTabDoesNotToggleDetailTabs(t *testing.T) {
 			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 			model = next.(Model)
 
-			assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
-			assert.Equal(t, FocusRegionComposer, model.focusRegion)
+			assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
 			assert.Equal(t, tt.wantEditorText, model.editor.Value())
 		})
 	}
 }
 
-func TestApprovalComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) {
+func TestApprovalFeedbackRowEnterInsertsNewlineAndActionRowSubmits(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
@@ -845,8 +975,8 @@ func TestApprovalComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) 
 		NodeName:  "approve_plan",
 	}
 	model.screen = ScreenApproval
-	model.approval.choice = 1
-	model.focusRegion = FocusRegionComposer
+	model.approval.choice = approvalRowFeedback
+	model.focusRegion = FocusRegionActionPanel
 	model.syncComponents()
 	_ = model.syncInputFocus()
 
@@ -863,12 +993,9 @@ func TestApprovalComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) 
 	assert.Equal(t, "Need more\ndetail", model.editor.Value())
 	assert.Empty(t, service.dispatched)
 
-	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = next.(Model)
-	if cmd != nil {
-		_ = cmd()
-	}
-	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
+	assert.Equal(t, approvalRowReject, model.approval.choice)
 
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
@@ -882,7 +1009,7 @@ func TestApprovalComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) 
 	}, service.dispatched[0].Payload)
 }
 
-func TestApprovalActionPanelTypingDoesNotMutateRejectComposer(t *testing.T) {
+func TestApprovalWithFeedbackUpdatesLabelsAndCanApprove(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
@@ -902,7 +1029,54 @@ func TestApprovalActionPanelTypingDoesNotMutateRejectComposer(t *testing.T) {
 		NodeName:  "approve_plan",
 	}
 	model.screen = ScreenApproval
-	model.approval.choice = 1
+	model.approval.choice = approvalRowFeedback
+	model.focusRegion = FocusRegionActionPanel
+	model.syncComponents()
+	_ = model.syncInputFocus()
+
+	model = typeText(t, model, "Looks good")
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Approve with feedback")
+	assert.Contains(t, view, "Reject with feedback")
+
+	for range 2 {
+		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+		model = next.(Model)
+	}
+	assert.Equal(t, approvalRowApprove, model.approval.choice)
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, map[string]interface{}{
+		"approved": true,
+		"feedback": "Looks good",
+	}, service.dispatched[0].Payload)
+}
+
+func TestApprovalTypingOnlyMutatesFeedbackRow(t *testing.T) {
+	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.activeTaskID = "task-1"
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:      taskruntime.InputKindHumanNode,
+		TaskID:    "task-1",
+		NodeRunID: "run-1",
+		NodeName:  "approve_plan",
+	}
+	model.screen = ScreenApproval
+	model.approval.choice = approvalRowApprove
 	model.focusRegion = FocusRegionActionPanel
 	model.syncComponents()
 	model.editor.SetValue("Need more detail")
@@ -911,16 +1085,18 @@ func TestApprovalActionPanelTypingDoesNotMutateRejectComposer(t *testing.T) {
 	model = next.(Model)
 	assert.Equal(t, "Need more detail", model.editor.Value())
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = next.(Model)
-	assert.Equal(t, FocusRegionComposer, model.focusRegion)
+	for range 2 {
+		next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = next.(Model)
+	}
+	assert.Equal(t, approvalRowFeedback, model.approval.choice)
 
 	next, _ = model.Update(tea.KeyPressMsg{Text: "x", Code: 'x'})
 	model = next.(Model)
 	assert.Equal(t, "Need more detailx", model.editor.Value())
 }
 
-func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *testing.T) {
+func TestClarificationOtherRowEnterInsertsNewlineAndContinueSubmits(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
@@ -949,7 +1125,9 @@ func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *t
 		Questions: []taskdomain.ClarificationQuestion{question},
 	}
 	model.screen = ScreenClarification
-	model.focusRegion = FocusRegionComposer
+	model.focusRegion = FocusRegionChoices
+	model.clarification.option = clarificationOtherRowIndex(question)
+	model.clarification.other = map[int]bool{0: true}
 	model.syncComponents()
 	_ = model.syncInputFocus()
 
@@ -963,25 +1141,9 @@ func TestClarificationOtherComposerEnterInsertsNewlineAndActionPanelSubmits(t *t
 	assert.Equal(t, "Custom\nanswer", model.editor.Value())
 	assert.Empty(t, service.dispatched)
 
-	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = next.(Model)
-	if cmd != nil {
-		_ = cmd()
-	}
-	assert.Equal(t, FocusRegionChoices, model.focusRegion)
-	assert.Equal(t, 0, model.clarification.option)
-
-	for range 2 {
-		next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-		model = next.(Model)
-		if cmd != nil {
-			if msg := cmd(); msg != nil {
-				next, _ = model.Update(msg)
-				model = next.(Model)
-			}
-		}
-	}
-	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
+	assert.Equal(t, clarificationContinueRowIndex(question), model.clarification.option)
 
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)

@@ -11,8 +11,9 @@ func (m *Model) resetInputState() {
 	m.approval.choice = 0
 	m.clarification.question = 0
 	m.clarification.option = 0
+	m.clarification.headerSelection = 0
 	m.clarification.answers = nil
-	m.clarification.other = false
+	m.clarification.other = nil
 	m.submittingInput = false
 	m.focusRegion = FocusRegionNone
 	m.editor.ClearAll()

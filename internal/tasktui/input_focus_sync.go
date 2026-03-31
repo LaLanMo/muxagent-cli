@@ -8,10 +8,28 @@ func (m *Model) syncInputFocus() tea.Cmd {
 		m.editor.Blur()
 		return nil
 	}
-	if m.focusRegion == FocusRegionComposer && m.activeEditorSlot() != "" {
+	if m.shouldFocusActiveEditor() && m.activeEditorSlot() != "" {
 		cmds = append(cmds, m.editor.Focus())
 	} else {
 		m.editor.Blur()
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m Model) shouldFocusActiveEditor() bool {
+	if m.activeEditorSlot() == "" {
+		return false
+	}
+	switch m.screen {
+	case ScreenApproval:
+		return m.focusRegion == FocusRegionActionPanel && m.approval.choice == approvalRowFeedback
+	case ScreenClarification:
+		question := m.currentClarificationQuestion()
+		if question == nil {
+			return false
+		}
+		return m.focusRegion == FocusRegionChoices && m.clarification.option == clarificationOtherRowIndex(*question)
+	default:
+		return m.focusRegion == FocusRegionComposer
+	}
 }

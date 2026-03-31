@@ -80,6 +80,12 @@ case "$node_name" in
 JSON
       exit 0
     fi
+    if [ "$flow" = "clarify-multi" ] && [ "$count" -eq 1 ] && [ "$resume_mode" -eq 0 ]; then
+      cat > "$output" <<'JSON'
+{"kind":"clarification","result":null,"clarification":{"questions":[{"question":"Which path should we take?","why_it_matters":"The plan changes based on this choice.","options":[{"label":"A","description":"Option A"},{"label":"B","description":"Option B"}],"multi_select":false},{"question":"Which reviewer should we use?","why_it_matters":"The review style changes the prompt.","options":[{"label":"Sidekick","description":"Ship quickly"},{"label":"Strict","description":"Push harder"}],"multi_select":false}]}}
+JSON
+      exit 0
+    fi
     write_result "plan-${count}.md" ""
     ;;
   review_plan)

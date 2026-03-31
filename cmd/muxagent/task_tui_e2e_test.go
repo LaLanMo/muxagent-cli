@@ -242,10 +242,10 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, "Reject once")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.sendAndWaitForAll(t, "\x1b[B", 5*time.Second, "Feedback")
-				session.sendAndWaitForAll(t, "\t", 5*time.Second, "Esc choices")
+				session.sendAndWaitForAll(t, "\x1b[B", 5*time.Second, "Reject")
+				session.sendAndWaitForAll(t, "\x1b[B", 5*time.Second, "Feedback (optional)")
 				session.sendAndWait(t, "Need more detail", 5*time.Second)
-				session.sendAndWaitForAll(t, "\x1b", 5*time.Second, "Enter confirm")
+				session.sendAndWaitForAll(t, "\x1b[A", 5*time.Second, "Reject with feedback")
 				session.send(t, "\r")
 				session.resetOutput()
 				session.waitForAll(t, 20*time.Second, "approve_plan", "awaiting approval")
@@ -318,6 +318,64 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 						assertHumanAuditArtifact(t, task, runs, run)
 					}
 					assert.Equal(t, task.ID, run.TaskID)
+				}
+			},
+		},
+		{
+			name:        "clarification multi-question navigation and submit guard",
+			flow:        "clarify-multi",
+			description: "Need multi clarification",
+			drive: func(t *testing.T, session *tuiSession) {
+				session.resize(t, 120, 32)
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.submitNewTask(t, "Need multi clarification")
+				session.waitForAll(t, 10*time.Second, "draft_plan", "awaiting input", "Question 1/2", "Submit")
+
+				session.sendAndWait(t, "\x1b[C", 5*time.Second)
+				session.sendAndWait(t, "\x1b[B", 5*time.Second)
+				session.sendAndWait(t, "\x1b[B", 5*time.Second)
+				session.waitForAll(t, 5*time.Second, "Ctrl+P/N questions")
+				session.sendAndWait(t, "Need docs", 5*time.Second)
+				session.sendAndWait(t, "\x10", 5*time.Second)
+				session.sendAndWait(t, "\x0e", 5*time.Second)
+				session.sendAndWait(t, "\x1b[A", 5*time.Second)
+				session.sendAndWait(t, "\r", 5*time.Second)
+				session.sendAndWait(t, "\x1b[C", 5*time.Second)
+				session.sendAndWaitForAll(t, "\r", 5*time.Second, "Answer every question before submitting.")
+				session.sendAndWait(t, "\r", 5*time.Second)
+				session.sendAndWait(t, "\x1b[C", 5*time.Second)
+				session.send(t, "\r")
+
+				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+				session.confirm(t)
+			},
+			expectedArtifacts: []string{"01-draft_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 6)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"draft_plan":   1,
+					"review_plan":  1,
+					"approve_plan": 1,
+					"implement":    1,
+					"verify":       1,
+					"done":         1,
+				})
+				for _, run := range runs {
+					if run.NodeName != "draft_plan" {
+						if run.NodeName == "approve_plan" {
+							assertHumanAuditArtifact(t, task, runs, run)
+						}
+						continue
+					}
+					require.Len(t, run.Clarifications, 1)
+					require.NotNil(t, run.Clarifications[0].Response)
+					require.Len(t, run.Clarifications[0].Response.Answers, 2)
+					assert.Equal(t, "A", run.Clarifications[0].Response.Answers[0].Selected)
+					assert.Equal(t, "Strict", run.Clarifications[0].Response.Answers[1].Selected)
+					assert.Equal(t, "thread-draft_plan-1", run.SessionID)
 				}
 			},
 		},
@@ -1156,8 +1214,8 @@ func TestTaskTUIClarificationWithArtifactsTabSwitchReachable(t *testing.T) {
 	session.resetOutput()
 	before := session.markOutput()
 	session.resize(t, 150, 39)
-	output := session.waitForFreshAll(t, 5*time.Second, before, "Question 1/1", "Write your own answer", "Submit answers")
-	assert.NotContains(t, output, "[ ] Other")
+	output := session.waitForFreshAll(t, 5*time.Second, before, "Question 1/1", "Other", "Submit answers")
+	assert.NotContains(t, output, "Write your own answer")
 
 	// Switch to artifacts tab via Shift+Tab
 	session.resetOutput()
@@ -1229,7 +1287,7 @@ func TestTaskTUILongTaskDescriptionsKeepAwaitingFootersVisible(t *testing.T) {
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, longDescription)
 
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter confirm")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter submit")
 
 	session.resetOutput()
 	session.confirm(t)
@@ -1238,7 +1296,7 @@ func TestTaskTUILongTaskDescriptionsKeepAwaitingFootersVisible(t *testing.T) {
 	before := session.markOutput()
 	session.resize(t, 150, 39)
 
-	session.waitForFreshAll(t, 10*time.Second, before, "awaiting input", "Question 1/1", "Ctrl+C quit", "Write your own answer")
+	session.waitForFreshAll(t, 10*time.Second, before, "awaiting input", "Question 1/1", "Ctrl+C quit", "Other")
 
 	session.quit(t)
 }
@@ -1273,7 +1331,7 @@ func TestTaskTUILongTaskDescriptionsKeepFailedAndRunningFootersVisible(t *testin
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, longDescription)
 
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter confirm")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter submit")
 
 	session.resetOutput()
 	session.send(t, "\r")
@@ -1701,7 +1759,7 @@ func needsSecondConfirmInput(output string) bool {
 		strings.Contains(output, "Question ") ||
 		strings.Contains(output, "Write your own answer") ||
 		strings.Contains(output, "Submit answers") ||
-		strings.Contains(output, "Enter confirm")
+		strings.Contains(output, "Enter submit")
 }
 
 func (s *tuiSession) waitForOutputActivity(timeout time.Duration) bool {
