@@ -53,7 +53,7 @@ func artifactPanePreviewRect(totalWidth, totalHeight int) surfaceRect {
 func (m Model) artifactPaneLineStyle(focused bool) lipgloss.Style {
 	style := tuiTheme.Artifact.Divider
 	if focused {
-		style = style.Foreground(tuiTheme.text)
+		style = style.Foreground(tuiTheme.Color.Text)
 	}
 	return style
 }
@@ -61,7 +61,7 @@ func (m Model) artifactPaneLineStyle(focused bool) lipgloss.Style {
 func (m Model) renderArtifactPaneTitle(title string, focused bool) string {
 	style := tuiTheme.Artifact.BlockTitle
 	if focused {
-		style = style.Foreground(tuiTheme.awaiting)
+		style = style.Foreground(tuiTheme.Color.Awaiting)
 	}
 	return style.Render(title)
 }

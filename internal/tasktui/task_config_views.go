@@ -12,7 +12,7 @@ import (
 func (m Model) renderTaskConfigListHeader(width int) string {
 	lines := []string{
 		m.renderAppHeader(width),
-		fitLine(tuiTheme.taskLabel.Render("Task Configs"), width),
+		fitLine(tuiTheme.Header.TaskLabel.Render("Task Configs"), width),
 	}
 	taskConfigDir, err := taskconfigDirDisplay()
 	if err == nil {
@@ -107,7 +107,7 @@ func (m Model) renderTaskConfigFormModal(width int) string {
 		return ""
 	}
 	modalWidth := m.taskConfigFormModalWidth(width)
-	return tuiTheme.modal.Width(modalWidth).Render(m.buildTaskConfigFormPanel(modalWidth).View)
+	return tuiTheme.Modal.Frame.Width(modalWidth).Render(m.buildTaskConfigFormPanel(modalWidth).View)
 }
 
 func (m Model) taskConfigFormModalWidth(width int) int {
@@ -126,12 +126,12 @@ func (m Model) buildTaskConfigFormPanel(modalWidth int) builtPanel {
 			Placeholder: form.Placeholder,
 			Label:       form.Label,
 		},
-		FieldWidth: modalWidth - tuiTheme.modal.GetHorizontalFrameSize(),
+		FieldWidth: modalWidth - tuiTheme.Modal.Frame.GetHorizontalFrameSize(),
 		Rows:       1,
 	})
 	lines := []string{
-		tuiTheme.modalTitle.Render(form.Title),
-		tuiTheme.modalSubtitle.Render("Source config " + form.SourceAlias),
+		tuiTheme.Modal.Title.Render(form.Title),
+		tuiTheme.Modal.Subtitle.Render("Source config " + form.SourceAlias),
 		"",
 		input.View,
 	}
@@ -140,14 +140,14 @@ func (m Model) buildTaskConfigFormPanel(modalWidth int) builtPanel {
 	}
 	lines = append(lines, "", renderFooterHintText(joinHintParts("Enter "+strings.ToLower(form.SubmitLabel), "Esc cancel")))
 	prefixHeight := lipgloss.Height(strings.Join([]string{
-		tuiTheme.modalTitle.Render(form.Title),
-		tuiTheme.modalSubtitle.Render("Source config " + form.SourceAlias),
+		tuiTheme.Modal.Title.Render(form.Title),
+		tuiTheme.Modal.Subtitle.Render("Source config " + form.SourceAlias),
 		"",
 	}, "\n"))
 	return builtPanel{
 		View:          strings.Join(lines, "\n"),
-		EditorOffsetX: tuiTheme.modal.GetPaddingLeft() + input.ContentOffsetX,
-		EditorOffsetY: tuiTheme.modal.GetPaddingTop() + prefixHeight + input.ContentOffsetY,
+		EditorOffsetX: tuiTheme.Modal.Frame.GetPaddingLeft() + input.ContentOffsetX,
+		EditorOffsetY: tuiTheme.Modal.Frame.GetPaddingTop() + prefixHeight + input.ContentOffsetY,
 		HasEditor:     true,
 	}
 }
@@ -159,12 +159,12 @@ func (m Model) renderTaskConfigConfirmModal(width int) string {
 	}
 	modalWidth := clamp(width-8, 36, 72)
 	lines := []string{
-		tuiTheme.modalTitle.Render(confirm.Title),
-		tuiTheme.modalSubtitle.Render(confirm.Body),
+		tuiTheme.Modal.Title.Render(confirm.Title),
+		tuiTheme.Modal.Subtitle.Render(confirm.Body),
 		"",
 		renderFooterHintText(joinHintParts("Enter "+strings.ToLower(confirm.ConfirmLabel), "Esc cancel")),
 	}
-	return tuiTheme.modal.Width(modalWidth).Render(strings.Join(lines, "\n"))
+	return tuiTheme.Modal.Frame.Width(modalWidth).Render(strings.Join(lines, "\n"))
 }
 
 func taskconfigDirDisplay() (string, error) {

@@ -113,7 +113,7 @@ func (m Model) renderRunningStreamPanel(run taskdomain.NodeRunView, nodeLabel st
 		renderTimelineHeadline(tuiTheme.Status.Running, "●", nodeLabel, "running…", ""),
 	}
 	if sessionID := m.nodeRunSessionID(run); sessionID != "" {
-		lines = append(lines, tuiTheme.streamThread.Render(ansi.Wrap("thread: "+sessionID, contentWidth, "")))
+		lines = append(lines, tuiTheme.Stream.Thread.Render(ansi.Wrap("thread: "+sessionID, contentWidth, "")))
 	}
 	if events := m.streamByRun[run.ID]; len(events) > 0 {
 		for _, line := range progressEventLines(events, contentWidth) {
@@ -124,7 +124,7 @@ func (m Model) renderRunningStreamPanel(run taskdomain.NodeRunView, nodeLabel st
 			lines = append(lines, line)
 		}
 	}
-	return tuiTheme.streamPanel.Width(panelWidth).Render(strings.Join(lines, "\n"))
+	return tuiTheme.Stream.Panel.Width(panelWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) nodeRunSessionID(run taskdomain.NodeRunView) string {

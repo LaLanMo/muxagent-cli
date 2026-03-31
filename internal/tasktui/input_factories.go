@@ -12,26 +12,26 @@ func newStyledTextArea(placeholder string) textarea.Model {
 	input := textarea.New()
 	styles := textarea.DefaultDarkStyles()
 	focusedBase := lipgloss.NewStyle().
-		Foreground(tuiTheme.text).
-		Background(tuiTheme.inputBgFocused)
+		Foreground(tuiTheme.Color.Text).
+		Background(tuiTheme.Surface.InputFocused)
 	blurredBase := lipgloss.NewStyle().
-		Foreground(tuiTheme.text).
-		Background(tuiTheme.inputBgBlurred)
+		Foreground(tuiTheme.Color.Text).
+		Background(tuiTheme.Surface.InputBlurred)
 	styles.Focused.Base = focusedBase
-	styles.Focused.Prompt = focusedBase.Foreground(tuiTheme.awaiting)
+	styles.Focused.Prompt = focusedBase.Foreground(tuiTheme.Color.Awaiting)
 	styles.Focused.Text = focusedBase
-	styles.Focused.Placeholder = focusedBase.Foreground(tuiTheme.halfMuted)
+	styles.Focused.Placeholder = focusedBase.Foreground(tuiTheme.Color.HalfMuted)
 	styles.Focused.CursorLine = focusedBase
-	styles.Focused.LineNumber = focusedBase.Foreground(tuiTheme.subtle)
-	styles.Focused.CursorLineNumber = focusedBase.Foreground(tuiTheme.awaiting)
+	styles.Focused.LineNumber = focusedBase.Foreground(tuiTheme.Color.Subtle)
+	styles.Focused.CursorLineNumber = focusedBase.Foreground(tuiTheme.Color.Awaiting)
 	styles.Blurred.Base = blurredBase
-	styles.Blurred.Prompt = blurredBase.Foreground(tuiTheme.subtle)
-	styles.Blurred.Text = blurredBase.Foreground(tuiTheme.text)
-	styles.Blurred.Placeholder = blurredBase.Foreground(tuiTheme.subtle)
+	styles.Blurred.Prompt = blurredBase.Foreground(tuiTheme.Color.Subtle)
+	styles.Blurred.Text = blurredBase.Foreground(tuiTheme.Color.Text)
+	styles.Blurred.Placeholder = blurredBase.Foreground(tuiTheme.Color.Subtle)
 	styles.Blurred.CursorLine = blurredBase
-	styles.Blurred.LineNumber = blurredBase.Foreground(tuiTheme.subtle)
-	styles.Blurred.CursorLineNumber = blurredBase.Foreground(tuiTheme.subtle)
-	styles.Cursor.Color = tuiTheme.text
+	styles.Blurred.LineNumber = blurredBase.Foreground(tuiTheme.Color.Subtle)
+	styles.Blurred.CursorLineNumber = blurredBase.Foreground(tuiTheme.Color.Subtle)
+	styles.Cursor.Color = tuiTheme.Color.Text
 	styles.Cursor.Shape = tea.CursorBar
 	styles.Cursor.Blink = true
 	input.SetStyles(styles)

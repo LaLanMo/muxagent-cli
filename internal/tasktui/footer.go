@@ -130,10 +130,10 @@ func (m Model) renderFailurePanel(surface panelSurface) string {
 	panelStyle := panelBase.Width(width).MaxHeight(maxHeight)
 	innerWidth := max(1, width-panelBase.GetHorizontalFrameSize())
 	innerHeight := max(1, maxHeight-panelStyle.GetVerticalFrameSize())
-	content := []string{tuiTheme.Panel.Title.Render(title), ""}
+	content := []string{renderOpaquePanelText(innerWidth, tuiTheme.Panel.Title, title), ""}
 	actionBlock := []string{}
 	if actions := m.availableFailureActions(); len(actions) > 0 {
-		actionBlock = append(actionBlock, "", tuiTheme.Text.Muted.Render("Select an action:"))
+		actionBlock = append(actionBlock, "", renderOpaquePanelText(innerWidth, tuiTheme.Text.Muted, "Select an action:"))
 		items := make([]choiceItem, 0, len(actions))
 		focusedIndex := 0
 		for i, action := range actions {
@@ -153,7 +153,7 @@ func (m Model) renderFailurePanel(surface panelSurface) string {
 	bodyWidth := detailBodyMeasureWidth(innerWidth)
 	bodyLines := wrapPanelBody(body, bodyWidth)
 	bodyLines = truncateWrappedPanelLines(bodyLines, bodyBudget, bodyWidth)
-	content = append(content, tuiTheme.Panel.Body.Render(strings.Join(bodyLines, "\n")))
+	content = append(content, renderOpaquePanelLines(innerWidth, tuiTheme.Panel.Body, bodyLines)...)
 	content = append(content, actionBlock...)
 	panel := panelStyle.Render(strings.Join(content, "\n"))
 	return panel

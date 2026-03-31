@@ -14,15 +14,15 @@ import (
 func renderDAGNode(name, state string) string {
 	switch state {
 	case "done":
-		return renderNodeStatusLabel(tuiTheme.doneText, "✓", name, tuiTheme.body)
+		return renderNodeStatusLabel(tuiTheme.Status.Done, "✓", name, tuiTheme.Text.Body)
 	case "failed":
-		return renderNodeStatusLabel(tuiTheme.failedText, "×", name, tuiTheme.body)
+		return renderNodeStatusLabel(tuiTheme.Status.Failed, "×", name, tuiTheme.Text.Body)
 	case "blocked":
-		return renderNodeStatusLabel(tuiTheme.awaitingText, "!", name, tuiTheme.body)
+		return renderNodeStatusLabel(tuiTheme.Status.Awaiting, "!", name, tuiTheme.Text.Body)
 	case "current":
-		return renderNodeStatusLabel(tuiTheme.awaitingText, "●", name, tuiTheme.body)
+		return renderNodeStatusLabel(tuiTheme.Status.Awaiting, "●", name, tuiTheme.Text.Body)
 	default:
-		return tuiTheme.subtleText.Render("○ " + name)
+		return tuiTheme.Text.Subtle.Render("○ " + name)
 	}
 }
 
@@ -37,13 +37,13 @@ func renderNodeStatusLabel(iconStyle lipgloss.Style, icon, label string, labelSt
 func renderTimelineHeadline(iconStyle lipgloss.Style, icon, label, status, meta string) string {
 	parts := []string{
 		iconStyle.Render(icon),
-		tuiTheme.body.Render(" " + label),
+		tuiTheme.Text.Body.Render(" " + label),
 	}
 	if status != "" {
-		parts = append(parts, tuiTheme.mutedText.Render("  "+status))
+		parts = append(parts, tuiTheme.Text.Muted.Render("  "+status))
 	}
 	if meta != "" {
-		parts = append(parts, tuiTheme.mutedText.Render("  "+meta))
+		parts = append(parts, tuiTheme.Text.Muted.Render("  "+meta))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Left, parts...)
 }
@@ -81,7 +81,7 @@ func progressLines(progress []string, width int) []string {
 		if item == "" {
 			continue
 		}
-		lines = append(lines, tuiTheme.streamJSON.Render(ansi.Truncate(item, lineWidth, "…")))
+		lines = append(lines, tuiTheme.Stream.Event.Render(ansi.Truncate(item, lineWidth, "…")))
 	}
 	return lines
 }
@@ -100,12 +100,12 @@ func progressEventLines(events []taskexecutor.StreamEvent, width int) []string {
 		if summary == "" {
 			continue
 		}
-		style := tuiTheme.streamJSON
+		style := tuiTheme.Stream.Event
 		if event.Kind == taskexecutor.StreamEventKindPlan || event.Kind == taskexecutor.StreamEventKindUsage {
-			style = tuiTheme.streamThread
+			style = tuiTheme.Stream.Thread
 		}
 		if event.Message != nil && event.Message.Type == taskexecutor.MessagePartTypeReasoning {
-			style = tuiTheme.streamThread
+			style = tuiTheme.Stream.Thread
 		}
 		lines = append(lines, style.Render(ansi.Truncate(summary, lineWidth, "…")))
 	}
@@ -131,14 +131,14 @@ func renderToolEventLine(event taskexecutor.StreamEvent, width int) string {
 		if len(parts) > 0 {
 			prefix = " " + prefix
 		}
-		parts = append(parts, tuiTheme.body.Render(prefix))
+		parts = append(parts, tuiTheme.Text.Body.Render(prefix))
 	}
 	if subject != "" {
 		spacing := " "
 		if label != "" {
 			spacing = "  "
 		}
-		parts = append(parts, tuiTheme.mutedText.Render(spacing+subject))
+		parts = append(parts, tuiTheme.Text.Muted.Render(spacing+subject))
 	}
 	return ansi.Truncate(lipgloss.JoinHorizontal(lipgloss.Left, parts...), width, "…")
 }

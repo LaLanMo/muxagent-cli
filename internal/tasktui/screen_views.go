@@ -95,5 +95,5 @@ func (m Model) renderDetailScreen(width, height int) string {
 	centeredBody := lipgloss.Place(frame.innerWidth, frame.bodyHeight, lipgloss.Center, lipgloss.Top, bodyContent)
 	centeredFooter := lipgloss.Place(frame.innerWidth, frame.footerHeight, lipgloss.Center, lipgloss.Top, footer)
 	page := lipgloss.JoinVertical(lipgloss.Left, centeredHeader, centeredBody, centeredFooter)
-	return tuiTheme.canvas.Width(frame.viewportWidth).Height(frame.viewportHeight).Render(page)
+	return tuiTheme.App.Canvas.Width(frame.viewportWidth).Height(frame.viewportHeight).Render(page)
 }

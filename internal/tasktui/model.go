@@ -1,7 +1,6 @@
 package tasktui
 
 import (
-	"image/color"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
@@ -227,7 +226,7 @@ func (m Model) View() tea.View {
 	view := tea.NewView(m.renderScreen())
 	view.AltScreen = true
 	view.WindowTitle = "muxagent"
-	view.BackgroundColor = color.Black
+	view.BackgroundColor = tuiTheme.Surface.Canvas
 	view.Cursor = m.editorCursor()
 	return view
 }

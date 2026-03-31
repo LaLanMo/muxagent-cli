@@ -95,77 +95,63 @@ type dialogTheme struct {
 	ButtonDanger lipgloss.Style
 }
 
+type appTheme struct {
+	Canvas  lipgloss.Style
+	Divider lipgloss.Style
+}
+
+type modalTheme struct {
+	Frame    lipgloss.Style
+	Title    lipgloss.Style
+	Subtitle lipgloss.Style
+}
+
+type streamTheme struct {
+	Panel  lipgloss.Style
+	Thread lipgloss.Style
+	Event  lipgloss.Style
+}
+
+type surfaceTheme struct {
+	Canvas        color.Color
+	Panel         color.Color
+	ArtifactPane  color.Color
+	ArtifactBlock color.Color
+	InputBlurred  color.Color
+	InputFocused  color.Color
+	Stream        color.Color
+	Success       color.Color
+}
+
+type colorTheme struct {
+	BorderMuted  color.Color
+	Text         color.Color
+	HalfMuted    color.Color
+	Muted        color.Color
+	Subtle       color.Color
+	Running      color.Color
+	Done         color.Color
+	Failed       color.Color
+	Awaiting     color.Color
+	StreamBorder color.Color
+}
+
 type theme struct {
-	bg                   color.Color
-	panelBg              color.Color
-	artifactPaneBg       color.Color
-	artifactBlock        color.Color
-	inputBgBlurred       color.Color
-	inputBgFocused       color.Color
-	borderMuted          color.Color
-	text                 color.Color
-	halfMuted            color.Color
-	muted                color.Color
-	subtle               color.Color
-	running              color.Color
-	done                 color.Color
-	failed               color.Color
-	awaiting             color.Color
-	successBg            color.Color
-	streamBg             color.Color
-	streamBorder         color.Color
-	artifactPane         lipgloss.Style
-	artifactHeader       lipgloss.Style
-	artifactHint         lipgloss.Style
-	artifactDivider      lipgloss.Style
-	artifactBlockStyle   lipgloss.Style
-	artifactBlockTitle   lipgloss.Style
-	artifactFileActive   lipgloss.Style
-	artifactFileInactive lipgloss.Style
-	artifactPreviewText  lipgloss.Style
-	artifactEmpty        lipgloss.Style
-	canvas               lipgloss.Style
-	brand                lipgloss.Style
-	version              lipgloss.Style
-	taskLabel            lipgloss.Style
-	body                 lipgloss.Style
-	halfMutedText        lipgloss.Style
-	mutedText            lipgloss.Style
-	subtleText           lipgloss.Style
-	runningText          lipgloss.Style
-	doneText             lipgloss.Style
-	failedText           lipgloss.Style
-	awaitingText         lipgloss.Style
-	lineMuted            lipgloss.Style
-	divider              lipgloss.Style
-	emptyState           lipgloss.Style
-	footerHint           lipgloss.Style
-	footerStrong         lipgloss.Style
-	successLine          lipgloss.Style
-	modal                lipgloss.Style
-	modalTitle           lipgloss.Style
-	modalSubtitle        lipgloss.Style
-	inputChrome          lipgloss.Style
-	panel                lipgloss.Style
-	panelWarning         lipgloss.Style
-	panelDanger          lipgloss.Style
-	panelTitle           lipgloss.Style
-	panelBody            lipgloss.Style
-	streamPanel          lipgloss.Style
-	streamThread         lipgloss.Style
-	streamJSON           lipgloss.Style
-	optionActive         lipgloss.Style
-	optionInactive       lipgloss.Style
-	Header               headerTheme
-	Text                 textTheme
-	Status               statusTheme
-	Footer               footerTheme
-	TaskList             taskListTheme
-	Form                 formTheme
-	Panel                panelTheme
-	Artifact             artifactTheme
-	Dialog               dialogTheme
-	Markdown             markdownTheme
+	Surface  surfaceTheme
+	Color    colorTheme
+	App      appTheme
+	Modal    modalTheme
+	Stream   streamTheme
+	Header   headerTheme
+	Text     textTheme
+	Status   statusTheme
+	Footer   footerTheme
+	TaskList taskListTheme
+	Form     formTheme
+	Panel    panelTheme
+	Artifact artifactTheme
+	Dialog   dialogTheme
+	Markdown markdownTheme
 }
 
 func newTheme() theme {
@@ -408,102 +394,83 @@ func newTheme() theme {
 			Bold(true),
 	}
 	markdownStyles := buildMarkdownTheme()
-
-	return theme{
-		bg:                   bg,
-		panelBg:              panelBg,
-		artifactPaneBg:       artifactPaneBg,
-		artifactBlock:        artifactBlock,
-		inputBgBlurred:       inputBgBlurred,
-		inputBgFocused:       inputBgFocused,
-		borderMuted:          borderMuted,
-		text:                 text,
-		halfMuted:            halfMuted,
-		muted:                muted,
-		subtle:               subtle,
-		running:              running,
-		done:                 done,
-		failed:               failed,
-		awaiting:             awaiting,
-		successBg:            lipgloss.Color("#102113"),
-		streamBg:             streamBg,
-		streamBorder:         streamBorder,
-		artifactPane:         artifactStyles.Pane,
-		artifactHeader:       artifactStyles.Header,
-		artifactHint:         artifactStyles.Hint,
-		artifactDivider:      artifactStyles.Divider,
-		artifactBlockStyle:   artifactStyles.Block,
-		artifactBlockTitle:   artifactStyles.BlockTitle,
-		artifactFileActive:   artifactStyles.FileActive,
-		artifactFileInactive: artifactStyles.FileInactive,
-		artifactPreviewText:  artifactStyles.PreviewText,
-		artifactEmpty:        artifactStyles.Empty,
-		canvas: lipgloss.NewStyle().
-			Foreground(text).
-			Background(bg).
+	surfaces := surfaceTheme{
+		Canvas:        bg,
+		Panel:         panelBg,
+		ArtifactPane:  artifactPaneBg,
+		ArtifactBlock: artifactBlock,
+		InputBlurred:  inputBgBlurred,
+		InputFocused:  inputBgFocused,
+		Stream:        streamBg,
+		Success:       lipgloss.Color("#102113"),
+	}
+	colors := colorTheme{
+		BorderMuted:  borderMuted,
+		Text:         text,
+		HalfMuted:    halfMuted,
+		Muted:        muted,
+		Subtle:       subtle,
+		Running:      running,
+		Done:         done,
+		Failed:       failed,
+		Awaiting:     awaiting,
+		StreamBorder: streamBorder,
+	}
+	appStyles := appTheme{
+		Canvas: lipgloss.NewStyle().
+			Foreground(colors.Text).
+			Background(surfaces.Canvas).
 			Padding(1, 2),
-		brand:         header.Brand,
-		version:       header.Version,
-		taskLabel:     header.TaskLabel,
-		body:          textStyles.Body,
-		halfMutedText: textStyles.HalfMuted,
-		mutedText:     textStyles.Muted,
-		subtleText:    textStyles.Subtle,
-		runningText:   statusStyles.Running,
-		doneText:      statusStyles.Done,
-		failedText:    statusStyles.Failed,
-		awaitingText:  statusStyles.Awaiting,
-		lineMuted: lipgloss.NewStyle().
-			Foreground(subtle),
-		divider:      lipgloss.NewStyle().Foreground(borderMuted),
-		emptyState:   textStyles.Empty,
-		footerHint:   footerStyles.Hint,
-		footerStrong: footerStyles.Strong,
-		successLine:  statusStyles.Success,
-		modal: lipgloss.NewStyle().
-			Background(panelBg).
+		Divider: lipgloss.NewStyle().
+			Foreground(colors.BorderMuted),
+	}
+	modalStyles := modalTheme{
+		Frame: lipgloss.NewStyle().
+			Background(surfaces.Panel).
 			Padding(1, 2).
 			Width(58),
-		modalTitle: lipgloss.NewStyle().
+		Title: lipgloss.NewStyle().
 			Foreground(text).
 			Bold(true),
-		modalSubtitle: lipgloss.NewStyle().
+		Subtitle: lipgloss.NewStyle().
 			Foreground(muted),
-		inputChrome:  formStyles.InputBlurred,
-		panel:        panelStyles.Base,
-		panelWarning: panelStyles.Warning,
-		panelDanger:  panelStyles.Danger,
-		panelTitle:   panelStyles.Title,
-		panelBody:    panelStyles.Body,
-		streamPanel: func() lipgloss.Style {
+	}
+	streamStyles := streamTheme{
+		Panel: func() lipgloss.Style {
 			border := lipgloss.RoundedBorder()
 			border.Left = "▌"
 			return lipgloss.NewStyle().
-				Background(streamBg).
+				Background(surfaces.Stream).
 				BorderStyle(border).
-				BorderTopForeground(streamBorder).
-				BorderRightForeground(streamBorder).
-				BorderBottomForeground(streamBorder).
-				BorderLeftForeground(running).
+				BorderTopForeground(colors.StreamBorder).
+				BorderRightForeground(colors.StreamBorder).
+				BorderBottomForeground(colors.StreamBorder).
+				BorderLeftForeground(colors.Running).
 				Padding(0, 1)
 		}(),
-		streamThread: lipgloss.NewStyle().
+		Thread: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#A4AFBF")).
-			Background(streamBg),
-		streamJSON: lipgloss.NewStyle().
+			Background(surfaces.Stream),
+		Event: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#D7DFEA")).
-			Background(streamBg),
-		optionActive:   optionActive,
-		optionInactive: optionInactive,
-		Header:         header,
-		Text:           textStyles,
-		Status:         statusStyles,
-		Footer:         footerStyles,
-		TaskList:       taskListStyles,
-		Form:           formStyles,
-		Panel:          panelStyles,
-		Artifact:       artifactStyles,
-		Dialog:         dialogStyles,
-		Markdown:       markdownStyles,
+			Background(surfaces.Stream),
+	}
+
+	return theme{
+		Surface:  surfaces,
+		Color:    colors,
+		App:      appStyles,
+		Modal:    modalStyles,
+		Stream:   streamStyles,
+		Header:   header,
+		Text:     textStyles,
+		Status:   statusStyles,
+		Footer:   footerStyles,
+		TaskList: taskListStyles,
+		Form:     formStyles,
+		Panel:    panelStyles,
+		Artifact: artifactStyles,
+		Dialog:   dialogStyles,
+		Markdown: markdownStyles,
 	}
 }

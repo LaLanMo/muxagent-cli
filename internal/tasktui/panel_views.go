@@ -24,14 +24,26 @@ type builtPanel struct {
 func renderOpaquePanelSurface(width int, content string) string {
 	return lipgloss.NewStyle().
 		Width(width).
-		Background(tuiTheme.panelBg).
+		Background(tuiTheme.Surface.Panel).
 		Render(content)
+}
+
+func renderOpaquePanelText(width int, style lipgloss.Style, text string) string {
+	return renderOpaquePanelSurface(width, style.Render(text))
+}
+
+func renderOpaquePanelLines(width int, style lipgloss.Style, lines []string) []string {
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		rendered = append(rendered, renderOpaquePanelText(width, style, line))
+	}
+	return rendered
 }
 
 func renderOpaqueMeasuredPanelText(width int, style lipgloss.Style, text string) string {
 	measureWidth := detailBodyMeasureWidth(width)
 	wrapped := strings.Join(wrapPanelBody(text, measureWidth), "\n")
-	return renderOpaquePanelSurface(width, style.Render(wrapped))
+	return renderOpaquePanelText(width, style, wrapped)
 }
 
 func (m Model) buildEditorField(spec editorSurfaceSpec) builtEditorField {
@@ -68,7 +80,7 @@ func (m Model) renderEditorField(width int, label, caption string) string {
 }
 
 func (m Model) renderNewTaskModal(layout newTaskScreenLayout) string {
-	modalStyle := tuiTheme.modal.Width(layout.modalWidth)
+	modalStyle := tuiTheme.Modal.Frame.Width(layout.modalWidth)
 	return modalStyle.Render(m.buildNewTaskPanel(layout.modalInnerWidth).View)
 }
 
@@ -88,8 +100,8 @@ func (m Model) buildNewTaskPanel(innerWidth int) builtPanel {
 		}
 	}
 	input := m.buildEditorField(spec)
-	title := renderOpaquePanelSurface(innerWidth, tuiTheme.modalTitle.Render("New Task"))
-	subtitle := renderOpaquePanelSurface(innerWidth, tuiTheme.modalSubtitle.Render(m.newTaskSubtitle()))
+	title := renderOpaquePanelSurface(innerWidth, tuiTheme.Modal.Title.Render("New Task"))
+	subtitle := renderOpaquePanelSurface(innerWidth, tuiTheme.Modal.Subtitle.Render(m.newTaskSubtitle()))
 	blank := renderOpaquePanelSurface(innerWidth, "")
 	lines := []string{
 		title,
@@ -104,8 +116,8 @@ func (m Model) buildNewTaskPanel(innerWidth int) builtPanel {
 	prefixHeight := lipgloss.Height(strings.Join([]string{title, subtitle, ""}, "\n"))
 	return builtPanel{
 		View:          view,
-		EditorOffsetX: tuiTheme.modal.GetPaddingLeft() + input.ContentOffsetX,
-		EditorOffsetY: tuiTheme.modal.GetPaddingTop() + prefixHeight + input.ContentOffsetY,
+		EditorOffsetX: tuiTheme.Modal.Frame.GetPaddingLeft() + input.ContentOffsetX,
+		EditorOffsetY: tuiTheme.Modal.Frame.GetPaddingTop() + prefixHeight + input.ContentOffsetY,
 		HasEditor:     true,
 	}
 }

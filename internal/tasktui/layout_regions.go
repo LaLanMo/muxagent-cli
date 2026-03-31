@@ -77,7 +77,7 @@ func (m Model) computeNewTaskScreenLayout(header, footer string) newTaskScreenLa
 		footerHeight:    footerHeight,
 		bodyHeight:      max(1, metrics.innerHeight-headerHeight-footerHeight),
 		modalWidth:      modalWidth,
-		modalInnerWidth: max(1, modalWidth-tuiTheme.modal.GetHorizontalPadding()),
+		modalInnerWidth: max(1, modalWidth-tuiTheme.Modal.Frame.GetHorizontalPadding()),
 		editorRows:      clamp(max(4, (max(1, metrics.innerHeight-headerHeight-footerHeight))/3), 4, 8),
 	}
 }
@@ -141,5 +141,5 @@ func (m Model) computeDetailLayoutSnapshot() detailLayoutSnapshot {
 func renderCanvasLayout(metrics screenMetrics, bodyHeight int, header, body, footer string) string {
 	body = lipgloss.Place(metrics.innerWidth, bodyHeight, lipgloss.Left, lipgloss.Top, body)
 	page := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
-	return tuiTheme.canvas.Width(metrics.viewportWidth).Height(metrics.viewportHeight).Render(page)
+	return tuiTheme.App.Canvas.Width(metrics.viewportWidth).Height(metrics.viewportHeight).Render(page)
 }

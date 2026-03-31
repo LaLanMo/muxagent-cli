@@ -54,6 +54,22 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	assert.NotContains(t, strippedView(view.Content), "Enter select")
 }
 
+func TestModelViewUsesThemeBackgroundColor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	service := &fakeService{
+		events: make(chan taskruntime.RunEvent, 8),
+	}
+	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = next.(Model)
+
+	view := model.View()
+	assert.True(t, view.AltScreen)
+	assert.Equal(t, "muxagent", view.WindowTitle)
+	assert.Equal(t, tuiTheme.Surface.Canvas, view.BackgroundColor)
+	assert.Contains(t, strippedView(view.Content), "new task")
+}
+
 func TestTaskListHeaderShowsVersionRevisionAndCwd(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(

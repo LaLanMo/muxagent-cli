@@ -10,19 +10,19 @@ import (
 )
 
 func (m Model) renderAppHeader(width int) string {
-	brand := tuiTheme.brand.Render("muxagent")
-	version := tuiTheme.version.Render(" " + normalizeVersionLabel(m.version))
+	brand := tuiTheme.Header.Brand.Render("muxagent")
+	version := tuiTheme.Header.Version.Render(" " + normalizeVersionLabel(m.version))
 	return fitLine(brand+version, width)
 }
 
 func (m Model) renderDetailHeader(width int) string {
 	if m.current == nil {
-		return fitLine(tuiTheme.taskLabel.Render("Task"), width)
+		return fitLine(tuiTheme.Header.TaskLabel.Render("Task"), width)
 	}
-	title := tuiTheme.taskLabel.Render(clampWrappedText("Task: "+m.current.Task.Description, detailTitleMeasureWidth(width), 2))
+	title := tuiTheme.Header.TaskLabel.Render(clampWrappedText("Task: "+m.current.Task.Description, detailTitleMeasureWidth(width), 2))
 	summary := m.renderDetailSummaryLine(width)
 	stageStrip := m.renderDetailStageStrip(width)
-	divider := tuiTheme.divider.Render(strings.Repeat("─", max(8, width)))
+	divider := tuiTheme.App.Divider.Render(strings.Repeat("─", max(8, width)))
 	lines := []string{title}
 	if strings.TrimSpace(summary) != "" {
 		lines = append(lines, summary)

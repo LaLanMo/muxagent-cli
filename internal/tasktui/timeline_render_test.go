@@ -368,7 +368,7 @@ func TestTaskListDelegateUsesNeutralTitleStyleForRunningTasks(t *testing.T) {
 
 	assert.Contains(t, ansi.Strip(raw), "❯ running running task")
 	assert.Contains(t, raw, tuiTheme.Text.Body.Render("running task"))
-	assert.NotContains(t, raw, tuiTheme.runningText.Render("running task"))
+	assert.NotContains(t, raw, tuiTheme.Status.Running.Render("running task"))
 }
 
 func TestTaskListDelegateShowsOnlyFirstLineOfMultilineDescriptions(t *testing.T) {

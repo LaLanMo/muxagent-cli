@@ -97,7 +97,7 @@ func renderTaskListVersionMeta(meta versionMeta) string {
 	if meta.Label == "" {
 		return ""
 	}
-	label := tuiTheme.version.Render(meta.Label)
+	label := tuiTheme.Header.Version.Render(meta.Label)
 	if meta.Dev && meta.Revision != "" {
 		return label + tuiTheme.Header.MetaLabel.Render(" · ") + tuiTheme.Header.MetaValue.Render(meta.Revision)
 	}

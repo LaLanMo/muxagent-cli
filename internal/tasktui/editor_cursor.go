@@ -50,9 +50,9 @@ func (m Model) taskConfigFormEditorCursorOffset() (int, int, bool) {
 	if !panel.HasEditor {
 		return 0, 0, false
 	}
-	modal := tuiTheme.modal.Width(modalWidth).Render(panel.View)
-	modalX := tuiTheme.canvas.GetPaddingLeft() + max(0, (metrics.innerWidth-lipgloss.Width(modal))/2)
-	modalY := tuiTheme.canvas.GetPaddingTop() + max(0, (metrics.innerHeight-lipgloss.Height(modal))/2)
+	modal := tuiTheme.Modal.Frame.Width(modalWidth).Render(panel.View)
+	modalX := tuiTheme.App.Canvas.GetPaddingLeft() + max(0, (metrics.innerWidth-lipgloss.Width(modal))/2)
+	modalY := tuiTheme.App.Canvas.GetPaddingTop() + max(0, (metrics.innerHeight-lipgloss.Height(modal))/2)
 	return modalX + panel.EditorOffsetX, modalY + panel.EditorOffsetY, true
 }
 
@@ -70,9 +70,9 @@ func (m Model) newTaskEditorCursorOffset() (int, int, bool) {
 		return 0, 0, false
 	}
 
-	modal := tuiTheme.modal.Width(layout.modalWidth).Render(panel.View)
-	modalX := tuiTheme.canvas.GetPaddingLeft() + max(0, (layout.innerWidth-layout.modalWidth)/2)
-	modalY := tuiTheme.canvas.GetPaddingTop() + layout.headerHeight + max(0, (layout.bodyHeight-lipgloss.Height(modal))/2)
+	modal := tuiTheme.Modal.Frame.Width(layout.modalWidth).Render(panel.View)
+	modalX := tuiTheme.App.Canvas.GetPaddingLeft() + max(0, (layout.innerWidth-layout.modalWidth)/2)
+	modalY := tuiTheme.App.Canvas.GetPaddingTop() + layout.headerHeight + max(0, (layout.bodyHeight-lipgloss.Height(modal))/2)
 	return modalX + panel.EditorOffsetX, modalY + panel.EditorOffsetY, true
 }
 
@@ -85,8 +85,8 @@ func (m Model) approvalEditorCursorOffset() (int, int, bool) {
 	panel := snapshot.PanelView
 	surfaces := snapshot.Surfaces
 
-	panelX := tuiTheme.canvas.GetPaddingLeft() + max(0, (frame.innerWidth-frame.contentWidth)/2)
-	panelY := tuiTheme.canvas.GetPaddingTop() + frame.headerHeight + surfaces.Body.topBodyHeight + 1
+	panelX := tuiTheme.App.Canvas.GetPaddingLeft() + max(0, (frame.innerWidth-frame.contentWidth)/2)
+	panelY := tuiTheme.App.Canvas.GetPaddingTop() + frame.headerHeight + surfaces.Body.topBodyHeight + 1
 	return panelX + panel.EditorOffsetX, panelY + panel.EditorOffsetY, true
 }
 
@@ -99,7 +99,7 @@ func (m Model) clarificationEditorCursorOffset() (int, int, bool) {
 	panel := snapshot.PanelView
 	surfaces := snapshot.Surfaces
 
-	panelX := tuiTheme.canvas.GetPaddingLeft() + max(0, (frame.innerWidth-frame.contentWidth)/2)
-	panelY := tuiTheme.canvas.GetPaddingTop() + frame.headerHeight + surfaces.Body.topBodyHeight + 1
+	panelX := tuiTheme.App.Canvas.GetPaddingLeft() + max(0, (frame.innerWidth-frame.contentWidth)/2)
+	panelY := tuiTheme.App.Canvas.GetPaddingTop() + frame.headerHeight + surfaces.Body.topBodyHeight + 1
 	return panelX + panel.EditorOffsetX, panelY + panel.EditorOffsetY, true
 }

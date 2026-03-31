@@ -5,10 +5,10 @@ func (i *artifactItem) renderedContent(width int) string {
 		return ""
 	}
 	if i.Preview == "" {
-		return tuiTheme.artifactEmpty.Render("No preview available.")
+		return tuiTheme.Artifact.Empty.Render("No preview available.")
 	}
 	if !i.Markdown {
-		return tuiTheme.artifactPreviewText.Render(i.Preview)
+		return tuiTheme.Artifact.PreviewText.Render(i.Preview)
 	}
 	renderWidth := artifactMarkdownWidth(width)
 	if i.renderedPreview != "" && i.renderedWidth == renderWidth {
@@ -16,7 +16,7 @@ func (i *artifactItem) renderedContent(width int) string {
 	}
 	rendered, err := renderArtifactMarkdown(i.Preview, renderWidth)
 	if err != nil {
-		return tuiTheme.artifactPreviewText.Render(i.Preview)
+		return tuiTheme.Artifact.PreviewText.Render(i.Preview)
 	}
 	i.renderedWidth = renderWidth
 	i.renderedPreview = rendered

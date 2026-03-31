@@ -43,7 +43,7 @@ func renderCanvas(width, height int, header, body, footer string) string {
 	bodyHeight := max(1, contentHeight-lipgloss.Height(header)-lipgloss.Height(footer))
 	body = lipgloss.Place(contentWidth, bodyHeight, lipgloss.Left, lipgloss.Top, body)
 	page := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
-	return tuiTheme.canvas.Width(width).Height(height).Render(page)
+	return tuiTheme.App.Canvas.Width(width).Height(height).Render(page)
 }
 
 func innerSize(width, height int) (int, int) {
