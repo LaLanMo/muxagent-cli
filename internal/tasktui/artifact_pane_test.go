@@ -440,6 +440,7 @@ func TestArtifactCopyCopiesPathAndRawContents(t *testing.T) {
 }
 
 func TestArtifactCopyShowsTransientFooterFeedback(t *testing.T) {
+	_ = installFakeClipboard(t)
 	model := artifactTabTestModel(t, ScreenComplete, taskdomain.TaskStatusDone, "")
 
 	next, cmd := model.Update(tea.KeyPressMsg{Text: "c", Code: 'c'})
@@ -460,6 +461,7 @@ func TestArtifactCopyShowsTransientFooterFeedback(t *testing.T) {
 }
 
 func TestArtifactPreviewCopyShowsTransientFooterFeedback(t *testing.T) {
+	_ = installFakeClipboard(t)
 	model := artifactTabTestModel(t, ScreenComplete, taskdomain.TaskStatusDone, "")
 
 	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
