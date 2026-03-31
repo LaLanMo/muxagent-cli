@@ -89,7 +89,7 @@ func (m Model) renderDetailScreen(width, height int) string {
 	default:
 		if surfaces.TimelineSplit {
 			timeline := lipgloss.Place(surfaces.Timeline.Width, surfaces.Timeline.Height, lipgloss.Left, lipgloss.Top, m.detailViewport.View())
-			divider := strings.Repeat(m.artifactPaneLineStyle(m.focusRegion == FocusRegionDetail).Render("│")+"\n", max(1, surfaces.Body.topBodyHeight))
+			divider := strings.TrimRight(strings.Repeat(m.artifactPaneLineStyle(m.focusRegion == FocusRegionDetail).Render("│")+"\n", max(1, surfaces.Body.topBodyHeight)), "\n")
 			divider = lipgloss.Place(1, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, divider)
 			output := m.renderLiveOutputPane(surfaces.LiveOutputPane)
 			bodyContent = lipgloss.Place(frame.contentWidth, surfaces.Body.topBodyHeight, lipgloss.Left, lipgloss.Top, lipgloss.JoinHorizontal(lipgloss.Top, timeline, divider, output))

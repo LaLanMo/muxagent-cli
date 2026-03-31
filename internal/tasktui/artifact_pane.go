@@ -85,7 +85,7 @@ func (m Model) renderArtifactsPane(surface artifactSurface) string {
 	previewContent := m.renderArtifactPreviewColumn(previewWidth, height)
 
 	// Vertical divider
-	divider := strings.Repeat(m.artifactPaneLineStyle(m.focusRegion == FocusRegionArtifactPreview).Render("│")+"\n", max(1, height))
+	divider := strings.TrimRight(strings.Repeat(m.artifactPaneLineStyle(m.focusRegion == FocusRegionArtifactPreview).Render("│")+"\n", max(1, height)), "\n")
 	divider = lipgloss.Place(1, height, lipgloss.Left, lipgloss.Top, divider)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, filesContent, divider, previewContent)
