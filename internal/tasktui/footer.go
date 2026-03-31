@@ -192,18 +192,18 @@ func (m Model) nextFocusHint() string {
 	if len(regions) <= 1 {
 		return ""
 	}
-	if m.activeDetailTab == DetailTabArtifacts {
-		switch m.focusRegion {
-		case FocusRegionArtifactFiles:
-			return "Tab artifacts"
-		case FocusRegionArtifactPreview:
-			return "Tab files"
-		}
-	}
 	index := focusRegionIndex(regions, m.focusRegion)
 	next := regions[0]
 	if index >= 0 {
 		next = regions[(index+1)%len(regions)]
+	}
+	if m.activeDetailTab == DetailTabArtifacts {
+		switch {
+		case m.focusRegion == FocusRegionArtifactFiles:
+			return "Tab artifacts"
+		case m.focusRegion == FocusRegionArtifactPreview && next == FocusRegionArtifactFiles:
+			return "Tab files"
+		}
 	}
 	switch next {
 	case FocusRegionChoices:

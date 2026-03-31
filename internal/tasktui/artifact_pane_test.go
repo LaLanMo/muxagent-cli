@@ -322,58 +322,70 @@ func TestArtifactTabCyclesViaTab(t *testing.T) {
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 }
 
-func TestArtifactsTabCyclesOnlyBetweenArtifactPanesAcrossDetailScreens(t *testing.T) {
+func TestArtifactsTabFocusCycleAcrossDetailScreens(t *testing.T) {
 	tests := []struct {
-		name            string
-		screen          Screen
-		status          taskdomain.TaskStatus
-		inputKind       taskruntime.InputKind
-		wantFilesFooter string
-		wantPrevFooter  string
+		name               string
+		screen             Screen
+		status             taskdomain.TaskStatus
+		inputKind          taskruntime.InputKind
+		wantRegions        []FocusRegion
+		wantFilesFooter    string
+		wantPreviewFooter  string
+		wantResponseRegion FocusRegion
+		wantResponseFooter string
 	}{
 		{
-			name:            "running",
-			screen:          ScreenRunning,
-			status:          taskdomain.TaskStatusRunning,
-			wantFilesFooter: "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
-			wantPrevFooter:  "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
+			name:              "running",
+			screen:            ScreenRunning,
+			status:            taskdomain.TaskStatusRunning,
+			wantRegions:       []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview},
+			wantFilesFooter:   "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPreviewFooter: "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
 		},
 		{
-			name:            "complete",
-			screen:          ScreenComplete,
-			status:          taskdomain.TaskStatusDone,
-			wantFilesFooter: "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
-			wantPrevFooter:  "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
+			name:              "complete",
+			screen:            ScreenComplete,
+			status:            taskdomain.TaskStatusDone,
+			wantRegions:       []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview},
+			wantFilesFooter:   "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPreviewFooter: "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
 		},
 		{
-			name:            "approval",
-			screen:          ScreenApproval,
-			status:          taskdomain.TaskStatusAwaitingUser,
-			inputKind:       taskruntime.InputKindHumanNode,
-			wantFilesFooter: "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
-			wantPrevFooter:  "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
+			name:               "approval",
+			screen:             ScreenApproval,
+			status:             taskdomain.TaskStatusAwaitingUser,
+			inputKind:          taskruntime.InputKindHumanNode,
+			wantRegions:        []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionActionPanel},
+			wantFilesFooter:    "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPreviewFooter:  "↑↓ scroll  c copy  Esc back  Tab response  Shift+Tab timeline",
+			wantResponseRegion: FocusRegionActionPanel,
+			wantResponseFooter: "↑↓ select  Enter submit  Esc back  Tab artifacts  Shift+Tab timeline",
 		},
 		{
-			name:            "clarification",
-			screen:          ScreenClarification,
-			status:          taskdomain.TaskStatusAwaitingUser,
-			inputKind:       taskruntime.InputKindClarification,
-			wantFilesFooter: "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
-			wantPrevFooter:  "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
+			name:               "clarification",
+			screen:             ScreenClarification,
+			status:             taskdomain.TaskStatusAwaitingUser,
+			inputKind:          taskruntime.InputKindClarification,
+			wantRegions:        []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionChoices},
+			wantFilesFooter:    "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPreviewFooter:  "↑↓ scroll  c copy  Esc back  Tab response  Shift+Tab timeline",
+			wantResponseRegion: FocusRegionChoices,
+			wantResponseFooter: "↑↓ select  Enter choose  Esc back  Tab artifacts  Shift+Tab timeline",
 		},
 		{
-			name:            "failed",
-			screen:          ScreenFailed,
-			status:          taskdomain.TaskStatusFailed,
-			wantFilesFooter: "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
-			wantPrevFooter:  "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
+			name:              "failed",
+			screen:            ScreenFailed,
+			status:            taskdomain.TaskStatusFailed,
+			wantRegions:       []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview},
+			wantFilesFooter:   "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPreviewFooter: "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			model := artifactTabTestModel(t, tt.screen, tt.status, tt.inputKind)
-			assert.Equal(t, []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}, model.availableFocusRegions())
+			assert.Equal(t, tt.wantRegions, model.availableFocusRegions())
 
 			footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
 			assert.Contains(t, footer, tt.wantFilesFooter)
@@ -386,14 +398,25 @@ func TestArtifactsTabCyclesOnlyBetweenArtifactPanesAcrossDetailScreens(t *testin
 			assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
 
 			footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-			assert.Contains(t, footer, tt.wantPrevFooter)
+			assert.Contains(t, footer, tt.wantPreviewFooter)
 			if tt.screen == ScreenApproval {
 				assert.NotContains(t, footer, "Enter confirm")
 			}
 
 			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 			model = next.(Model)
-			assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+			if tt.wantResponseRegion == FocusRegionNone {
+				assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+			} else {
+				assert.Equal(t, tt.wantResponseRegion, model.focusRegion)
+
+				footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+				assert.Contains(t, footer, tt.wantResponseFooter)
+
+				next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+				model = next.(Model)
+				assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+			}
 
 			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 			model = next.(Model)

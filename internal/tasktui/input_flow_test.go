@@ -955,6 +955,116 @@ func TestFocusedResponseEditorShiftTabTogglesDetailTabs(t *testing.T) {
 	}
 }
 
+func TestFocusedResponseEditorTabRoundTripOnArtifactsRefocusesInput(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "plan.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Plan\n"), 0o644))
+
+	tests := []struct {
+		name            string
+		nodeName        string
+		screen          Screen
+		setup           func(*Model)
+		wantFocusRegion FocusRegion
+		wantEditorText  string
+		wantEditorSlot  string
+	}{
+		{
+			name:     "approval feedback row",
+			nodeName: "approve_plan",
+			screen:   ScreenApproval,
+			setup: func(model *Model) {
+				model.approval.choice = approvalRowFeedback
+				model.currentInput = &taskruntime.InputRequest{
+					Kind:          taskruntime.InputKindHumanNode,
+					TaskID:        "task-1",
+					NodeRunID:     "run-1",
+					NodeName:      "approve_plan",
+					ArtifactPaths: []string{artifactPath},
+				}
+			},
+			wantFocusRegion: FocusRegionActionPanel,
+			wantEditorText:  "Need more detail",
+			wantEditorSlot:  "approval:task-1:run-1",
+		},
+		{
+			name:     "clarification other row",
+			nodeName: "implement",
+			screen:   ScreenClarification,
+			setup: func(model *Model) {
+				model.currentInput = &taskruntime.InputRequest{
+					Kind:          taskruntime.InputKindClarification,
+					TaskID:        "task-1",
+					NodeRunID:     "run-1",
+					NodeName:      "implement",
+					ArtifactPaths: []string{artifactPath},
+					Questions: []taskdomain.ClarificationQuestion{{
+						Question:     "Which path should we take?",
+						WhyItMatters: "Need the answer before implementing.",
+						Options: []taskdomain.ClarificationOption{
+							{Label: "A", Description: "First path"},
+							{Label: "B", Description: "Second path"},
+						},
+					}},
+				}
+				model.clarification.option = clarificationOtherRowIndex(model.currentInput.Questions[0])
+				model.clarification.other = map[int]bool{0: true}
+			},
+			wantFocusRegion: FocusRegionChoices,
+			wantEditorText:  "Custom answer",
+			wantEditorSlot:  "clarification:task-1:run-1:0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
+			model := NewModel(service, tempDir, "", nil, "v0.1.0")
+			next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+			model = next.(Model)
+			model.current = &taskdomain.TaskView{
+				Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+				Status:        taskdomain.TaskStatusAwaitingUser,
+				ArtifactPaths: []string{artifactPath},
+				NodeRuns: []taskdomain.NodeRunView{
+					{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: tt.nodeName, Status: taskdomain.NodeRunAwaitingUser}, ArtifactPaths: []string{artifactPath}},
+				},
+			}
+			model.screen = tt.screen
+			model.activeTaskID = "task-1"
+			model.activeDetailTab = DetailTabArtifacts
+			model.focusRegion = tt.wantFocusRegion
+			tt.setup(&model)
+			model.syncComponents()
+			_ = model.syncInputFocus()
+			model.editor.SetValue(tt.wantEditorText)
+
+			require.True(t, model.editor.Focused())
+			assert.Equal(t, tt.wantEditorSlot, model.editor.Slot())
+
+			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			model = next.(Model)
+			assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+			assert.False(t, model.editor.Focused())
+
+			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			model = next.(Model)
+			assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
+			assert.False(t, model.editor.Focused())
+
+			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			model = next.(Model)
+			assert.Equal(t, tt.wantFocusRegion, model.focusRegion)
+			assert.True(t, model.editor.Focused())
+			assert.Equal(t, tt.wantEditorSlot, model.editor.Slot())
+			assert.Equal(t, tt.wantEditorText, model.editor.Value())
+
+			model = typeText(t, model, "!")
+			assert.Equal(t, tt.wantEditorText+"!", model.editor.Value())
+		})
+	}
+}
+
 func TestApprovalFeedbackRowEnterInsertsNewlineAndActionRowSubmits(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")

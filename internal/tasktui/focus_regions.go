@@ -37,9 +37,23 @@ func (m Model) artifactTabActive() bool {
 	return m.activeDetailTab == DetailTabArtifacts && len(m.artifactItems) > 0
 }
 
-func (m Model) availableFocusRegions() []FocusRegion {
-	if m.artifactTabActive() {
+func (m Model) artifactTabFocusRegions() []FocusRegion {
+	if !m.artifactTabActive() {
+		return nil
+	}
+	switch m.screen {
+	case ScreenApproval:
+		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionActionPanel}
+	case ScreenClarification:
+		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionChoices}
+	default:
 		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}
+	}
+}
+
+func (m Model) availableFocusRegions() []FocusRegion {
+	if regions := m.artifactTabFocusRegions(); len(regions) > 0 {
+		return regions
 	}
 	switch m.screen {
 	case ScreenTaskConfigs:
