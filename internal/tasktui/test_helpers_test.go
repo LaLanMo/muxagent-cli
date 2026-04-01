@@ -118,7 +118,7 @@ func openFirstTaskFromList(t *testing.T, model Model) Model {
 
 func submitNewTaskModal(t *testing.T, model Model) (Model, tea.Cmd) {
 	t.Helper()
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	return model, cmd
 }

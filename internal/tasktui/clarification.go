@@ -21,13 +21,24 @@ func (m Model) handleClarificationKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		return m, m.returnToTaskList()
 	case m.focusRegion != FocusRegionChoices:
 		return m, nil
-	case clarificationOtherRowActive(m, question) && (keyMatches(msg, m.keys.left) || keyMatches(msg, m.keys.right) || keyMatches(msg, m.keys.confirm)):
+	case clarificationOtherRowActive(m, question) && (keyMatches(msg, m.keys.left) || keyMatches(msg, m.keys.right)):
 		if !question.MultiSelect {
 			m.setClarificationOtherSelected(m.clarification.question, true)
 		}
 		cmd := m.editor.Update(msg)
 		m.syncComponents()
 		return m, cmd
+	case clarificationOtherRowActive(m, question) && keyMatches(msg, m.keys.confirm):
+		otherText := strings.TrimSpace(m.editor.Value())
+		if otherText == "" {
+			return m, nil
+		}
+		m.setClarificationOtherSelected(m.clarification.question, true)
+		if question.MultiSelect {
+			m.syncComponents()
+			return m, nil
+		}
+		return m.handleClarificationSingleSelectChoice()
 	case keyMatches(msg, m.keys.up):
 		m.selectClarificationHeaderQuestion()
 		m.errorText = ""
@@ -106,7 +117,7 @@ func (m Model) renderClarificationFooter(surface surfaceRect) string {
 			action = "Enter choose"
 		}
 	case m.clarification.option == clarificationOtherRowIndex(question):
-		action = "Enter newline"
+		action = "Enter confirm"
 	}
 	hints := []string{"↑↓ select"}
 	if m.clarificationHasQuestionNavigator() {
@@ -116,7 +127,11 @@ func (m Model) renderClarificationFooter(surface surfaceRect) string {
 			hints = append(hints, "←→ questions")
 		}
 	}
-	hints = append(hints, action, "Esc back")
+	hints = append(hints, action)
+	if m.clarification.option == clarificationOtherRowIndex(question) {
+		hints = append(hints, "Ctrl+J newline")
+	}
+	hints = append(hints, "Esc back")
 	return renderFooterHintBar(width, m.detailHint(joinHintParts(hints...)))
 }
 

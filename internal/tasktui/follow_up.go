@@ -10,9 +10,7 @@ import (
 )
 
 const (
-	followUpRowInput = iota
-	followUpRowSubmit
-	followUpRowCount
+	followUpRowInput = 0
 )
 
 func followUpEditorSlot(taskID string) string {
@@ -57,19 +55,8 @@ func (m Model) completeFollowUpToggleHint() string {
 	return "Ctrl+X continue"
 }
 
-func (m Model) followUpSubmitLabel() string {
-	switch {
-	case m.followUpPending():
-		return "Starting follow-up…"
-	case m.canSubmitFollowUp():
-		return "Start follow-up task"
-	default:
-		return "Write what should happen next"
-	}
-}
-
 func (m *Model) selectFollowUpRow(row int) tea.Cmd {
-	m.followUp.choice = clamp(row, 0, followUpRowCount-1)
+	m.followUp.choice = row
 	m.syncComponents()
 	return m.syncInputFocus()
 }
@@ -133,40 +120,18 @@ func (m Model) handleCompleteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleFollowUpPanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, m.keys.back):
-		if m.followUpInputActive() {
-			cmd := m.selectFollowUpRow(followUpRowSubmit)
-			return m, cmd
-		}
 		m.focusRegion = FocusRegionDetail
 		m.syncComponents()
 		return m, m.syncInputFocus()
 	case m.followUpPending():
 		return m, nil
-	case keyMatches(msg, m.keys.up):
-		cmd := m.selectFollowUpRow(moveSelection(m.followUp.choice, -1, followUpRowCount))
-		return m, cmd
-	case keyMatches(msg, m.keys.down):
-		cmd := m.selectFollowUpRow(moveSelection(m.followUp.choice, 1, followUpRowCount))
-		return m, cmd
-	case m.followUpInputActive() && keyMatches(msg, m.keys.confirm):
-		cmd := m.editor.Update(msg)
-		m.syncComponents()
-		return m, cmd
 	case keyMatches(msg, m.keys.confirm):
-		if m.followUp.choice == followUpRowSubmit {
-			if !m.canSubmitFollowUp() {
-				cmd := m.selectFollowUpRow(followUpRowInput)
-				return m, cmd
-			}
-			return m, m.submitFollowUpTask()
+		if !m.canSubmitFollowUp() {
+			cmd := m.selectFollowUpRow(followUpRowInput)
+			return m, cmd
 		}
-		cmd := m.editor.Update(msg)
-		m.syncComponents()
-		return m, cmd
+		return m, m.submitFollowUpTask()
 	default:
-		if !m.followUpInputActive() {
-			return m, nil
-		}
 		cmd := m.editor.Update(msg)
 		m.syncComponents()
 		return m, cmd
@@ -183,11 +148,8 @@ func (m Model) renderCompleteFooter(surface surfaceRect) string {
 		return m.renderStatsFooter(surface, left, right, m.detailHint("Esc back"))
 	}
 	action := "Enter submit"
-	if m.followUpInputActive() {
-		action = "Enter newline"
-	}
 	if m.followUpPending() {
 		action = "Starting follow-up…"
 	}
-	return m.renderStatsFooter(surface, left, right, m.detailHint(joinHintParts("↑↓ select", action, "Esc back")))
+	return m.renderStatsFooter(surface, left, right, m.detailHint(joinHintParts(action, "Ctrl+J newline", "Esc back")))
 }

@@ -3,11 +3,28 @@ package tasktui
 import (
 	"fmt"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
+
+type EditorNewlineMode int
+
+const (
+	EditorNewlineModeEnter  EditorNewlineMode = iota // Enter=newline (default for general text editors)
+	EditorNewlineModeCtrlJ                           // Ctrl+J=newline while Enter is reserved for submit/confirm
+)
+
+func (e *EditorController) SetNewlineMode(mode EditorNewlineMode) {
+	switch mode {
+	case EditorNewlineModeCtrlJ:
+		e.input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
+	default:
+		e.input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("enter", "ctrl+m"))
+	}
+}
 
 type EditorSpec struct {
 	Placeholder string

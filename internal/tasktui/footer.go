@@ -54,7 +54,7 @@ func (m Model) taskListHint() string {
 }
 
 func (m Model) newTaskPrimaryHint() string {
-	return joinHintParts("Tab start", "Enter newline", "Esc cancel")
+	return joinHintParts("Enter start", "Ctrl+J newline", "Esc cancel")
 }
 
 func (m Model) newTaskSecondaryHint() string {

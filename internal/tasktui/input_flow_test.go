@@ -539,7 +539,7 @@ func TestClarificationFooterRemainsVisibleWithManyOptionsAndOtherInput(t *testin
 
 	view = strippedView(model.View().Content)
 	assert.Contains(t, view, "Ctrl+C quit")
-	assert.Contains(t, view, "Enter newline")
+	assert.Contains(t, view, "Enter confirm")
 	assert.Contains(t, view, "Write your own answer")
 }
 
@@ -1098,7 +1098,8 @@ func TestApprovalFeedbackRowEnterInsertsNewlineAndActionRowSubmits(t *testing.T)
 	assert.Contains(t, view, "Feedback")
 
 	model = typeText(t, model, "Need more")
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Ctrl+J inserts newline
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	model = next.(Model)
 	if cmd != nil {
 		_ = cmd()
@@ -1107,10 +1108,21 @@ func TestApprovalFeedbackRowEnterInsertsNewlineAndActionRowSubmits(t *testing.T)
 	assert.Equal(t, "Need more\ndetail", model.editor.Value())
 	assert.Empty(t, service.dispatched)
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	// Enter moves focus to Approve row (does NOT submit)
+	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	assert.Equal(t, approvalRowApprove, model.approval.choice)
+	assert.Empty(t, service.dispatched)
+
+	// Navigate to Reject
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = next.(Model)
 	assert.Equal(t, approvalRowReject, model.approval.choice)
 
+	// Enter on Reject submits reject with feedback
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.NotNil(t, cmd)
@@ -1246,7 +1258,8 @@ func TestClarificationOtherRowEnterInsertsNewlineAndContinueSubmits(t *testing.T
 	_ = model.syncInputFocus()
 
 	model = typeText(t, model, "Custom")
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Ctrl+J inserts newline
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	model = next.(Model)
 	if cmd != nil {
 		_ = cmd()
@@ -1255,10 +1268,7 @@ func TestClarificationOtherRowEnterInsertsNewlineAndContinueSubmits(t *testing.T
 	assert.Equal(t, "Custom\nanswer", model.editor.Value())
 	assert.Empty(t, service.dispatched)
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	model = next.(Model)
-	assert.Equal(t, clarificationContinueRowIndex(question), model.clarification.option)
-
+	// Enter on Other row (single-select, single-question) submits directly
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.NotNil(t, cmd)

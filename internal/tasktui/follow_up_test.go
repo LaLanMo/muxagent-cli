@@ -63,7 +63,7 @@ func TestCompleteScreenShowsFollowUpPanelAndDetailHint(t *testing.T) {
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Continue from this task")
 	assert.Contains(t, view, "Creates a new linked task and carries over this task's context.")
-	assert.Contains(t, view, "Write what should happen next")
+	assert.Contains(t, view, "Follow-up request")
 	assert.Contains(t, view, "Ctrl+X hide")
 	assert.Contains(t, view, "Tab continue")
 }
@@ -170,7 +170,7 @@ func TestCompleteFollowUpArtifactsTabRoundTripPreservesDraftAndRefocusesEditor(t
 	assert.Equal(t, "Continue with release prep", model.editor.Value())
 }
 
-func TestCompleteFollowUpEnterInsertsNewlineAndSubmitDispatches(t *testing.T) {
+func TestCompleteFollowUpCtrlJInsertsNewlineAndEnterSubmits(t *testing.T) {
 	model, service, _ := buildCompletedFollowUpModel(t, false)
 	model.focusRegion = FocusRegionActionPanel
 	model.followUp.choice = followUpRowInput
@@ -178,7 +178,7 @@ func TestCompleteFollowUpEnterInsertsNewlineAndSubmitDispatches(t *testing.T) {
 	_ = model.syncInputFocus()
 
 	model = typeText(t, model, "Continue with release")
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	model = next.(Model)
 	if cmd != nil {
 		_ = cmd()
@@ -187,10 +187,6 @@ func TestCompleteFollowUpEnterInsertsNewlineAndSubmitDispatches(t *testing.T) {
 
 	assert.Equal(t, "Continue with release\nprep", model.editor.Value())
 	assert.Empty(t, service.dispatched)
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	model = next.(Model)
-	assert.Equal(t, followUpRowSubmit, model.followUp.choice)
 
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
@@ -213,8 +209,6 @@ func TestCompleteFollowUpCommandErrorRestoresPanelAndKeepsDraft(t *testing.T) {
 	_ = model.syncInputFocus()
 
 	model = typeText(t, model, "Continue with release prep")
-	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	model = next.(Model)
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.NotNil(t, cmd)
@@ -230,7 +224,7 @@ func TestCompleteFollowUpCommandErrorRestoresPanelAndKeepsDraft(t *testing.T) {
 
 	assert.Equal(t, ScreenComplete, model.screen)
 	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
-	assert.Equal(t, followUpRowSubmit, model.followUp.choice)
+	assert.Equal(t, followUpRowInput, model.followUp.choice)
 	assert.Equal(t, "Continue with release prep", model.editor.Value())
 	assert.Equal(t, "cannot start follow-up", model.errorText)
 	assert.Nil(t, model.pendingRuntimeCmd)
@@ -244,8 +238,6 @@ func TestCompleteFollowUpCommandErrorKeepsHiddenState(t *testing.T) {
 	_ = model.syncInputFocus()
 
 	model = typeText(t, model, "Continue with release prep")
-	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	model = next.(Model)
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.NotNil(t, cmd)
@@ -320,8 +312,6 @@ func TestCompleteFollowUpTaskCreatedActivatesChildTaskAndClearsDraft(t *testing.
 	_ = model.syncInputFocus()
 
 	model = typeText(t, model, "Continue with release prep")
-	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	model = next.(Model)
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	require.NotNil(t, cmd)

@@ -351,7 +351,7 @@ func TestArtifactsTabFocusCycleAcrossDetailScreens(t *testing.T) {
 			wantFilesFooter:    "↑↓ files  c copy path  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline",
 			wantPreviewFooter:  "↑↓ scroll  c copy  Esc back  Ctrl+X hide  Tab continue  Shift+Tab timeline",
 			wantResponseRegion: FocusRegionActionPanel,
-			wantResponseFooter: "↑↓ select  Enter newline  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline",
+			wantResponseFooter: "Enter submit  Ctrl+J newline  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline",
 		},
 		{
 			name:               "approval",

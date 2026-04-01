@@ -2,7 +2,17 @@ package tasktui
 
 import tea "charm.land/bubbletea/v2"
 
+func (m Model) editorNewlineMode() EditorNewlineMode {
+	switch m.screen {
+	case ScreenNewTask, ScreenComplete, ScreenApproval, ScreenClarification:
+		return EditorNewlineModeCtrlJ
+	default:
+		return EditorNewlineModeEnter
+	}
+}
+
 func (m *Model) syncInputFocus() tea.Cmd {
+	m.editor.SetNewlineMode(m.editorNewlineMode())
 	var cmds []tea.Cmd
 	if m.dialog != nil {
 		m.editor.Blur()

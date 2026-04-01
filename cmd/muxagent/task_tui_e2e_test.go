@@ -251,7 +251,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, "Reject once")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.focusApprovalActionPanel(t)
+				_ = session.focusApprovalActionPanel(t)
 				session.send(t, "\x1b[B")
 				session.waitForOutputIdle(200 * time.Millisecond)
 				session.send(t, "\x1b[B")
@@ -988,7 +988,7 @@ func TestTaskTUINarrowTerminalKeepsNewTaskStartHintVisible(t *testing.T) {
 	session.resize(t, 40, 24)
 	session.waitForAll(t, 10*time.Second, "new task", "task configs")
 	session.send(t, "\r")
-	session.waitForAll(t, 5*time.Second, "New Task", "Task description", "Tab start", "Ctrl+C quit")
+	session.waitForAll(t, 5*time.Second, "New Task", "Task description", "Enter start", "Ctrl+C quit")
 
 	session.quit(t)
 }
@@ -1088,7 +1088,7 @@ func TestTaskTUIApprovalArtifactsFooterAndEnterGuard(t *testing.T) {
 	assert.False(t, changed)
 	assert.NotContains(t, session.output(), "Task completed successfully")
 
-	session.focusApprovalActionPanel(t)
+	_ = session.focusApprovalActionPanel(t)
 	session.sendAndWaitForAll(t, "\t", 5*time.Second, "c copy path")
 	session.send(t, "c")
 	copiedPath := waitForClipboardContents(t, clipboardPath)
@@ -1211,14 +1211,18 @@ func TestTaskTUICompletedTaskCanStartFollowUpEndToEnd(t *testing.T) {
 
 	session.sendAndWait(t, "\t", 5*time.Second)
 	session.typeText(t, "Child follow-up task")
-	session.sendAndWait(t, "\x1b[B", 5*time.Second)
 	session.send(t, "\r")
+	beforeChildCompletion := session.markOutput()
 	session.approvePlan(t)
-	session.waitForAll(t, 20*time.Second, "Task completed successfully")
+	session.waitForFreshAll(t, 20*time.Second, beforeChildCompletion, "Task completed successfully", "Continue from this task")
 
 	tasks := waitForTaskCount(t, workDir, 2)
 	parentTask := findTaskByDescription(t, tasks, "Parent follow-up task")
 	childTask := findTaskByDescription(t, tasks, "Child follow-up task")
+	require.Eventually(t, func() bool {
+		_, _, view, err := loadTaskStateByID(workDir, childTask.ID)
+		return err == nil && view.Status == taskdomain.TaskStatusDone
+	}, 10*time.Second, 100*time.Millisecond)
 
 	store, err := taskstore.Open(workDir)
 	require.NoError(t, err)
@@ -1368,8 +1372,7 @@ func TestTaskTUIArtifactsCopyFailureBanner(t *testing.T) {
 	session.submitNewTask(t, "Artifact copy failure")
 	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·")
 
-	session.resetOutput()
-	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Enter submit")
+	_ = session.focusApprovalActionPanel(t)
 	session.sendAndWaitForAll(t, "\t", 5*time.Second, "c copy path")
 	session.sendAndWaitForAll(t, "c", 5*time.Second, "Unable to copy artifact path")
 
@@ -1895,34 +1898,42 @@ func (s *tuiSession) confirm(t *testing.T) {
 
 func (s *tuiSession) approvePlan(t *testing.T) {
 	t.Helper()
-	s.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	s.focusApprovalActionPanel(t)
+	beforeApproval := s.markOutput()
+	s.waitForFreshAll(t, 10*time.Second, beforeApproval, "approve_plan", "awaiting approval")
+	panelOutput := s.focusApprovalActionPanel(t)
+	if strings.Contains(panelOutput, "Enter confirm") {
+		before := s.markOutput()
+		s.send(t, "\r")
+		s.waitForFreshAll(t, 5*time.Second, before, "Enter submit")
+	}
 	before := s.markOutput()
 	s.send(t, "\r")
 	s.waitForOutputChange(t, 5*time.Second, before)
 }
 
-func (s *tuiSession) focusApprovalActionPanel(t *testing.T) {
+func (s *tuiSession) focusApprovalActionPanel(t *testing.T) string {
 	t.Helper()
-	if !strings.Contains(s.output(), "Approve this plan?") {
-		return
-	}
-	for range 3 {
-		output := s.output()
-		if strings.Contains(output, "Enter submit") {
-			return
-		}
+	for range 6 {
+		before := s.markOutput()
 		s.send(t, "\t")
-		s.waitForOutputIdle(200 * time.Millisecond)
+		output := s.waitForOutputChange(t, 2*time.Second, before)
+		fresh := output
+		if strings.HasPrefix(output, before.output) {
+			fresh = output[len(before.output):]
+		}
+		if strings.Contains(fresh, "Enter submit") || strings.Contains(fresh, "Enter confirm") {
+			return fresh
+		}
 	}
-	require.Contains(t, s.output(), "Enter submit")
+	t.Fatalf("expected approval action footer to be focused, got output:\n%s", s.output())
+	return ""
 }
 
 func (s *tuiSession) submitNewTask(t *testing.T, description string) {
 	t.Helper()
 	s.typeText(t, description)
 	before := s.markOutput()
-	s.send(t, "\t")
+	s.send(t, "\r")
 	s.waitForOutputChange(t, 5*time.Second, before)
 }
 

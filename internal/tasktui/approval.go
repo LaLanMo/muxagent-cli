@@ -31,23 +31,15 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.syncComponents()
 		return m, m.syncInputFocus()
 	case approvalFeedbackRowActive(m) && keyMatches(msg, m.keys.confirm):
-		cmd := m.editor.Update(msg)
+		m.approval.choice = approvalRowApprove
 		m.syncComponents()
-		return m, cmd
+		return m, m.syncInputFocus()
 	case keyMatches(msg, m.keys.confirm):
 		if m.currentInput == nil || m.current == nil {
 			return m, nil
 		}
-		switch m.approval.choice {
-		case approvalRowApprove:
-			return m.submitCurrentInput(m.approvalPayload(true))
-		case approvalRowReject:
-			return m.submitCurrentInput(m.approvalPayload(false))
-		default:
-			cmd := m.editor.Update(msg)
-			m.syncComponents()
-			return m, cmd
-		}
+		approved := m.approval.choice != approvalRowReject
+		return m.submitCurrentInput(m.approvalPayload(approved))
 	default:
 		if !approvalFeedbackRowActive(m) {
 			return m, nil
@@ -93,9 +85,12 @@ func (m Model) renderApprovalFooter(surface surfaceRect) string {
 	if m.focusRegion != FocusRegionActionPanel {
 		return renderFooterHintBar(surface.Width, m.detailHint("Esc back"))
 	}
-	action := "Enter submit"
+	hints := []string{"↑↓ select"}
 	if m.approval.choice == approvalRowFeedback {
-		action = "Enter newline"
+		hints = append(hints, "Enter confirm", "Ctrl+J newline")
+	} else {
+		hints = append(hints, "Enter submit")
 	}
-	return renderFooterHintBar(surface.Width, m.detailHint(joinHintParts("↑↓ select", action, "Esc back")))
+	hints = append(hints, "Esc back")
+	return renderFooterHintBar(surface.Width, m.detailHint(joinHintParts(hints...)))
 }

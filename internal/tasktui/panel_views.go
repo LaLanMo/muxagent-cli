@@ -109,6 +109,14 @@ func (m Model) buildInlineEditorRow(panelWidth, fieldWidth int, label string, fo
 	}
 }
 
+func buildCollapsedTextRow(panelWidth int, label, text string, focused bool) builtInlineRow {
+	lines := []string{renderOpaquePanelSurface(panelWidth, renderChoiceLine(focused, label))}
+	for _, line := range strings.Split(text, "\n") {
+		lines = append(lines, renderOpaquePanelSurface(panelWidth, "    "+tuiTheme.Text.Muted.Render(line)))
+	}
+	return builtInlineRow{Lines: lines}
+}
+
 func (m Model) renderNewTaskModal(layout newTaskScreenLayout) string {
 	modalStyle := tuiTheme.Modal.Frame.Width(layout.modalWidth)
 	return modalStyle.Render(m.buildNewTaskPanel(layout.modalInnerWidth).View)
@@ -199,11 +207,19 @@ func (m Model) buildApprovalPanel(surface panelSurface, editorSpec editorSurface
 	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
 	title := renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render("Approve this plan?"))
 	content := []string{title, ""}
-	feedbackExpanded := m.approval.choice == approvalRowFeedback || approvalHasFeedbackText(m.editor.Value())
+	feedbackFocused := m.focusRegion == FocusRegionActionPanel && m.approval.choice == approvalRowFeedback
+	var feedbackRow builtInlineRow
+	if feedbackFocused {
+		feedbackRow = m.buildInlineEditorRow(innerWidth, editorSpec.FieldWidth, "Feedback (optional)", true, true)
+	} else if feedbackText := strings.TrimSpace(m.editor.Value()); feedbackText != "" {
+		feedbackRow = buildCollapsedTextRow(innerWidth, "Feedback (optional)", feedbackText, false)
+	} else {
+		feedbackRow = m.buildInlineEditorRow(innerWidth, editorSpec.FieldWidth, "Feedback (optional)", false, false)
+	}
 	rows := []builtInlineRow{
 		{Lines: []string{renderOpaquePanelSurface(innerWidth, renderActionLine(m.focusRegion == FocusRegionActionPanel && m.approval.choice == approvalRowApprove, true, m.approvalActionLabel(true)))}},
 		{Lines: []string{renderOpaquePanelSurface(innerWidth, renderActionLine(m.focusRegion == FocusRegionActionPanel && m.approval.choice == approvalRowReject, true, m.approvalActionLabel(false)))}},
-		m.buildInlineEditorRow(innerWidth, editorSpec.FieldWidth, "Feedback (optional)", m.focusRegion == FocusRegionActionPanel && m.approval.choice == approvalRowFeedback, feedbackExpanded),
+		feedbackRow,
 	}
 	build := builtPanel{}
 	prefixHeight := lipgloss.Height(strings.Join(content, "\n"))
@@ -249,7 +265,6 @@ func (m Model) buildFollowUpPanel(surface panelSurface, editorSpec editorSurface
 	inputExpanded := (m.focusRegion == FocusRegionActionPanel && m.followUp.choice == followUpRowInput) || strings.TrimSpace(m.editor.Value()) != ""
 	rows := []builtInlineRow{
 		m.buildInlineEditorRow(innerWidth, editorSpec.FieldWidth, "Follow-up request", m.focusRegion == FocusRegionActionPanel && m.followUp.choice == followUpRowInput, inputExpanded),
-		{Lines: []string{renderOpaquePanelSurface(innerWidth, renderActionLine(m.focusRegion == FocusRegionActionPanel && m.followUp.choice == followUpRowSubmit, m.canSubmitFollowUp(), m.followUpSubmitLabel()))}},
 	}
 	build := builtPanel{}
 	prefixHeight := lipgloss.Height(strings.Join(content, "\n"))

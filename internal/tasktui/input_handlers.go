@@ -127,7 +127,7 @@ func (m Model) handleNewTaskKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.syncComponents()
 		}
 		return m, nil
-	case keyMatches(msg, m.keys.nextFocus):
+	case keyMatches(msg, m.keys.confirm):
 		if strings.TrimSpace(m.editor.Value()) == "" {
 			return m, nil
 		}

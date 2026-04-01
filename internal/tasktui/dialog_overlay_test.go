@@ -38,7 +38,7 @@ func TestCtrlCOpensQuitDialogAndBlocksUnderlyingInput(t *testing.T) {
 	assert.Contains(t, view, "Quit muxagent?")
 	assert.Contains(t, view, "Cancel")
 	assert.Contains(t, view, "Quit")
-	assert.Contains(t, view, "Enter newline", "dialog should preserve the underlying screen outside the card")
+	assert.Contains(t, view, "Enter start", "dialog should preserve the underlying screen outside the card")
 
 	next, _ = model.Update(tea.KeyPressMsg{Text: "x", Code: 'x'})
 	model = next.(Model)

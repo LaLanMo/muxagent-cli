@@ -45,12 +45,12 @@ func TestModelRendersTaskListAndNewTaskModal(t *testing.T) {
 	assert.Contains(t, strippedView(view.Content), "New Task")
 	assert.Contains(t, strippedView(view.Content), "Task description")
 	assert.Contains(t, strippedView(view.Content), "runtime codex")
-	assert.Contains(t, strippedView(view.Content), "Enter newline")
-	assert.Contains(t, strippedView(view.Content), "Tab start")
+	assert.Contains(t, strippedView(view.Content), "Ctrl+J newline")
+	assert.Contains(t, strippedView(view.Content), "Enter start")
 	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Ctrl+P prev config"))
 	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Ctrl+N next config"))
-	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Enter newline"))
-	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Tab start"))
+	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Ctrl+J newline"))
+	assert.Equal(t, 1, strings.Count(strippedView(view.Content), "Enter start"))
 	assert.NotContains(t, strippedView(view.Content), "Enter select")
 }
 
@@ -63,7 +63,7 @@ func TestNewTaskFooterKeepsStartHintVisibleOnNarrowTerminal(t *testing.T) {
 	model = openNewTaskModal(t, model)
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "Tab start")
+	assert.Contains(t, view, "Enter start")
 	assert.Contains(t, view, "Ctrl+C quit")
 	assert.NotContains(t, view, "Enter select")
 }
@@ -350,7 +350,7 @@ func TestStartTaskCommandErrorReturnsToFormEditorAndPreservesInput(t *testing.T)
 	assert.Empty(t, model.activeTaskID)
 }
 
-func TestNewTaskTextAreaGrowsOnEnterAndPreservesFirstLine(t *testing.T) {
+func TestNewTaskTextAreaGrowsOnCtrlJAndPreservesFirstLine(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -363,14 +363,14 @@ func TestNewTaskTextAreaGrowsOnEnterAndPreservesFirstLine(t *testing.T) {
 	model = typeText(t, model, "first line")
 	assert.Equal(t, "first line", model.editor.Value())
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	model = next.(Model)
-	assert.Equal(t, 2, model.editor.LineCount(), "should have 2 lines after enter")
+	assert.Equal(t, 2, model.editor.LineCount(), "should have 2 lines after ctrl+j")
 
 	model = typeText(t, model, "second line")
 
 	view := strippedView(model.View().Content)
-	assert.Contains(t, view, "first line", "first line must remain visible after enter")
+	assert.Contains(t, view, "first line", "first line must remain visible after ctrl+j")
 	assert.Contains(t, view, "second line", "second line must be visible")
 	assert.Equal(t, initialHeight, model.editor.Height(), "editor height should stay fixed")
 
@@ -401,7 +401,7 @@ func TestNewTaskEscFromFormEditorCancelsAndResetsInput(t *testing.T) {
 	assert.Equal(t, "", model.editor.Value())
 }
 
-func TestNewTaskTabStartsTask(t *testing.T) {
+func TestNewTaskTabDoesNotStartTask(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -412,21 +412,21 @@ func TestNewTaskTabStartsTask(t *testing.T) {
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
-	require.NotNil(t, cmd)
-	require.Nil(t, cmd())
-	assert.Equal(t, ScreenRunning, model.screen)
-	assert.Len(t, service.dispatched, 1)
-	assert.Equal(t, taskruntime.CommandStartTask, service.dispatched[0].Type)
+	if cmd != nil {
+		_ = cmd()
+	}
+	assert.Equal(t, ScreenNewTask, model.screen)
+	assert.Empty(t, service.dispatched)
 }
 
-func TestNewTaskTabDoesNothingWhenDescriptionEmpty(t *testing.T) {
+func TestNewTaskEnterDoesNothingWhenDescriptionEmpty(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
 
 	model = openNewTaskModal(t, model)
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
 	if cmd != nil {
 		_ = cmd()
@@ -446,7 +446,7 @@ func TestNewTaskEditorKeepsFixedHeightWhileDeleting(t *testing.T) {
 	initialHeight := model.editor.Height()
 
 	model = typeText(t, model, "line one")
-	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	model = next.(Model)
 	model = typeText(t, model, "line two")
 	assert.Equal(t, initialHeight, model.editor.Height())
@@ -471,7 +471,7 @@ func TestNewTaskEditorScrollsInternallyForLongContent(t *testing.T) {
 
 	for i := range 15 {
 		if i > 0 {
-			next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			next, _ = model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 			model = next.(Model)
 		}
 		model = typeText(t, model, "line")
