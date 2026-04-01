@@ -71,9 +71,9 @@ func TestLongTaskDescriptionsKeepDetailFooterVisible(t *testing.T) {
 					NodeName:      "approve_plan",
 					ArtifactPaths: []string{artifactPath},
 				}
-				model.screen = ScreenApproval
+				model.setDetailScreen(ScreenApproval, true)
 			},
-			want: []string{"Approve this plan?", "Ctrl+C quit", "Enter submit"},
+			want: []string{"Approve this plan?", "Ctrl+C quit", "Files", "Preview ·"},
 		},
 		{
 			name:   "clarification with split artifacts",

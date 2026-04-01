@@ -77,8 +77,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, "Implement login")
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 			},
 			expectedArtifacts:   []string{"01-draft_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
 			requirePromptHeader: true,
@@ -225,8 +224,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, longDescription)
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 			},
 			expectedArtifacts:   []string{"01-draft_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
 			requirePromptHeader: true,
@@ -253,14 +251,18 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, "Reject once")
 				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.sendAndWaitForAll(t, "\x1b[B", 5*time.Second, "Reject")
-				session.sendAndWaitForAll(t, "\x1b[B", 5*time.Second, "Feedback (optional)")
-				session.sendAndWait(t, "Need more detail", 5*time.Second)
-				session.sendAndWaitForAll(t, "\x1b[A", 5*time.Second, "Reject with feedback")
+				session.focusApprovalActionPanel(t)
+				session.send(t, "\x1b[B")
+				session.waitForOutputIdle(200 * time.Millisecond)
+				session.send(t, "\x1b[B")
+				session.waitForOutputIdle(200 * time.Millisecond)
+				session.send(t, "Need more detail")
+				session.waitForOutputIdle(200 * time.Millisecond)
+				session.send(t, "\x1b[A")
+				session.waitForOutputIdle(200 * time.Millisecond)
 				session.send(t, "\r")
 				session.resetOutput()
-				session.waitForAll(t, 20*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 			},
 			expectedArtifacts: []string{"01-draft_plan", "02-review_plan", "03-approve_plan", "04-draft_plan", "05-review_plan", "06-approve_plan", "07-implement", "08-verify"},
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
@@ -303,8 +305,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.submitNewTask(t, "Need clarification")
 				session.waitForAll(t, 10*time.Second, "draft_plan", "awaiting input")
 				session.confirm(t)
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 			},
 			expectedArtifacts: []string{"01-draft_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
@@ -359,8 +360,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.sendAndWait(t, "\x1b[C", 5*time.Second)
 				session.send(t, "\r")
 
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 			},
 			expectedArtifacts: []string{"01-draft_plan", "02-review_plan", "03-approve_plan", "04-implement", "05-verify"},
 			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
@@ -399,8 +399,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, "Review rejects once")
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 			},
 			expectedArtifacts:   []string{"01-draft_plan", "02-review_plan", "03-draft_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
 			requirePromptHeader: true,
@@ -456,8 +455,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.submitNewTask(t, "Blocked loopback")
 				session.waitForAll(t, 10*time.Second, "Task blocked", "Force continue")
 				session.send(t, "\r")
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 			},
 			expectedArtifacts:   []string{"01-draft_plan", "02-review_plan", "03-draft_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
 			requirePromptHeader: false,
@@ -484,8 +482,7 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.send(t, "\r")
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.submitNewTask(t, "Retry failed implement")
-				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-				session.confirm(t)
+				session.approvePlan(t)
 				session.waitForAll(t, 10*time.Second, "Task failed", "Retry step")
 				session.send(t, "\r")
 			},
@@ -603,8 +600,7 @@ func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Implement login")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 	session.waitForAll(t, 20*time.Second, "Task completed successfully")
 
 	_, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
@@ -748,8 +744,7 @@ func TestTaskTUIWorktreeLaunchStoresTasksInOriginalDirAndRemembersPreference(t *
 	session.resize(t, 141, 40)
 	session.waitForAll(t, 5*time.Second, "worktree on", "Ctrl+T worktree off")
 	session.submitNewTask(t, "Worktree-backed task")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 	session.waitForAll(t, 20*time.Second, "Task completed successfully")
 
 	task, runs, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
@@ -1022,18 +1017,17 @@ func TestTaskTUISmallTerminalArtifactTabSwitching(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Inspect artifacts on small terminal")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·")
+	session.resetOutput()
+
+	// Switch to timeline via Shift+Tab
+	session.sendBacktab(t)
 	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts")
 	session.resetOutput()
 
-	// Switch to artifacts tab via Shift+Tab
+	// Press Shift+Tab to return to artifacts tab
 	session.sendBacktab(t)
 	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·")
-	session.resetOutput()
-
-	// Press Shift+Tab to return to timeline tab
-	session.sendBacktab(t)
-	session.waitForAll(t, 5*time.Second, "Shift+Tab artifacts")
 
 	session.quit(t)
 }
@@ -1062,11 +1056,9 @@ func TestTaskTUIArtifactFilesPaneShowsSuffixVisiblePaths(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Show suffix-visible artifact rows")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab artifacts")
-
-	session.resetOutput()
-	output := session.sendAndWaitForAll(t, "\x1b[Z", 5*time.Second, "Shift+Tab timeline", "Files", "Preview ·", "…01-draft_plan/plan-1.md")
+	output := session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·", "draft_plan (#1)", "…01-draft_plan/plan-1.md")
 	assert.Contains(t, output, "…01-draft_plan/plan-1.md")
+	assert.Contains(t, output, "draft_plan (#1)")
 	assert.NotContains(t, output, "Preview · 01-draft_plan/plan-1.md")
 
 	session.quit(t)
@@ -1085,14 +1077,10 @@ func TestTaskTUIApprovalArtifactsFooterAndEnterGuard(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Approval artifacts")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab artifacts")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·")
 
 	waitForNodeRunCounts(t, workDir, map[string]int{"draft_plan": 1, "review_plan": 1, "approve_plan": 1})
 	_, _, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusAwaitingUser)
-
-	session.resetOutput()
-	session.sendBacktab(t)
-	session.waitForAll(t, 5*time.Second, "Shift+Tab timeline", "Tab artifacts", "Files", "Preview ·")
 
 	before := session.markOutput()
 	session.send(t, "\r")
@@ -1100,6 +1088,8 @@ func TestTaskTUIApprovalArtifactsFooterAndEnterGuard(t *testing.T) {
 	assert.False(t, changed)
 	assert.NotContains(t, session.output(), "Task completed successfully")
 
+	session.focusApprovalActionPanel(t)
+	session.sendAndWaitForAll(t, "\t", 5*time.Second, "c copy path")
 	session.send(t, "c")
 	copiedPath := waitForClipboardContents(t, clipboardPath)
 	assert.Contains(t, view.ArtifactPaths, copiedPath)
@@ -1136,11 +1126,10 @@ func TestTaskTUIWideTerminalCompletedArtifactsTabSwitch(t *testing.T) {
 	session := startTUISession(t, binaryPath, workDir)
 	session.resize(t, 149, 39)
 	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
-	session.send(t, "\r")
+	session.confirm(t)
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Wide completed artifacts")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 
 	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Shift+Tab artifacts", "Esc back")
 	session.resetOutput()
@@ -1180,8 +1169,7 @@ func TestTaskTUICompletedArtifactsCopyPathAndContents(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Completed artifacts copy")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Shift+Tab artifacts")
 
 	_, _, view := waitForPersistedTask(t, workDir, taskdomain.TaskStatusDone)
@@ -1218,16 +1206,14 @@ func TestTaskTUICompletedTaskCanStartFollowUpEndToEnd(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Parent follow-up task")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Continue from this task", "Tab continue")
 
 	session.sendAndWait(t, "\t", 5*time.Second)
 	session.typeText(t, "Child follow-up task")
 	session.sendAndWait(t, "\x1b[B", 5*time.Second)
 	session.send(t, "\r")
-	session.waitForAll(t, 15*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 	session.waitForAll(t, 20*time.Second, "Task completed successfully")
 
 	tasks := waitForTaskCount(t, workDir, 2)
@@ -1290,8 +1276,7 @@ func TestTaskTUISmallTerminalCompletedArtifactsTabSwitchAndReopen(t *testing.T) 
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Small completed artifacts")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 
 	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Shift+Tab artifacts", "Esc back")
 	session.resetOutput()
@@ -1342,8 +1327,7 @@ func TestTaskTUIClarificationWithArtifactsTabSwitchReachable(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Clarification with artifacts")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
-	session.confirm(t)
+	session.approvePlan(t)
 
 	session.waitForAll(t, 10*time.Second, "implement", "awaiting input", "Question 1/1", "Shift+Tab artifacts")
 	session.resetOutput()
@@ -1382,11 +1366,11 @@ func TestTaskTUIArtifactsCopyFailureBanner(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Artifact copy failure")
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab artifacts")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·")
 
 	session.resetOutput()
-	session.sendBacktab(t)
-	session.waitForAll(t, 5*time.Second, "Tab artifacts", "Shift+Tab timeline")
+	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Enter submit")
+	session.sendAndWaitForAll(t, "\t", 5*time.Second, "c copy path")
 	session.sendAndWaitForAll(t, "c", 5*time.Second, "Unable to copy artifact path")
 
 	session.quit(t)
@@ -1422,10 +1406,7 @@ func TestTaskTUILongTaskDescriptionsKeepAwaitingFootersVisible(t *testing.T) {
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, longDescription)
 
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter submit")
-
-	session.resetOutput()
-	session.confirm(t)
+	session.approvePlan(t)
 	// Resize forces a full repaint; the incremental renderer skips
 	// unchanged right-side characters (like "Ctrl+C quit") otherwise.
 	before := session.markOutput()
@@ -1466,10 +1447,7 @@ func TestTaskTUILongTaskDescriptionsKeepFailedAndRunningFootersVisible(t *testin
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, longDescription)
 
-	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Ctrl+C quit", "Enter submit")
-
-	session.resetOutput()
-	session.send(t, "\r")
+	session.approvePlan(t)
 	session.resetOutput()
 	session.resize(t, 150, 39)
 
@@ -1915,6 +1893,31 @@ func (s *tuiSession) confirm(t *testing.T) {
 	_, _ = s.waitForConfirmStateExit(t, time.Second, updated)
 }
 
+func (s *tuiSession) approvePlan(t *testing.T) {
+	t.Helper()
+	s.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	s.focusApprovalActionPanel(t)
+	before := s.markOutput()
+	s.send(t, "\r")
+	s.waitForOutputChange(t, 5*time.Second, before)
+}
+
+func (s *tuiSession) focusApprovalActionPanel(t *testing.T) {
+	t.Helper()
+	if !strings.Contains(s.output(), "Approve this plan?") {
+		return
+	}
+	for range 3 {
+		output := s.output()
+		if strings.Contains(output, "Enter submit") {
+			return
+		}
+		s.send(t, "\t")
+		s.waitForOutputIdle(200 * time.Millisecond)
+	}
+	require.Contains(t, s.output(), "Enter submit")
+}
+
 func (s *tuiSession) submitNewTask(t *testing.T, description string) {
 	t.Helper()
 	s.typeText(t, description)
@@ -2115,7 +2118,11 @@ func (s *tuiSession) waitForConfirmStateExit(t *testing.T, timeout time.Duration
 	deadline := time.Now().Add(timeout)
 	for {
 		current := s.markOutput()
-		if current.version > before.version && !needsSecondConfirmInput(current.output) {
+		fresh := current.output
+		if before.output != "" && strings.HasPrefix(current.output, before.output) {
+			fresh = current.output[len(before.output):]
+		}
+		if current.version > before.version && !needsSecondConfirmInput(fresh) {
 			return current, true
 		}
 		if err, exited := s.exitStatus(); exited {

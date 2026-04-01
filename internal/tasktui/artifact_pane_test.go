@@ -51,7 +51,8 @@ func TestApprovalScreenShowsExpandedArtifactsPaneAndPreview(t *testing.T) {
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Shift+Tab timeline")
 	assert.Contains(t, view, "Files")
-	assert.Contains(t, view, "Preview · plan.md")
+	assert.Contains(t, view, "Preview · approve_plan (#1) · plan.md")
+	assert.Contains(t, view, "approve_plan (#1)")
 	assert.Contains(t, view, "Plan")
 	assert.NotContains(t, view, "# Plan")
 }
@@ -698,13 +699,13 @@ func TestFormatArtifactFileLabel(t *testing.T) {
 			want:  "…01-draft_plan/plan-1.md",
 		},
 		{
-			name: "keeps provenance when width allows",
+			name: "ignores provenance and keeps path readable",
 			item: artifactItem{
 				SourceLabel: "draft_plan (#1)",
 				DisplayPath: "artifacts/01-draft_plan/plan-1.md",
 			},
 			width: 42,
-			want:  "draft_plan (#1) · …01-draft_plan/plan-1.md",
+			want:  "artifacts/01-draft_plan/plan-1.md",
 		},
 		{
 			name:  "short path stays unchanged",
@@ -729,6 +730,22 @@ func TestRenderArtifactFileLinesShowsSuffixVisibleSelectedRow(t *testing.T) {
 	lines := model.renderArtifactFileLines(26, 1)
 	require.Len(t, lines, 1)
 	assert.Equal(t, "> …01-draft_plan/plan-1.md", ansi.Strip(lines[0]))
+}
+
+func TestRenderArtifactFileLinesShowsNodeRunGroupHeaders(t *testing.T) {
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
+	model.artifactItems = []artifactItem{
+		{SourceLabel: "draft_plan (#1)", DisplayPath: "plan.md"},
+		{SourceLabel: "review_plan (#1)", DisplayPath: "review.md"},
+	}
+	model.artifactIndex = 0
+
+	lines := model.renderArtifactFileLines(40, 6)
+	require.Len(t, lines, 4)
+	assert.Equal(t, "draft_plan (#1)", ansi.Strip(lines[0]))
+	assert.Equal(t, "> plan.md", ansi.Strip(lines[1]))
+	assert.Equal(t, "review_plan (#1)", ansi.Strip(lines[2]))
+	assert.Equal(t, "  review.md", ansi.Strip(lines[3]))
 }
 
 func TestArtifactPaneLabelsFilesWithSourceNodeAndIteration(t *testing.T) {
@@ -759,6 +776,57 @@ func TestArtifactPaneLabelsFilesWithSourceNodeAndIteration(t *testing.T) {
 
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "draft_plan (#1)")
+	assert.Contains(t, view, "draft_plan (#2)")
+}
+
+func TestApprovalArtifactsStayGroupedWithoutPrioritizingLatestPlan(t *testing.T) {
+	tempDir := t.TempDir()
+	oldPlan := filepath.Join(tempDir, "old-plan.md")
+	oldReview := filepath.Join(tempDir, "old-review.md")
+	oldApproval := filepath.Join(tempDir, "old-approval.md")
+	newPlan := filepath.Join(tempDir, "new-plan.md")
+	newReview := filepath.Join(tempDir, "new-review.md")
+	require.NoError(t, os.WriteFile(oldPlan, []byte("# Old Plan\n"), 0o644))
+	require.NoError(t, os.WriteFile(oldReview, []byte("# Old Review\n"), 0o644))
+	require.NoError(t, os.WriteFile(oldApproval, []byte("# Old Approval\n"), 0o644))
+	require.NoError(t, os.WriteFile(newPlan, []byte("# New Plan\n"), 0o644))
+	require.NoError(t, os.WriteFile(newReview, []byte("# New Review\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 132, Height: 34})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusAwaitingUser,
+		ArtifactPaths: []string{oldPlan, oldReview, oldApproval, newPlan, newReview},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{oldPlan}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{oldReview}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{oldApproval}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-4", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{newPlan}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-5", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{newReview}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-6", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:          taskruntime.InputKindHumanNode,
+		TaskID:        "task-1",
+		NodeRunID:     "run-6",
+		NodeName:      "approve_plan",
+		ArtifactPaths: []string{oldPlan, oldReview, oldApproval, newPlan, newReview},
+	}
+	model.setDetailScreen(ScreenApproval, true)
+	model.syncComponents()
+
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
+	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
+	assert.Equal(t, oldPlan, selectedArtifactPath(model.artifactItems, model.artifactIndex))
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Preview · draft_plan (#1) · old-plan.md")
+	assert.Contains(t, view, "draft_plan (#1)")
+	assert.Contains(t, view, "review_plan (#1)")
+	assert.Contains(t, view, "approve_plan (#1)")
 	assert.Contains(t, view, "draft_plan (#2)")
 }
 

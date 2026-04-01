@@ -47,8 +47,12 @@ func TestModelOpensAwaitingTaskIntoApprovalScreen(t *testing.T) {
 	model = openFirstTaskFromList(t, model)
 
 	assert.Equal(t, ScreenApproval, model.screen)
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
+	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
 	assert.Contains(t, strippedView(model.View().Content), "Approve this plan?")
-	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab artifacts")
+	assert.Contains(t, strippedView(model.View().Content), "Files")
+	assert.Contains(t, strippedView(model.View().Content), "Preview · approve_plan (#1) · plan.md")
+	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab timeline")
 }
 
 func TestModelHandlesClarificationEvent(t *testing.T) {

@@ -31,45 +31,133 @@ type artifactItem struct {
 	renderedPreview string
 }
 
-func artifactPanePaths(current *taskdomain.TaskView, input *taskruntime.InputRequest) []string {
-	seen := map[string]struct{}{}
-	paths := make([]string, 0)
-	appendPaths := func(items []string) {
-		for _, item := range items {
-			item = strings.TrimSpace(item)
-			if item == "" {
-				continue
-			}
-			if _, ok := seen[item]; ok {
-				continue
-			}
-			seen[item] = struct{}{}
-			paths = append(paths, item)
-		}
-	}
-	if input != nil {
-		appendPaths(input.ArtifactPaths)
-	}
-	if current != nil {
-		appendPaths(current.ArtifactPaths)
-	}
-	return paths
+type artifactGroup struct {
+	Label string
+	Paths []string
 }
 
 func buildArtifactItems(workDir string, current *taskdomain.TaskView, input *taskruntime.InputRequest) []artifactItem {
-	paths := artifactPanePaths(current, input)
-	provenance := artifactProvenance(current)
-	items := make([]artifactItem, 0, len(paths))
-	for _, path := range paths {
-		item := loadArtifactItem(path, workDir)
-		if source, ok := provenance[path]; ok {
-			item.SourceLabel = source
-			item.Label = source + " · " + item.Label
-			item.PreviewTitle = source + " · " + item.PreviewName
+	groups := artifactPaneGroups(current, input)
+	items := make([]artifactItem, 0, artifactGroupPathCount(groups))
+	for _, group := range groups {
+		for _, path := range group.Paths {
+			item := loadArtifactItem(path, workDir)
+			if strings.TrimSpace(group.Label) != "" {
+				item.SourceLabel = group.Label
+				item.PreviewTitle = group.Label + " · " + item.PreviewName
+			}
+			items = append(items, item)
 		}
-		items = append(items, item)
 	}
 	return items
+}
+
+func artifactPaneGroups(current *taskdomain.TaskView, input *taskruntime.InputRequest) []artifactGroup {
+	runLabels, ordinals := artifactRunLabels(current)
+	groupIndexByRunID := make(map[string]int, len(runLabels))
+	seenPaths := map[string]struct{}{}
+	groups := make([]artifactGroup, 0, len(runLabels)+1)
+
+	if current != nil {
+		for _, run := range current.NodeRuns {
+			groupIndexByRunID[run.ID] = len(groups)
+			group := artifactGroup{Label: runLabels[run.ID]}
+			for _, path := range run.ArtifactPaths {
+				artifactAppendUniquePath(&group.Paths, seenPaths, path)
+			}
+			groups = append(groups, group)
+		}
+	}
+
+	if input != nil {
+		index := -1
+		if existing, ok := groupIndexByRunID[input.NodeRunID]; ok {
+			index = existing
+		} else if len(input.ArtifactPaths) > 0 {
+			index = len(groups)
+			groups = append(groups, artifactGroup{Label: artifactInputGroupLabel(input, ordinals)})
+		}
+		if index >= 0 {
+			for _, path := range input.ArtifactPaths {
+				artifactAppendUniquePath(&groups[index].Paths, seenPaths, path)
+			}
+		}
+	}
+
+	if current != nil {
+		fallbackIndex := -1
+		for _, path := range current.ArtifactPaths {
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			if _, ok := seenPaths[path]; ok {
+				continue
+			}
+			if fallbackIndex < 0 {
+				fallbackIndex = len(groups)
+				groups = append(groups, artifactGroup{})
+			}
+			artifactAppendUniquePath(&groups[fallbackIndex].Paths, seenPaths, path)
+		}
+	}
+
+	return artifactNonEmptyGroups(groups)
+}
+
+func artifactRunLabels(current *taskdomain.TaskView) (map[string]string, map[string]int) {
+	labels := map[string]string{}
+	ordinals := map[string]int{}
+	if current == nil {
+		return labels, ordinals
+	}
+	for _, run := range current.NodeRuns {
+		ordinals[run.NodeName]++
+		labels[run.ID] = fmt.Sprintf("%s (#%d)", run.NodeName, ordinals[run.NodeName])
+	}
+	return labels, ordinals
+}
+
+func artifactInputGroupLabel(input *taskruntime.InputRequest, ordinals map[string]int) string {
+	if input == nil {
+		return "Current input"
+	}
+	nodeName := strings.TrimSpace(input.NodeName)
+	if nodeName == "" {
+		return "Current input"
+	}
+	return fmt.Sprintf("%s (#%d)", nodeName, ordinals[nodeName]+1)
+}
+
+func artifactAppendUniquePath(paths *[]string, seen map[string]struct{}, path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if _, ok := seen[path]; ok {
+		return
+	}
+	seen[path] = struct{}{}
+	*paths = append(*paths, path)
+}
+
+func artifactNonEmptyGroups(groups []artifactGroup) []artifactGroup {
+	nonEmpty := make([]artifactGroup, 0, len(groups))
+	for _, group := range groups {
+		if len(group.Paths) == 0 {
+			continue
+		}
+		nonEmpty = append(nonEmpty, group)
+	}
+	return nonEmpty
+}
+
+func artifactGroupPathCount(groups []artifactGroup) int {
+	total := 0
+	for _, group := range groups {
+		total += len(group.Paths)
+	}
+	return total
 }
 
 func loadArtifactItem(path, workDir string) artifactItem {
@@ -156,7 +244,7 @@ func isMarkdownPreview(path string) bool {
 	}
 }
 
-func defaultArtifactIndex(items []artifactItem, screen Screen, input *taskruntime.InputRequest) int {
+func defaultArtifactIndex(items []artifactItem, input *taskruntime.InputRequest) int {
 	if len(items) == 0 {
 		return 0
 	}
@@ -183,26 +271,4 @@ func selectedArtifactContents(items []artifactItem, index int) (string, error) {
 		return "", err
 	}
 	return string(data), nil
-}
-
-func artifactProvenance(current *taskdomain.TaskView) map[string]string {
-	if current == nil {
-		return nil
-	}
-	provenance := make(map[string]string, len(current.ArtifactPaths))
-	ordinals := map[string]int{}
-	for _, run := range current.NodeRuns {
-		ordinals[run.NodeName]++
-		label := fmt.Sprintf("%s (#%d)", run.NodeName, ordinals[run.NodeName])
-		for _, path := range run.ArtifactPaths {
-			if path == "" {
-				continue
-			}
-			if _, exists := provenance[path]; exists {
-				continue
-			}
-			provenance[path] = label
-		}
-	}
-	return provenance
 }

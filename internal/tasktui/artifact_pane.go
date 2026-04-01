@@ -8,6 +8,19 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+type artifactSidebarRowKind int
+
+const (
+	artifactSidebarRowHeader artifactSidebarRowKind = iota
+	artifactSidebarRowItem
+)
+
+type artifactSidebarRow struct {
+	kind      artifactSidebarRowKind
+	itemIndex int
+	text      string
+}
+
 func (m *Model) syncArtifactPreview(surface surfaceRect) {
 	contentWidth := max(12, surface.Width)
 	previewHeight := max(1, surface.Height)
@@ -78,7 +91,7 @@ func (m Model) renderArtifactsPane(surface artifactSurface) string {
 	previewWidth := max(12, width-sidebarWidth-1) // 1 for divider
 
 	// Render file sidebar
-	fileLines := m.renderArtifactFileLines(max(12, sidebarWidth-4), min(len(m.artifactItems), max(1, height-2)))
+	fileLines := m.renderArtifactFileLines(max(12, sidebarWidth-4), max(1, height-2))
 	filesContent := m.renderArtifactFilesColumn(sidebarWidth, height, fileLines)
 
 	// Render preview pane
@@ -142,29 +155,11 @@ func artifactVisibleCapacity(total int) int {
 
 func formatArtifactFileLabel(item artifactItem, width int) string {
 	width = max(1, width)
-	path := artifactRowPath(item)
-	if item.SourceLabel == "" || path == "" {
-		return truncateLeftToWidth(path, width)
-	}
+	return truncateLeftToWidth(artifactRowPath(item), width)
+}
 
-	const separator = " · "
-	separatorWidth := ansi.StringWidth(separator)
-	minPathWidth := artifactMinimumPathWidth(path, width)
-	if minPathWidth+separatorWidth >= width {
-		return truncateLeftToWidth(path, width)
-	}
-
-	maxSourceWidth := width - minPathWidth - separatorWidth
-	if maxSourceWidth < 8 {
-		return truncateLeftToWidth(path, width)
-	}
-
-	source := ansi.Truncate(item.SourceLabel, maxSourceWidth, "…")
-	pathWidth := width - ansi.StringWidth(source) - separatorWidth
-	if pathWidth <= 0 {
-		return ansi.Truncate(item.SourceLabel, width, "…")
-	}
-	return source + separator + truncateLeftToWidth(path, pathWidth)
+func formatArtifactGroupLabel(label string, width int) string {
+	return ansi.Truncate(strings.TrimSpace(label), max(1, width), "…")
 }
 
 func artifactRowPath(item artifactItem) string {
@@ -176,28 +171,6 @@ func artifactRowPath(item artifactItem) string {
 	default:
 		return item.Path
 	}
-}
-
-func artifactMinimumPathWidth(path string, width int) int {
-	essentialWidth := ansi.StringWidth(artifactEssentialPath(path))
-	fullWidth := ansi.StringWidth(path)
-	if essentialWidth < fullWidth {
-		essentialWidth++
-	}
-	return min(width, max(12, min(essentialWidth, fullWidth)))
-}
-
-func artifactEssentialPath(path string) string {
-	if idx := strings.Index(path, "/artifacts/"); idx >= 0 {
-		tail := path[idx+len("/artifacts/"):]
-		if tail != "" {
-			return tail
-		}
-	}
-	if base := path[strings.LastIndex(path, "/")+1:]; base != "" {
-		return base
-	}
-	return path
 }
 
 func truncateLeftToWidth(s string, width int) string {
@@ -212,25 +185,106 @@ func truncateLeftToWidth(s string, width int) string {
 	return ansi.TruncateLeft(s, trimWidth, prefix)
 }
 
+func buildArtifactSidebarRows(items []artifactItem, selectedIndex, width int) ([]artifactSidebarRow, int) {
+	if len(items) == 0 {
+		return nil, 0
+	}
+	selectedIndex = clamp(selectedIndex, 0, len(items)-1)
+	rows := make([]artifactSidebarRow, 0, len(items)*2)
+	selectedRow := 0
+	lastGroup := ""
+	for i, item := range items {
+		group := strings.TrimSpace(item.SourceLabel)
+		if group != "" && group != lastGroup {
+			rows = append(rows, artifactSidebarRow{
+				kind:      artifactSidebarRowHeader,
+				itemIndex: -1,
+				text:      formatArtifactGroupLabel(group, width),
+			})
+			lastGroup = group
+		}
+		rows = append(rows, artifactSidebarRow{
+			kind:      artifactSidebarRowItem,
+			itemIndex: i,
+			text:      formatArtifactFileLabel(item, max(1, width-2)),
+		})
+		if i == selectedIndex {
+			selectedRow = len(rows) - 1
+		}
+	}
+	return rows, selectedRow
+}
+
+func normalizeArtifactSidebarWindow(rows []artifactSidebarRow, start, end, maxRows int) (int, int) {
+	if len(rows) == 0 || maxRows < 2 {
+		return start, end
+	}
+	if start > 0 && rows[start].kind == artifactSidebarRowItem && rows[start-1].kind == artifactSidebarRowHeader {
+		start--
+	}
+	if end-start > maxRows {
+		if end < len(rows) {
+			end = start + maxRows
+		} else {
+			start = max(0, end-maxRows)
+		}
+	}
+	if end > start && rows[end-1].kind == artifactSidebarRowHeader {
+		if end < len(rows) {
+			end++
+		} else {
+			end--
+		}
+	}
+	if end-start > maxRows {
+		if start > 0 {
+			start++
+		} else if end < len(rows) {
+			end--
+		}
+	}
+	return start, min(len(rows), end)
+}
+
+func artifactSidebarHiddenFileCount(rows []artifactSidebarRow) int {
+	count := 0
+	for _, row := range rows {
+		if row.kind == artifactSidebarRowItem {
+			count++
+		}
+	}
+	return count
+}
+
 func (m Model) renderArtifactFileLines(width, rows int) []string {
 	if len(m.artifactItems) == 0 {
 		return []string{tuiTheme.Artifact.Empty.Render("No artifacts yet.")}
 	}
-	start, end := selectionWindow(len(m.artifactItems), m.artifactIndex, rows)
+	sidebarRows, selectedRow := buildArtifactSidebarRows(m.artifactItems, m.artifactIndex, width)
+	start, end := selectionWindow(len(sidebarRows), selectedRow, rows)
+	start, end = normalizeArtifactSidebarWindow(sidebarRows, start, end, rows)
 	lines := make([]string, 0, rows+2)
-	if start > 0 {
-		lines = append(lines, tuiTheme.Artifact.Hint.Render(fmt.Sprintf("… %d earlier file(s)", start)))
+	if hidden := artifactSidebarHiddenFileCount(sidebarRows[:start]); hidden > 0 {
+		lines = append(lines, tuiTheme.Artifact.Hint.Render(fmt.Sprintf("… %d earlier file(s)", hidden)))
 	}
 	for i := start; i < end; i++ {
-		label := formatArtifactFileLabel(m.artifactItems[i], max(1, width-2))
-		if i == m.artifactIndex {
-			lines = append(lines, tuiTheme.Artifact.FileActive.Render("> "+label))
-			continue
+		row := sidebarRows[i]
+		switch row.kind {
+		case artifactSidebarRowHeader:
+			lines = append(lines, tuiTheme.Artifact.GroupHeader.Render(row.text))
+		case artifactSidebarRowItem:
+			if row.itemIndex == m.artifactIndex {
+				lines = append(lines, tuiTheme.Artifact.FileActive.Render("> "+row.text))
+				continue
+			}
+			lines = append(lines, tuiTheme.Artifact.FileInactive.Render("  "+row.text))
 		}
-		lines = append(lines, tuiTheme.Artifact.FileInactive.Render("  "+label))
 	}
-	if end < len(m.artifactItems) {
-		lines = append(lines, tuiTheme.Artifact.Hint.Render(fmt.Sprintf("… %d more file(s)", len(m.artifactItems)-end)))
+	if hidden := artifactSidebarHiddenFileCount(sidebarRows[end:]); hidden > 0 {
+		lines = append(lines, tuiTheme.Artifact.Hint.Render(fmt.Sprintf("… %d more file(s)", hidden)))
+	}
+	if len(lines) == 0 {
+		return []string{tuiTheme.Artifact.Empty.Render("No artifacts yet.")}
 	}
 	return lines
 }

@@ -136,7 +136,7 @@ func (m *Model) syncArtifactPane() {
 			}
 		}
 	}
-	m.artifactIndex = defaultArtifactIndex(m.artifactItems, m.screen, m.currentInput)
+	m.artifactIndex = defaultArtifactIndex(m.artifactItems, m.currentInput)
 	if selectedArtifactPath(m.artifactItems, m.artifactIndex) != previousPreviewPath {
 		m.artifactErrorText = ""
 	}

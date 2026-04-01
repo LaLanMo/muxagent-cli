@@ -1,6 +1,12 @@
 package tasktui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
+)
+
+const approvalPlanNodeName = "approve_plan"
 
 func (m *Model) openNewTask() tea.Cmd {
 	if m.screen != ScreenNewTask {
@@ -40,8 +46,28 @@ func (m *Model) setScreen(screen Screen) {
 func (m *Model) setDetailScreen(screen Screen, resetArtifacts bool) {
 	m.setScreen(screen)
 	if resetArtifacts {
-		m.activeDetailTab = DetailTabTimeline
+		m.activeDetailTab = m.defaultDetailTab(screen)
 	}
+}
+
+func (m Model) defaultDetailTab(screen Screen) DetailTab {
+	if shouldDefaultApprovalToArtifacts(screen, m.currentInput) {
+		return DetailTabArtifacts
+	}
+	return DetailTabTimeline
+}
+
+func shouldDefaultApprovalToArtifacts(screen Screen, input *taskruntime.InputRequest) bool {
+	if screen != ScreenApproval || input == nil {
+		return false
+	}
+	if input.Kind != taskruntime.InputKindHumanNode {
+		return false
+	}
+	if input.NodeName != approvalPlanNodeName {
+		return false
+	}
+	return len(input.ArtifactPaths) > 0
 }
 
 func (m *Model) returnToTaskList() tea.Cmd {

@@ -71,6 +71,7 @@ type panelTheme struct {
 type artifactTheme struct {
 	Pane         lipgloss.Style
 	Header       lipgloss.Style
+	GroupHeader  lipgloss.Style
 	Hint         lipgloss.Style
 	Divider      lipgloss.Style
 	Block        lipgloss.Style
@@ -200,6 +201,9 @@ func newTheme() theme {
 		Background(artifactPaneBg).
 		Padding(0, 1)
 	artifactHeader := lipgloss.NewStyle().
+		Foreground(text).
+		Bold(true)
+	artifactGroupHeader := lipgloss.NewStyle().
 		Foreground(text).
 		Bold(true)
 	artifactHint := lipgloss.NewStyle().
@@ -348,6 +352,7 @@ func newTheme() theme {
 	artifactStyles := artifactTheme{
 		Pane:         artifactPane,
 		Header:       artifactHeader,
+		GroupHeader:  artifactGroupHeader,
 		Hint:         artifactHint,
 		Divider:      artifactDivider,
 		Block:        artifactBlockStyle,
