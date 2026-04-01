@@ -184,6 +184,8 @@ func (m Model) buildDetailPanelForSurface(surface panelSurface, editorSpec edito
 		return m.buildApprovalPanel(surface, editorSpec)
 	case ScreenClarification:
 		return m.buildClarificationPanel(surface, editorSpec)
+	case ScreenComplete:
+		return m.buildFollowUpPanel(surface, editorSpec)
 	case ScreenFailed:
 		return builtPanel{View: m.renderFailurePanel(surface)}
 	default:
@@ -230,6 +232,48 @@ func (m Model) buildApprovalPanel(surface panelSurface, editorSpec editorSurface
 
 func (m Model) renderClarificationPanel(surface panelSurface) string {
 	return m.buildClarificationPanel(surface, m.detailEditorSurfaceSpec(surface)).View
+}
+
+func (m Model) buildFollowUpPanel(surface panelSurface, editorSpec editorSurfaceSpec) builtPanel {
+	if !m.completeFollowUpVisible() {
+		return builtPanel{}
+	}
+	width := surface.Rect.Width
+	panelStyle := tuiTheme.Panel.Base.Width(width).MaxHeight(max(1, surface.MaxHeight))
+	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
+	content := []string{
+		renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render("Continue from this task")),
+		renderOpaqueMeasuredPanelText(innerWidth, tuiTheme.Panel.Body, "Creates a new linked task and carries over this task's context."),
+		"",
+	}
+	inputExpanded := (m.focusRegion == FocusRegionActionPanel && m.followUp.choice == followUpRowInput) || strings.TrimSpace(m.editor.Value()) != ""
+	rows := []builtInlineRow{
+		m.buildInlineEditorRow(innerWidth, editorSpec.FieldWidth, "Follow-up request", m.focusRegion == FocusRegionActionPanel && m.followUp.choice == followUpRowInput, inputExpanded),
+		{Lines: []string{renderOpaquePanelSurface(innerWidth, renderActionLine(m.focusRegion == FocusRegionActionPanel && m.followUp.choice == followUpRowSubmit, m.canSubmitFollowUp(), m.followUpSubmitLabel()))}},
+	}
+	build := builtPanel{}
+	prefixHeight := lipgloss.Height(strings.Join(content, "\n"))
+	for i, row := range rows {
+		if i > 0 {
+			content = append(content, "")
+			prefixHeight++
+		}
+		if row.HasEditor {
+			build.HasEditor = true
+			build.EditorOffsetX = panelFrameLeft(tuiTheme.Panel.Base) + row.EditorOffsetX
+			build.EditorOffsetY = panelFrameTop(tuiTheme.Panel.Base) + prefixHeight + row.EditorOffsetY
+		}
+		content = append(content, row.Lines...)
+		prefixHeight += lipgloss.Height(strings.Join(row.Lines, "\n"))
+	}
+	if m.errorText != "" {
+		candidate := append(append([]string{}, content...), "", renderOpaquePanelSurface(innerWidth, tuiTheme.Status.Failed.Render("× "+m.errorText)))
+		if lipgloss.Height(strings.Join(candidate, "\n")) <= surface.MaxHeight {
+			content = candidate
+		}
+	}
+	build.View = panelStyle.Render(strings.Join(content, "\n"))
+	return build
 }
 
 func (m Model) buildClarificationPanel(surface panelSurface, editorSpec editorSurfaceSpec) builtPanel {

@@ -29,7 +29,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleTabSwitchKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	if !m.isDetailScreen() || m.shouldFocusDetailComposer() {
+	if !m.isDetailScreen() {
 		return nil, false
 	}
 	if !keyMatches(msg, m.keys.toggleDetailTab) {
@@ -62,6 +62,8 @@ func (m Model) handleScreenKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleApprovalKey(msg)
 	case ScreenClarification:
 		return m.handleClarificationKey(msg)
+	case ScreenComplete:
+		return m.handleCompleteKey(msg)
 	default:
 		return m.handleDetailKey(msg)
 	}

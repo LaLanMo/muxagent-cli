@@ -115,7 +115,7 @@ func (m Model) renderDetailFooter(surface surfaceRect) string {
 	case ScreenClarification:
 		return m.renderClarificationFooter(surface)
 	case ScreenComplete:
-		return m.renderStatsFooter(surface, taskSummaryLeft(m.current, m.currentConfig), taskSummaryRight(m.current), m.detailHint("Esc back"))
+		return m.renderCompleteFooter(surface)
 	case ScreenFailed:
 		return m.renderFailureFooter(surface)
 	default:
@@ -212,12 +212,15 @@ func (m Model) nextFocusHint() string {
 		}
 		return "Tab type"
 	case FocusRegionActionPanel:
+		if m.screen == ScreenComplete {
+			return "Tab continue"
+		}
 		if m.screen == ScreenApproval {
 			return "Tab response"
 		}
 		return "Tab actions"
-	case FocusRegionComposer:
-		return "Tab composer"
+	case FocusRegionFormEditor:
+		return "Tab editor"
 	case FocusRegionDetail:
 		return "Tab detail"
 	case FocusRegionArtifactFiles:
@@ -304,11 +307,11 @@ func (m Model) detailHint(base string) string {
 			parts = append(parts, tab)
 		}
 		return joinHintParts(parts...)
-	case FocusRegionComposer:
+	case FocusRegionFormEditor:
 		if m.screen == ScreenNewTask {
 			return m.newTaskPrimaryHint()
 		}
-		parts := []string{"Enter newline", "Esc choices"}
+		parts := []string{"Enter newline", "Esc cancel"}
 		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
 		}

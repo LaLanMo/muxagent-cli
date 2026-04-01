@@ -254,6 +254,149 @@ func TestEnsureSchemaAddsExecutionDirColumnAndBackfillsOlderRows(t *testing.T) {
 	assert.Equal(t, "/tmp/project", task.ExecutionWorkDir())
 }
 
+func TestStoreFollowUpEdgesRoundTripAndAncestors(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenAtPath(filepath.Join(t.TempDir(), "tasks.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	now := time.Now().UTC().Round(time.Second)
+	tasks := []taskdomain.Task{
+		{ID: "parent", Description: "parent", WorkDir: "/tmp/project", CreatedAt: now, UpdatedAt: now},
+		{ID: "child-a", Description: "child-a", WorkDir: "/tmp/project", CreatedAt: now, UpdatedAt: now},
+		{ID: "child-b", Description: "child-b", WorkDir: "/tmp/project", CreatedAt: now, UpdatedAt: now},
+		{ID: "grandchild", Description: "grandchild", WorkDir: "/tmp/project", CreatedAt: now, UpdatedAt: now},
+	}
+	for _, task := range tasks {
+		require.NoError(t, store.CreateTask(ctx, task))
+	}
+
+	require.NoError(t, store.AttachFollowUpParent(ctx, "parent", "child-a", now))
+	require.NoError(t, store.AttachFollowUpParent(ctx, "parent", "child-b", now.Add(time.Second)))
+	require.NoError(t, store.AttachFollowUpParent(ctx, "child-a", "grandchild", now.Add(2*time.Second)))
+
+	parentID, err := store.GetFollowUpParentTaskID(ctx, "child-a")
+	require.NoError(t, err)
+	assert.Equal(t, "parent", parentID)
+
+	childIDs, err := store.ListChildTaskIDs(ctx, "parent")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"child-a", "child-b"}, childIDs)
+
+	ancestorIDs, err := store.ListAncestorTaskIDs(ctx, "grandchild")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"child-a", "parent"}, ancestorIDs)
+}
+
+func TestStoreFollowUpEdgesRejectDuplicateParentAndCycles(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenAtPath(filepath.Join(t.TempDir(), "tasks.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	now := time.Now().UTC().Round(time.Second)
+	for _, taskID := range []string{"a", "b", "c", "d"} {
+		require.NoError(t, store.CreateTask(ctx, taskdomain.Task{
+			ID:          taskID,
+			Description: taskID,
+			WorkDir:     "/tmp/project",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}))
+	}
+
+	require.NoError(t, store.AttachFollowUpParent(ctx, "a", "b", now))
+	require.NoError(t, store.AttachFollowUpParent(ctx, "b", "c", now.Add(time.Second)))
+	require.NoError(t, store.AttachFollowUpParent(ctx, "a", "d", now.Add(2*time.Second)))
+
+	err = store.AttachFollowUpParent(ctx, "b", "d", now.Add(3*time.Second))
+	require.ErrorIs(t, err, ErrFollowUpParentConflict)
+
+	err = store.AttachFollowUpParent(ctx, "c", "a", now.Add(4*time.Second))
+	require.ErrorIs(t, err, ErrFollowUpLineageCycle)
+}
+
+func TestStoreTaskEdgesRequireExistingTasksWithForeignKeysEnabled(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenAtPath(filepath.Join(t.TempDir(), "tasks.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	now := time.Now().UTC().Round(time.Second)
+	require.NoError(t, store.CreateTask(ctx, taskdomain.Task{
+		ID:          "child",
+		Description: "child",
+		WorkDir:     "/tmp/project",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+
+	err = store.AttachFollowUpParent(ctx, "missing-parent", "child", now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing task")
+}
+
+func TestStoreCreateFollowUpTaskAtomicRollsBackOnLineageError(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenAtPath(filepath.Join(t.TempDir(), "tasks.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	now := time.Now().UTC().Round(time.Second)
+	childTask := taskdomain.Task{
+		ID:          "child",
+		Description: "child",
+		ConfigAlias: "default",
+		ConfigPath:  "/tmp/config.yaml",
+		WorkDir:     "/tmp/project",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	entryRun := taskdomain.NodeRun{
+		ID:        "run-child",
+		TaskID:    childTask.ID,
+		NodeName:  "draft_plan",
+		Status:    taskdomain.NodeRunRunning,
+		StartedAt: now,
+	}
+
+	err = store.CreateFollowUpTaskAtomic(ctx, "missing-parent", childTask, entryRun)
+	require.Error(t, err)
+
+	_, err = store.GetTask(ctx, childTask.ID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+
+	_, err = store.GetNodeRun(ctx, entryRun.ID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestStoreGetFollowUpParentTaskIDRejectsCorruptMultipleParents(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tasks.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE task_edges (
+			parent_task_id TEXT NOT NULL,
+			child_task_id TEXT NOT NULL,
+			relation_kind TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO task_edges (parent_task_id, child_task_id, relation_kind, created_at)
+		VALUES
+			('parent-a', 'child', 'follow_up', '2026-03-31T10:00:00Z'),
+			('parent-b', 'child', 'follow_up', '2026-03-31T10:01:00Z');`)
+	require.NoError(t, err)
+
+	store := &Store{db: db}
+	parentTaskID, err := store.GetFollowUpParentTaskID(context.Background(), "child")
+	require.ErrorIs(t, err, ErrTaskLineageCorrupt)
+	assert.Empty(t, parentTaskID)
+}
+
 func TestNormalizeWorkDirResolvesSymlinks(t *testing.T) {
 	realDir := t.TempDir()
 	linkParent := t.TempDir()

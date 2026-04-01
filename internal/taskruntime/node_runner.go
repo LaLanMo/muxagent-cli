@@ -51,13 +51,17 @@ func (s *Service) startNode(ctx context.Context, task taskdomain.Task, cfg *task
 		}
 		return s.afterNodeCompleted(context.Background(), task, cfg, run)
 	case taskconfig.NodeTypeHuman:
+		inputRequest, err := s.buildInputRequest(context.Background(), task, cfg, viewNodeRuns(view), run)
+		if err != nil {
+			return err
+		}
 		s.publish(RunEvent{
 			Type:         EventInputRequested,
 			TaskID:       task.ID,
 			NodeRunID:    run.ID,
 			NodeName:     run.NodeName,
 			TaskView:     &view,
-			InputRequest: s.buildInputRequest(task, cfg, viewNodeRuns(view), run),
+			InputRequest: inputRequest,
 		})
 		return nil
 	default:
@@ -82,7 +86,11 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 	if err != nil {
 		return err
 	}
-	prompt, err := buildPrompt(task, cfg, taskstore.ConfigPath(task.WorkDir, task.ID), runs, run, artifactDir)
+	inherited, err := s.loadInheritedContext(context.Background(), task)
+	if err != nil {
+		return err
+	}
+	prompt, err := buildPromptWithInheritedContext(task, cfg, taskstore.ConfigPath(task.WorkDir, task.ID), runs, run, artifactDir, inherited)
 	if err != nil {
 		return err
 	}
@@ -148,13 +156,17 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		if err != nil {
 			return err
 		}
+		inputRequest, err := s.buildInputRequest(context.Background(), task, cfg, viewNodeRuns(view), run)
+		if err != nil {
+			return err
+		}
 		s.publish(RunEvent{
 			Type:         EventInputRequested,
 			TaskID:       task.ID,
 			NodeRunID:    run.ID,
 			NodeName:     run.NodeName,
 			TaskView:     &view,
-			InputRequest: s.buildInputRequest(task, cfg, viewNodeRuns(view), run),
+			InputRequest: inputRequest,
 		})
 		return nil
 	case taskexecutor.ResultKindResult:

@@ -111,9 +111,6 @@ func taskSummaryRight(view *taskdomain.TaskView) string {
 	if view == nil {
 		return ""
 	}
-	if strings.TrimSpace(view.Task.ConfigAlias) != "" {
-		return fmt.Sprintf("config %s · %s · %d artifacts", view.Task.ConfigAlias, taskElapsed(view), len(view.ArtifactPaths))
-	}
 	return fmt.Sprintf("%s · %d artifacts", taskElapsed(view), len(view.ArtifactPaths))
 }
 

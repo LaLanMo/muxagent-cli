@@ -343,12 +343,14 @@ func TestArtifactsTabFocusCycleAcrossDetailScreens(t *testing.T) {
 			wantPreviewFooter: "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
 		},
 		{
-			name:              "complete",
-			screen:            ScreenComplete,
-			status:            taskdomain.TaskStatusDone,
-			wantRegions:       []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview},
-			wantFilesFooter:   "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
-			wantPreviewFooter: "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline",
+			name:               "complete",
+			screen:             ScreenComplete,
+			status:             taskdomain.TaskStatusDone,
+			wantRegions:        []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionActionPanel},
+			wantFilesFooter:    "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantPreviewFooter:  "↑↓ scroll  c copy  Esc back  Tab continue  Shift+Tab timeline",
+			wantResponseRegion: FocusRegionActionPanel,
+			wantResponseFooter: "↑↓ select  Enter newline  Esc back  Tab artifacts  Shift+Tab timeline",
 		},
 		{
 			name:               "approval",
@@ -496,7 +498,7 @@ func TestArtifactPreviewCopyShowsTransientFooterFeedback(t *testing.T) {
 	assert.Equal(t, "copied", model.artifactCopyStatus)
 
 	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-	assert.Contains(t, footer, "↑↓ scroll  copied  Esc back  Tab files  Shift+Tab timeline")
+	assert.Contains(t, footer, "↑↓ scroll  copied  Esc back  Tab continue  Shift+Tab timeline")
 	assert.NotContains(t, footer, "c copy")
 
 	next, _ = model.Update(artifactCopyFeedbackExpiredMsg{token: model.artifactCopyToken})
@@ -504,7 +506,7 @@ func TestArtifactPreviewCopyShowsTransientFooterFeedback(t *testing.T) {
 	assert.Empty(t, model.artifactCopyStatus)
 
 	footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-	assert.Contains(t, footer, "↑↓ scroll  c copy  Esc back  Tab files  Shift+Tab timeline")
+	assert.Contains(t, footer, "↑↓ scroll  c copy  Esc back  Tab continue  Shift+Tab timeline")
 }
 
 func TestArtifactCopyFailureBannerClearsOnSelectionChange(t *testing.T) {

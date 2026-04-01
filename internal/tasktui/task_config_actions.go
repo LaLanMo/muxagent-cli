@@ -157,7 +157,7 @@ func (m *Model) openRenameTaskConfigForm() tea.Cmd {
 	m.taskConfigs.errorText = ""
 	m.taskConfigs.statusText = ""
 	m.editor.ClearSlot(slot)
-	m.focusRegion = FocusRegionComposer
+	m.focusRegion = FocusRegionFormEditor
 	m.syncComponents()
 	return m.syncInputFocus()
 }

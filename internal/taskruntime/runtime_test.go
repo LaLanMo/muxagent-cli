@@ -27,7 +27,7 @@ import (
 func TestServiceHappyPathCompletesDefaultFlow(t *testing.T) {
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"draft_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"draft_plan":  {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
 			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
 			"implement":   {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
 			"verify":      {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/verify.md"}}}},
@@ -113,7 +113,7 @@ func TestServiceAgentRunPersistsPromptInputArtifact(t *testing.T) {
 func TestServiceVerifyRunUsesFormattedTaskBlockAndDedupedWorkflowHistory(t *testing.T) {
 	executor := &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"draft_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"draft_plan":  {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
 			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
 			"implement":   {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
 			"verify":      {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/verify.md"}}}},
@@ -292,7 +292,7 @@ func TestServicePersistsTaskConfigAlias(t *testing.T) {
 	configPath := writeOverrideConfig(t, cfg)
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
-			"draft_plan": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"draft_plan":  {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
 			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
 		},
 	})
@@ -412,6 +412,491 @@ func TestServiceWorktreeStartupRollsBackWhenRepoSubdirIsMissingInNewWorktree(t *
 	assert.Empty(t, strings.TrimSpace(string(branchOut)))
 }
 
+func TestServiceStartFollowUpCreatesChildTaskAndPersistsLineage(t *testing.T) {
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-impl.md")},
+			},
+		},
+	}
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), executor)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "parent task"))
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	service.Dispatch(startFollowUpCommand(parentCompleted.TaskID, "child task"))
+	childCreated := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCreated && event.TaskID != parentCompleted.TaskID
+	})
+	childCompleted := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID == childCreated.TaskID
+	})
+
+	parentTaskID, err := service.store.GetFollowUpParentTaskID(context.Background(), childCreated.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, parentCompleted.TaskID, parentTaskID)
+
+	childTask, err := service.store.GetTask(context.Background(), childCreated.TaskID)
+	require.NoError(t, err)
+	parentTask, err := service.store.GetTask(context.Background(), parentCompleted.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, parentTask.ConfigAlias, childTask.ConfigAlias)
+	assert.Equal(t, parentTask.ConfigPath, childTask.ConfigPath)
+	assert.Equal(t, parentTask.WorkDir, childTask.WorkDir)
+	assert.Equal(t, parentTask.ExecutionDir, childTask.ExecutionDir)
+	require.NotNil(t, childCompleted.TaskView)
+	assert.Equal(t, taskdomain.TaskStatusDone, childCompleted.TaskView.Status)
+
+	childRuns, err := service.store.ListNodeRunsByTask(context.Background(), childCreated.TaskID)
+	require.NoError(t, err)
+	require.Len(t, childRuns, 2)
+	assert.Equal(t, "implement", childRuns[0].NodeName)
+}
+
+func TestServiceStartFollowUpInheritsWorktreeMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, err := taskconfig.EnsureManagedDefaultAssets()
+	require.NoError(t, err)
+
+	cfg := singleAgentTerminalFixture()
+	writeConfigAtPath(t, cfg, managedDefaultTestConfigPath(t))
+
+	repo := initRuntimeGitRepoWithCommit(t, true)
+	workDir := filepath.Join(repo, "packages", "app")
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-impl.md")},
+			},
+		},
+	}
+	service, err := NewService(workDir, executor)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	cmd := startTaskCommand(t, service, "parent worktree task")
+	cmd.UseWorktree = true
+	service.Dispatch(cmd)
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	service.Dispatch(startFollowUpCommand(parentCompleted.TaskID, "child worktree task"))
+	childCompleted := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID != parentCompleted.TaskID
+	})
+
+	parentTask, err := service.store.GetTask(context.Background(), parentCompleted.TaskID)
+	require.NoError(t, err)
+	childTask, err := service.store.GetTask(context.Background(), childCompleted.TaskID)
+	require.NoError(t, err)
+	assert.NotEqual(t, parentTask.WorkDir, parentTask.ExecutionDir)
+	assert.NotEqual(t, childTask.WorkDir, childTask.ExecutionDir)
+	assert.NotEqual(t, parentTask.ExecutionDir, childTask.ExecutionDir)
+	assert.Equal(t, parentTask.WorkDir, childTask.WorkDir)
+}
+
+func TestServiceStartFollowUpRejectsIncompleteParent(t *testing.T) {
+	service := newTestService(t, &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"draft_plan":  {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("plan.md")}},
+			"review_plan": {{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/review.md"}}}},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "parent not done"))
+	inputRequested := waitForEvent(t, service.Events(), EventInputRequested)
+
+	service.Dispatch(startFollowUpCommand(inputRequested.TaskID, "child should fail"))
+	commandErr := waitForEvent(t, service.Events(), EventCommandError)
+	require.NotNil(t, commandErr.Error)
+	assert.Contains(t, commandErr.Error.Message, "not completed")
+}
+
+func TestServiceFollowUpPromptAndInputRequestIncludeParentContext(t *testing.T) {
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"draft_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-plan.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-plan.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/parent-review.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/child-review.md"}}},
+			},
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")},
+			},
+			"verify": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/parent-verify.md"}}},
+			},
+		},
+	}
+	service := newTestService(t, executor)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "parent task"))
+	parentApproval := waitForEvent(t, service.Events(), EventInputRequested)
+	service.Dispatch(RunCommand{
+		Type:      CommandSubmitInput,
+		TaskID:    parentApproval.TaskID,
+		NodeRunID: parentApproval.NodeRunID,
+		Payload:   map[string]interface{}{"approved": true},
+	})
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	service.Dispatch(startFollowUpCommand(parentCompleted.TaskID, "child task"))
+	childApproval := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventInputRequested && event.TaskID != parentCompleted.TaskID
+	})
+	require.NotNil(t, childApproval.InputRequest)
+	inputArtifacts := strings.Join(childApproval.InputRequest.ArtifactPaths, "\n")
+	assert.Contains(t, inputArtifacts, "parent-review.md")
+	assert.Contains(t, inputArtifacts, "parent-verify.md")
+
+	draftRequests := executor.requestsForNode("draft_plan")
+	require.Len(t, draftRequests, 2)
+	childPrompt := draftRequests[1].Prompt
+	assert.Contains(t, childPrompt, "## Direct Parent Task")
+	assert.Contains(t, childPrompt, "Description: parent task")
+	assert.Contains(t, childPrompt, taskstore.TaskDir(service.workDir, parentCompleted.TaskID))
+	assert.Contains(t, childPrompt, "parent-plan.md")
+
+	reloadedInput, err := service.BuildInputRequest(context.Background(), childApproval.TaskID, childApproval.NodeRunID)
+	require.NoError(t, err)
+	reloadedArtifacts := strings.Join(reloadedInput.ArtifactPaths, "\n")
+	assert.Contains(t, reloadedArtifacts, "parent-review.md")
+	assert.Contains(t, reloadedArtifacts, "parent-verify.md")
+}
+
+func TestLoadInheritedContextIncludesAllParentRunsAndAncestors(t *testing.T) {
+	service := newTestService(t, &fakeExecutor{})
+	defer service.Close()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	tasks := []taskdomain.Task{
+		{ID: "ancestor-1", Description: "ancestor task 1", WorkDir: service.workDir, CreatedAt: now, UpdatedAt: now},
+		{ID: "ancestor-2", Description: "ancestor task 2", WorkDir: service.workDir, CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second)},
+		{ID: "ancestor-3", Description: "ancestor task 3", WorkDir: service.workDir, CreatedAt: now.Add(2 * time.Second), UpdatedAt: now.Add(2 * time.Second)},
+		{ID: "ancestor-4", Description: "ancestor task 4", WorkDir: service.workDir, CreatedAt: now.Add(3 * time.Second), UpdatedAt: now.Add(3 * time.Second)},
+		{ID: "ancestor-5", Description: "ancestor task 5", WorkDir: service.workDir, CreatedAt: now.Add(4 * time.Second), UpdatedAt: now.Add(4 * time.Second)},
+		{ID: "ancestor-6", Description: "ancestor task 6", WorkDir: service.workDir, CreatedAt: now.Add(5 * time.Second), UpdatedAt: now.Add(5 * time.Second)},
+		{ID: "parent", Description: "parent task", WorkDir: service.workDir, CreatedAt: now.Add(6 * time.Second), UpdatedAt: now.Add(6 * time.Second)},
+		{ID: "child", Description: "child task", WorkDir: service.workDir, CreatedAt: now.Add(7 * time.Second), UpdatedAt: now.Add(7 * time.Second)},
+	}
+	for _, task := range tasks {
+		require.NoError(t, service.store.CreateTask(ctx, task))
+	}
+	for i := 0; i < len(tasks)-1; i++ {
+		require.NoError(t, service.store.AttachFollowUpParent(ctx, tasks[i].ID, tasks[i+1].ID, now.Add(time.Duration(i)*time.Minute)))
+	}
+
+	parentTask := tasks[len(tasks)-2]
+	childTask := tasks[len(tasks)-1]
+	for i := 1; i <= 10; i++ {
+		startedAt := now.Add(time.Duration(i) * time.Hour)
+		completedAt := startedAt.Add(time.Minute)
+		require.NoError(t, service.store.SaveNodeRun(ctx, taskdomain.NodeRun{
+			ID:          fmt.Sprintf("parent-run-%02d", i),
+			TaskID:      parentTask.ID,
+			NodeName:    fmt.Sprintf("step_%02d", i),
+			Status:      taskdomain.NodeRunDone,
+			Result:      map[string]interface{}{"file_paths": []interface{}{fmt.Sprintf("/tmp/parent-run-%02d.md", i)}},
+			StartedAt:   startedAt,
+			CompletedAt: &completedAt,
+		}))
+	}
+
+	inherited, err := service.loadInheritedContext(ctx, childTask)
+	require.NoError(t, err)
+	require.NotNil(t, inherited)
+
+	assert.Contains(t, inherited.WorkflowHistory, "## Direct Parent Task")
+	assert.Contains(t, inherited.WorkflowHistory, "Description: parent task")
+	assert.Contains(t, inherited.WorkflowHistory, taskstore.TaskDir(service.workDir, parentTask.ID))
+	for i := 1; i <= 10; i++ {
+		assert.Contains(t, inherited.WorkflowHistory, fmt.Sprintf("/tmp/parent-run-%02d.md", i))
+	}
+	for i := 1; i <= 6; i++ {
+		assert.Contains(t, inherited.WorkflowHistory, fmt.Sprintf("- ancestor task %d", i))
+		assert.Contains(t, inherited.WorkflowHistory, taskstore.TaskDir(service.workDir, fmt.Sprintf("ancestor-%d", i)))
+	}
+}
+
+func TestLoadInheritedInputArtifactsIncludesAllExistingParentArtifacts(t *testing.T) {
+	service := newTestService(t, &fakeExecutor{})
+	defer service.Close()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	parentTask := taskdomain.Task{
+		ID:          "parent-artifacts",
+		Description: "parent task",
+		WorkDir:     service.workDir,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	childTask := taskdomain.Task{
+		ID:          "child-artifacts",
+		Description: "child task",
+		WorkDir:     service.workDir,
+		CreatedAt:   now.Add(time.Second),
+		UpdatedAt:   now.Add(time.Second),
+	}
+	require.NoError(t, service.store.CreateTask(ctx, parentTask))
+	require.NoError(t, service.store.CreateTask(ctx, childTask))
+	require.NoError(t, service.store.AttachFollowUpParent(ctx, parentTask.ID, childTask.ID, now.Add(2*time.Second)))
+
+	artifactDir := t.TempDir()
+	for i := 1; i <= 14; i++ {
+		startedAt := now.Add(time.Duration(i) * time.Minute)
+		completedAt := startedAt.Add(time.Second)
+		artifactPath := filepath.Join(artifactDir, fmt.Sprintf("artifact-%02d.md", i))
+		require.NoError(t, os.WriteFile(artifactPath, []byte(fmt.Sprintf("artifact %02d", i)), 0o644))
+		require.NoError(t, service.store.SaveNodeRun(ctx, taskdomain.NodeRun{
+			ID:          fmt.Sprintf("artifact-run-%02d", i),
+			TaskID:      parentTask.ID,
+			NodeName:    fmt.Sprintf("step_%02d", i),
+			Status:      taskdomain.NodeRunDone,
+			Result:      map[string]interface{}{"file_paths": []interface{}{artifactPath}},
+			StartedAt:   startedAt,
+			CompletedAt: &completedAt,
+		}))
+	}
+
+	artifacts, err := service.loadInheritedInputArtifacts(ctx, childTask)
+	require.NoError(t, err)
+	require.Len(t, artifacts, 14)
+	for i := 1; i <= 14; i++ {
+		assert.Contains(t, strings.Join(artifacts, "\n"), fmt.Sprintf("artifact-%02d.md", i))
+	}
+}
+
+func TestServiceRetryAfterRestartForFollowUpPreservesParentContext(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, err := taskconfig.EnsureManagedDefaultAssets()
+	require.NoError(t, err)
+
+	workDir := t.TempDir()
+	firstExecutor := &queuedExecutor{
+		outcomes: map[string][]executorOutcome{
+			"draft_plan": {
+				{result: taskexecutor.Result{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-plan.md")}},
+				{err: fmt.Errorf("child draft failed")},
+			},
+			"review_plan": {
+				{result: taskexecutor.Result{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/parent-review.md"}}}},
+				{result: taskexecutor.Result{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/child-review.md"}}}},
+			},
+			"implement": {
+				{result: taskexecutor.Result{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")}},
+			},
+			"verify": {
+				{result: taskexecutor.Result{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/parent-verify.md"}}}},
+			},
+		},
+	}
+	firstService, err := NewService(workDir, firstExecutor)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = firstService.Run(ctx) }()
+
+	firstService.Dispatch(startTaskCommand(t, firstService, "parent task"))
+	parentApproval := waitForEvent(t, firstService.Events(), EventInputRequested)
+	firstService.Dispatch(RunCommand{
+		Type:      CommandSubmitInput,
+		TaskID:    parentApproval.TaskID,
+		NodeRunID: parentApproval.NodeRunID,
+		Payload:   map[string]interface{}{"approved": true},
+	})
+	parentCompleted := waitForEvent(t, firstService.Events(), EventTaskCompleted)
+
+	firstService.Dispatch(startFollowUpCommand(parentCompleted.TaskID, "child task"))
+	childFailed := waitForEventWhere(t, firstService.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskFailed && event.TaskID != parentCompleted.TaskID
+	})
+	childTaskID := childFailed.TaskID
+	failedRunID := childFailed.NodeRunID
+	cancel()
+	require.NoError(t, firstService.Close())
+
+	secondService, err := NewService(workDir, &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"draft_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-plan.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/child-review.md"}}},
+			},
+		},
+	})
+	require.NoError(t, err)
+	defer secondService.Close()
+
+	require.NoError(t, secondService.retryNode(context.Background(), childTaskID, failedRunID, false))
+	waitForEventWhere(t, secondService.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventInputRequested && event.TaskID == childTaskID
+	})
+
+	retryRequests := secondService.executor.(*fakeExecutor).requestsForNode("draft_plan")
+	require.Len(t, retryRequests, 1)
+	assert.Contains(t, retryRequests[0].Prompt, "## Direct Parent Task")
+	assert.Contains(t, retryRequests[0].Prompt, "Description: parent task")
+	assert.Contains(t, retryRequests[0].Prompt, taskstore.TaskDir(workDir, parentCompleted.TaskID))
+	assert.Contains(t, retryRequests[0].Prompt, "parent-plan.md")
+}
+
+func TestServiceFollowUpPromptUsesOlderAncestorsAsTaskDirectoryReferences(t *testing.T) {
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"draft_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("grand-plan.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-plan.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-plan.md")},
+			},
+			"review_plan": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/grand-review.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/parent-review.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/child-review.md"}}},
+			},
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("grand-impl.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")},
+			},
+			"verify": {
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/grand-verify.md"}}},
+				{Kind: taskexecutor.ResultKindResult, Result: map[string]interface{}{"passed": true, "file_paths": []interface{}{"/tmp/parent-verify.md"}}},
+			},
+		},
+	}
+	service := newTestService(t, executor)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "grandparent task"))
+	grandApproval := waitForEvent(t, service.Events(), EventInputRequested)
+	service.Dispatch(RunCommand{
+		Type:      CommandSubmitInput,
+		TaskID:    grandApproval.TaskID,
+		NodeRunID: grandApproval.NodeRunID,
+		Payload:   map[string]interface{}{"approved": true},
+	})
+	grandCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	service.Dispatch(startFollowUpCommand(grandCompleted.TaskID, "parent task"))
+	parentApproval := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventInputRequested && event.TaskID != grandCompleted.TaskID
+	})
+	service.Dispatch(RunCommand{
+		Type:      CommandSubmitInput,
+		TaskID:    parentApproval.TaskID,
+		NodeRunID: parentApproval.NodeRunID,
+		Payload:   map[string]interface{}{"approved": true},
+	})
+	parentCompleted := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID == parentApproval.TaskID
+	})
+
+	service.Dispatch(startFollowUpCommand(parentCompleted.TaskID, "child task"))
+	waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventInputRequested && event.TaskID != grandCompleted.TaskID && event.TaskID != parentCompleted.TaskID
+	})
+
+	draftRequests := executor.requestsForNode("draft_plan")
+	require.Len(t, draftRequests, 3)
+	childPrompt := draftRequests[2].Prompt
+	assert.Contains(t, childPrompt, "## Direct Parent Task")
+	assert.Contains(t, childPrompt, "Description: parent task")
+	assert.Contains(t, childPrompt, taskstore.TaskDir(service.workDir, parentCompleted.TaskID))
+	assert.Contains(t, childPrompt, "## Earlier Ancestors (inspect only if needed)")
+	assert.Contains(t, childPrompt, "- grandparent task")
+	assert.Contains(t, childPrompt, taskstore.TaskDir(service.workDir, grandCompleted.TaskID))
+	assert.NotContains(t, childPrompt, "grand-review.md")
+	assert.NotContains(t, childPrompt, "grand-verify.md")
+}
+
+func TestServiceFollowUpPostCommitStartupFailureMarksEntryRunFailed(t *testing.T) {
+	workDir := t.TempDir()
+	configPath := writeOverrideConfig(t, singleAgentTerminalFixture())
+
+	service, err := NewService(workDir, &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")},
+			},
+		},
+	})
+	require.NoError(t, err)
+	defer service.Close()
+	service.beforeStartNode = func(task taskdomain.Task, run taskdomain.NodeRun) error {
+		if task.Description == "broken child" {
+			return fmt.Errorf("forced startup failure")
+		}
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{
+		Type:        CommandStartTask,
+		Description: "parent task",
+		ConfigAlias: taskconfig.DefaultAlias,
+		ConfigPath:  configPath,
+		WorkDir:     workDir,
+	})
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	err = service.startFollowUpTask(context.Background(), parentCompleted.TaskID, "broken child")
+	require.Error(t, err)
+	views, err := service.ListTaskViews(context.Background(), workDir)
+	require.NoError(t, err)
+	require.Len(t, views, 2)
+	var childTaskID string
+	for _, view := range views {
+		if view.Task.ID != parentCompleted.TaskID {
+			childTaskID = view.Task.ID
+			break
+		}
+	}
+	require.NotEmpty(t, childTaskID)
+	childFailed := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskFailed && event.TaskID == childTaskID
+	})
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), childTaskID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, taskdomain.NodeRunFailed, runs[0].Status)
+	assert.Equal(t, childFailed.NodeRunID, runs[0].ID)
+}
+
 func TestServiceStartTaskRequiresExplicitConfigIdentity(t *testing.T) {
 	service := newTestService(t, &fakeExecutor{})
 	defer service.Close()
@@ -527,7 +1012,7 @@ func TestServiceYoloVerifyFailureLoopsBackToImplement(t *testing.T) {
 	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"draft_plan":       1,
+		"draft_plan":        1,
 		"review_plan":       1,
 		"implement":         2,
 		"verify":            2,
@@ -585,7 +1070,7 @@ func TestServiceYoloEvaluateProgressStartsNextPlanningWave(t *testing.T) {
 	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"draft_plan":       2,
+		"draft_plan":        2,
 		"review_plan":       2,
 		"implement":         2,
 		"verify":            2,
@@ -1149,7 +1634,7 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	cfg, err := taskconfig.Load(taskstore.ConfigPath(service.workDir, failed.TaskID))
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"draft_plan": 1,
+		"draft_plan":  1,
 		"review_plan": 1,
 	})
 	blockedSteps, err := taskengine.DeriveBlockedSteps(cfg, runs)
@@ -1185,7 +1670,7 @@ func TestServiceForceRetryTargetsBlockedNodeAfterIterationLimitLoopback(t *testi
 	runs, err = service.store.ListNodeRunsByTask(context.Background(), failed.TaskID)
 	require.NoError(t, err)
 	assertNodeRunCounts(t, runs, map[string]int{
-		"draft_plan": 2,
+		"draft_plan":  2,
 		"review_plan": 2,
 		"done":        1,
 	})
@@ -1388,6 +1873,34 @@ func (f *fakeExecutor) requestsForNode(nodeName string) []taskexecutor.Request {
 	return requests
 }
 
+type executorOutcome struct {
+	result taskexecutor.Result
+	err    error
+}
+
+type queuedExecutor struct {
+	mu       sync.Mutex
+	outcomes map[string][]executorOutcome
+	requests []taskexecutor.Request
+}
+
+func (q *queuedExecutor) Execute(ctx context.Context, req taskexecutor.Request, progress func(taskexecutor.Progress)) (taskexecutor.Result, error) {
+	q.mu.Lock()
+	q.requests = append(q.requests, req)
+	sequence := q.outcomes[req.NodeRun.NodeName]
+	if len(sequence) == 0 {
+		q.mu.Unlock()
+		return taskexecutor.Result{}, fmt.Errorf("unexpected node %s", req.NodeRun.NodeName)
+	}
+	outcome := sequence[0]
+	q.outcomes[req.NodeRun.NodeName] = sequence[1:]
+	q.mu.Unlock()
+	if outcome.err != nil {
+		return taskexecutor.Result{}, outcome.err
+	}
+	return materializeExecutorArtifacts(req, outcome.result)
+}
+
 func newTestService(t *testing.T, executor taskexecutor.Executor) *Service {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -1425,6 +1938,14 @@ func startTaskCommand(t *testing.T, service *Service, description string) RunCom
 		ConfigAlias: taskconfig.DefaultAlias,
 		ConfigPath:  managedDefaultTestConfigPath(t),
 		WorkDir:     service.workDir,
+	}
+}
+
+func startFollowUpCommand(parentTaskID, description string) RunCommand {
+	return RunCommand{
+		Type:         CommandStartFollowUp,
+		ParentTaskID: parentTaskID,
+		Description:  description,
 	}
 }
 

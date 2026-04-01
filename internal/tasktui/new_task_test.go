@@ -317,14 +317,14 @@ func TestModelSubmitsSelectedTaskConfigAlias(t *testing.T) {
 	assert.Equal(t, "/tmp/reviewer.yaml", service.dispatched[0].ConfigPath)
 }
 
-func TestStartTaskCommandErrorReturnsToComposerAndPreservesInput(t *testing.T) {
+func TestStartTaskCommandErrorReturnsToFormEditorAndPreservesInput(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "./taskflow.yaml", &taskconfig.Config{Runtime: appconfig.RuntimeClaudeCode}, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model = next.(Model)
 	model = openNewTaskModal(t, model)
 	longDescription := strings.TrimSpace(strings.Repeat(
-		"Broken config command-error regression coverage should preserve every character across the running-to-composer bounce. ",
+		"Broken config command-error regression coverage should preserve every character across the running-to-form-editor bounce. ",
 		6,
 	))
 	require.Greater(t, len(longDescription), 512)
@@ -382,7 +382,7 @@ func TestNewTaskTextAreaGrowsOnEnterAndPreservesFirstLine(t *testing.T) {
 	assert.Contains(t, service.dispatched[0].Description, "second line")
 }
 
-func TestNewTaskEscFromComposerCancelsAndResetsInput(t *testing.T) {
+func TestNewTaskEscFromFormEditorCancelsAndResetsInput(t *testing.T) {
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -432,7 +432,7 @@ func TestNewTaskTabDoesNothingWhenDescriptionEmpty(t *testing.T) {
 		_ = cmd()
 	}
 	assert.Equal(t, ScreenNewTask, model.screen)
-	assert.Equal(t, FocusRegionComposer, model.focusRegion)
+	assert.Equal(t, FocusRegionFormEditor, model.focusRegion)
 	assert.Empty(t, service.dispatched)
 }
 

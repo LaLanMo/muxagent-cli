@@ -18,6 +18,15 @@ type Task struct {
 	UpdatedAt    time.Time
 }
 
+const TaskRelationFollowUp = "follow_up"
+
+type TaskEdge struct {
+	ParentTaskID string
+	ChildTaskID  string
+	RelationKind string
+	CreatedAt    time.Time
+}
+
 func (t Task) ExecutionWorkDir() string {
 	if t.ExecutionDir != "" {
 		return t.ExecutionDir

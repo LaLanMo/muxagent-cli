@@ -67,7 +67,7 @@ func (s *Service) BuildInputRequest(ctx context.Context, taskID, nodeRunID strin
 	if err != nil {
 		return nil, err
 	}
-	return s.buildInputRequest(task, cfg, runs, run), nil
+	return s.buildInputRequest(ctx, task, cfg, runs, run)
 }
 
 func (s *Service) refreshTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, error) {
@@ -75,8 +75,15 @@ func (s *Service) refreshTaskView(ctx context.Context, taskID string) (taskdomai
 	return view, err
 }
 
-func (s *Service) buildInputRequest(task taskdomain.Task, cfg *taskconfig.Config, runs []taskdomain.NodeRun, run taskdomain.NodeRun) *InputRequest {
+func (s *Service) buildInputRequest(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, runs []taskdomain.NodeRun, run taskdomain.NodeRun) (*InputRequest, error) {
 	artifacts := completedArtifactPaths(runs)
+	inheritedArtifacts, err := s.loadInheritedInputArtifacts(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	if len(inheritedArtifacts) > 0 {
+		artifacts = mergeArtifactPaths(artifacts, inheritedArtifacts)
+	}
 	def := cfg.NodeDefinitions[run.NodeName]
 	if def.Type == taskconfig.NodeTypeHuman {
 		schema := def.ResultSchema
@@ -87,10 +94,10 @@ func (s *Service) buildInputRequest(task taskdomain.Task, cfg *taskconfig.Config
 			NodeName:      run.NodeName,
 			Schema:        &schema,
 			ArtifactPaths: artifacts,
-		}
+		}, nil
 	}
 	if len(run.Clarifications) == 0 {
-		return nil
+		return nil, nil
 	}
 	return &InputRequest{
 		Kind:          InputKindClarification,
@@ -99,7 +106,7 @@ func (s *Service) buildInputRequest(task taskdomain.Task, cfg *taskconfig.Config
 		NodeName:      run.NodeName,
 		Questions:     run.Clarifications[len(run.Clarifications)-1].Request.Questions,
 		ArtifactPaths: artifacts,
-	}
+	}, nil
 }
 
 func viewNodeRuns(view taskdomain.TaskView) []taskdomain.NodeRun {

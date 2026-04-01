@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ type Service struct {
 	executor taskexecutor.Executor
 	bus      *LocalBus
 	nodeWG   sync.WaitGroup
+	// beforeStartNode is a narrow test seam for forcing deterministic
+	// post-commit entry-run launch failures.
+	beforeStartNode func(task taskdomain.Task, run taskdomain.NodeRun) error
 
 	mu             sync.Mutex
 	rootCtx        context.Context
@@ -124,6 +128,8 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	switch cmd.Type {
 	case CommandStartTask:
 		return s.startTask(ctx, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath, firstNonEmpty(cmd.WorkDir, s.workDir), cmd.UseWorktree)
+	case CommandStartFollowUp:
+		return s.startFollowUpTask(ctx, cmd.ParentTaskID, cmd.Description)
 	case CommandSubmitInput:
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
 	case CommandRetryNode:
@@ -138,9 +144,48 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 }
 
 func (s *Service) startTask(ctx context.Context, description, configAlias, configPath, workDir string, useWorktree bool) (err error) {
+	return s.startTaskWithInheritedLaunch(ctx, "", description, configAlias, configPath, workDir, useWorktree)
+}
+
+func (s *Service) startFollowUpTask(ctx context.Context, parentTaskID, description string) error {
+	parentTaskID = strings.TrimSpace(parentTaskID)
+	if parentTaskID == "" {
+		return errors.New("parent task id is required")
+	}
+	parentView, _, err := s.LoadTaskView(ctx, parentTaskID)
+	if err != nil {
+		return err
+	}
+	if parentView.Status != taskdomain.TaskStatusDone {
+		return fmt.Errorf("parent task %q is not completed", parentTaskID)
+	}
+	parentTask := parentView.Task
+	if strings.TrimSpace(parentTask.ConfigAlias) == "" || strings.TrimSpace(parentTask.ConfigPath) == "" {
+		return fmt.Errorf("parent task %q is missing launch metadata", parentTaskID)
+	}
+	useWorktree := strings.TrimSpace(parentTask.ExecutionDir) != "" && parentTask.ExecutionDir != parentTask.WorkDir
+	return s.startTaskWithInheritedLaunch(ctx, parentTaskID, description, parentTask.ConfigAlias, parentTask.ConfigPath, parentTask.WorkDir, useWorktree)
+}
+
+func (s *Service) startTaskWithInheritedLaunch(ctx context.Context, parentTaskID, description, configAlias, configPath, workDir string, useWorktree bool) (err error) {
 	workDir = taskstore.NormalizeWorkDir(workDir)
 	taskID := uuid.NewString()
 	now := time.Now().UTC()
+	committed := false
+	var rollbackWorktree func() error
+	defer func() {
+		if committed || err == nil {
+			return
+		}
+		if cleanupErr := os.RemoveAll(taskstore.TaskDir(workDir, taskID)); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("cleanup task dir: %w", cleanupErr))
+		}
+		if rollbackWorktree != nil {
+			if cleanupErr := rollbackWorktree(); cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("rollback worktree: %w", cleanupErr))
+			}
+		}
+	}()
 	configAlias = strings.TrimSpace(configAlias)
 	if configAlias == "" {
 		return errors.New("task config alias is required")
@@ -153,18 +198,8 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 	if err != nil {
 		return err
 	}
-	executionDir, rollbackWorktree, err := prepareTaskExecutionDir(workDir, taskID, useWorktree)
-	if rollbackWorktree != nil {
-		defer func() {
-			if err == nil {
-				return
-			}
-			cleanupErr := rollbackWorktree()
-			if cleanupErr != nil {
-				err = errors.Join(err, fmt.Errorf("rollback worktree: %w", cleanupErr))
-			}
-		}()
-	}
+	executionDir, rollback, err := prepareTaskExecutionDir(workDir, taskID, useWorktree)
+	rollbackWorktree = rollback
 	if err != nil {
 		return err
 	}
@@ -178,17 +213,6 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	if err = s.store.CreateTask(ctx, task); err != nil {
-		return err
-	}
-	view := taskdomain.DeriveTaskView(task, materialized.Config, nil, nil)
-	s.publish(RunEvent{
-		Type:     EventTaskCreated,
-		TaskID:   taskID,
-		TaskView: &view,
-		Config:   materialized.Config,
-	})
-
 	entry := materialized.Config.Topology.Entry
 	nodeRun := taskdomain.NodeRun{
 		ID:        uuid.NewString(),
@@ -197,9 +221,24 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 		Status:    initialStatus(materialized.Config.NodeDefinitions[entry]),
 		StartedAt: now,
 	}
-	if err = s.store.SaveNodeRun(ctx, nodeRun); err != nil {
+	if strings.TrimSpace(parentTaskID) == "" {
+		err = s.store.CreateTaskWithEntryRun(ctx, task, nodeRun)
+	} else {
+		err = s.store.CreateFollowUpTaskAtomic(ctx, parentTaskID, task, nodeRun)
+	}
+	if err != nil {
 		return err
 	}
+	committed = true
+
+	view := taskdomain.DeriveTaskView(task, materialized.Config, []taskdomain.NodeRun{nodeRun}, nil)
+	s.publish(RunEvent{
+		Type:     EventTaskCreated,
+		TaskID:   taskID,
+		TaskView: &view,
+		Config:   materialized.Config,
+	})
+
 	s.engine.RegisterEntryRun(taskID, nodeRun)
 
 	taskCtx, cancel := context.WithCancel(s.rootCtx)
@@ -208,10 +247,18 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 	s.taskCtxs[taskID] = taskCtx
 	s.mu.Unlock()
 
-	if err = s.startNode(taskCtx, task, materialized.Config, nodeRun); err != nil {
-		return err
+	if s.beforeStartNode != nil {
+		if err = s.beforeStartNode(task, nodeRun); err != nil {
+			cancel()
+			s.clearTaskContext(taskID)
+			return s.failRun(context.Background(), task, materialized.Config, nodeRun, err)
+		}
 	}
-	rollbackWorktree = nil
+	if err = s.startNode(taskCtx, task, materialized.Config, nodeRun); err != nil {
+		cancel()
+		s.clearTaskContext(taskID)
+		return s.failRun(context.Background(), task, materialized.Config, nodeRun, err)
+	}
 	return nil
 }
 
@@ -369,6 +416,13 @@ func (s *Service) lookupTaskContext(taskID string) context.Context {
 		return context.Background()
 	}
 	return s.rootCtx
+}
+
+func (s *Service) clearTaskContext(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.taskCancels, taskID)
+	delete(s.taskCtxs, taskID)
 }
 
 func (s *Service) setShutdownReason(reason string) {

@@ -7,7 +7,7 @@ func (m *Model) openNewTask() tea.Cmd {
 		m.returnScreen = m.screen
 	}
 	m.setScreen(ScreenNewTask)
-	m.focusRegion = FocusRegionComposer
+	m.focusRegion = FocusRegionFormEditor
 	m.newTask.useWorktree = m.defaultNewTaskUseWorktree()
 	m.editor.ClearSlot(editorSlotNewTask)
 	m.syncComponents()

@@ -21,8 +21,11 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 	}
 	if event.TaskView != nil {
 		view := *event.TaskView
-		if m.hasPendingStartTask() && event.Type == taskruntime.EventTaskCreated {
-			m.editor.ClearSlot(editorSlotNewTask)
+		if m.pendingRuntimeCmd != nil && event.Type == taskruntime.EventTaskCreated &&
+			(m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartTask || m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartFollowUp) {
+			if m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartTask {
+				m.editor.ClearSlot(editorSlotNewTask)
+			}
 			m.activateTask(view, event.Config, nil)
 			m.syncPendingRuntimeCommandTask(event.TaskID)
 		} else {
@@ -115,6 +118,12 @@ func (m *Model) restoreCommandFailureState() {
 		m.currentInput = nil
 		m.setScreen(ScreenNewTask)
 		m.autoScrollDetail = false
+	case pendingRuntimeCommandStartFollowUp:
+		if m.current != nil {
+			m.setDetailScreen(ScreenComplete, false)
+			m.focusRegion = FocusRegionActionPanel
+			m.autoScrollDetail = true
+		}
 	case pendingRuntimeCommandRetry, pendingRuntimeCommandForceRetry, pendingRuntimeCommandContinueBlocked:
 		screen := m.pendingRuntimeCmd.restoreScreen
 		if screen == ScreenTaskList {

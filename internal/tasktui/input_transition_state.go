@@ -1,8 +1,6 @@
 package tasktui
 
 import (
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
@@ -14,16 +12,10 @@ func (m *Model) resetInputState() {
 	m.clarification.headerSelection = 0
 	m.clarification.answers = nil
 	m.clarification.other = nil
+	m.followUp.choice = 0
 	m.submittingInput = false
 	m.focusRegion = FocusRegionNone
 	m.editor.ClearAll()
-}
-
-func (m *Model) activateClarificationOtherInput(question taskdomain.ClarificationQuestion) tea.Cmd {
-	_ = question
-	m.focusRegion = FocusRegionComposer
-	m.syncComponents()
-	return m.syncInputFocus()
 }
 
 func (m Model) shouldClearSubmittedInput(event taskruntime.RunEvent) bool {

@@ -113,6 +113,89 @@ func TestBuildPromptPresentsWorkflowHistoryChronologically(t *testing.T) {
 	assert.Less(t, strings.Index(prompt, "/tmp/plan-v1.md"), strings.Index(prompt, "/tmp/review-v1.md"))
 }
 
+func TestBuildPromptWithInheritedContextKeepsOlderAncestorsAsReferencesOnly(t *testing.T) {
+	cfg := &taskconfig.Config{
+		Version: 1,
+		Clarification: taskconfig.ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: taskconfig.Topology{
+			MaxIterations: 3,
+			Entry:         "draft_plan",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "draft_plan"},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"draft_plan": func() taskconfig.NodeDefinition {
+				def := artifactAgentNode()
+				def.SystemPrompt = "./prompts/draft_plan.md"
+				return def
+			}(),
+		},
+	}
+	configPath := writeOverrideConfig(t, cfg)
+	promptPath := filepath.Join(filepath.Dir(configPath), "prompts", "draft_plan.md")
+	template := strings.Join([]string{
+		"Workflow history:",
+		"{{WORKFLOW_HISTORY}}",
+	}, "\n")
+	require.NoError(t, os.WriteFile(promptPath, []byte(template), 0o644))
+
+	runs := []taskdomain.NodeRun{
+		{
+			ID:       "draft-1",
+			NodeName: "draft_plan",
+			Status:   taskdomain.NodeRunDone,
+			Result: map[string]interface{}{
+				"file_paths": []interface{}{"/tmp/current-plan.md"},
+			},
+		},
+		{
+			ID:       "draft-2",
+			NodeName: "draft_plan",
+			Status:   taskdomain.NodeRunRunning,
+		},
+	}
+
+	inherited := &inheritedContext{
+		WorkflowHistory: strings.Join([]string{
+			"## Direct Parent Task",
+			"Description: parent task",
+			"Task directory: /tmp/task-parent",
+			"",
+			"## Direct Parent Workflow History (oldest first)",
+			"1. draft_plan (#1)\n   Result JSON: {\"file_paths\":[\"/tmp/parent-plan.md\"]}",
+			"",
+			"## Earlier Ancestors (inspect only if needed)",
+			"- grandparent task",
+			"  Task directory: /tmp/task-grandparent",
+		}, "\n"),
+	}
+
+	prompt, err := buildPromptWithInheritedContext(
+		taskdomain.Task{Description: "child task"},
+		cfg,
+		configPath,
+		runs,
+		runs[1],
+		"/tmp/task-artifacts/draft-2",
+		inherited,
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, prompt, "Description: parent task")
+	assert.Contains(t, prompt, "Task directory: /tmp/task-parent")
+	assert.Contains(t, prompt, "## Earlier Ancestors (inspect only if needed)")
+	assert.Contains(t, prompt, "Task directory: /tmp/task-grandparent")
+	assert.Contains(t, prompt, "/tmp/parent-plan.md", "direct parent artifact path should still appear through workflow history")
+	assert.Contains(t, prompt, "/tmp/current-plan.md")
+	assert.NotContains(t, prompt, "## Direct Parent Completed Results")
+	assert.Equal(t, 1, strings.Count(prompt, "/tmp/parent-plan.md"))
+}
+
 func TestDefaultPromptTemplatesReadLikeStepInstructions(t *testing.T) {
 	workDir := t.TempDir()
 	materialized, err := taskconfig.Materialize(workDir, "task-1", "")
@@ -250,6 +333,7 @@ func TestBuildClarificationResumePromptUsesStableHeader(t *testing.T) {
 		run,
 		"/tmp/task-artifacts/draft-plan",
 		2,
+		nil,
 	)
 	require.NoError(t, err)
 

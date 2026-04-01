@@ -10,6 +10,7 @@ type CommandType string
 
 const (
 	CommandStartTask       CommandType = "task.start"
+	CommandStartFollowUp   CommandType = "task.start_follow_up"
 	CommandSubmitInput     CommandType = "task.submit_input"
 	CommandRetryNode       CommandType = "task.retry_node"
 	CommandContinueBlocked CommandType = "task.continue_blocked"
@@ -17,16 +18,17 @@ const (
 )
 
 type RunCommand struct {
-	Type        CommandType
-	TaskID      string
-	NodeRunID   string
-	Description string
-	ConfigAlias string
-	ConfigPath  string
-	WorkDir     string
-	UseWorktree bool
-	Payload     map[string]interface{}
-	Force       bool
+	Type         CommandType
+	TaskID       string
+	ParentTaskID string
+	NodeRunID    string
+	Description  string
+	ConfigAlias  string
+	ConfigPath   string
+	WorkDir      string
+	UseWorktree  bool
+	Payload      map[string]interface{}
+	Force        bool
 }
 
 type EventType string

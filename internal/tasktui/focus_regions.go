@@ -9,7 +9,7 @@ const (
 	FocusRegionArtifactPreview
 	FocusRegionChoices
 	FocusRegionActionPanel
-	FocusRegionComposer
+	FocusRegionFormEditor
 )
 
 func (m Model) isDetailScreen() bool {
@@ -19,18 +19,6 @@ func (m Model) isDetailScreen() bool {
 	default:
 		return false
 	}
-}
-
-func (m Model) detailComposerVisible() bool {
-	return m.currentEditorBindingSpec().Visible && m.screen != ScreenNewTask
-}
-
-func (m Model) composerRegionVisible() bool {
-	return m.currentEditorBindingSpec().Visible
-}
-
-func (m Model) shouldFocusDetailComposer() bool {
-	return m.focusRegion == FocusRegionComposer && m.detailComposerVisible()
 }
 
 func (m Model) artifactTabActive() bool {
@@ -46,6 +34,11 @@ func (m Model) artifactTabFocusRegions() []FocusRegion {
 		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionActionPanel}
 	case ScreenClarification:
 		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionChoices}
+	case ScreenComplete:
+		if m.completeFollowUpVisible() {
+			return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionActionPanel}
+		}
+		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}
 	default:
 		return []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}
 	}
@@ -58,11 +51,11 @@ func (m Model) availableFocusRegions() []FocusRegion {
 	switch m.screen {
 	case ScreenTaskConfigs:
 		if m.taskConfigs.form != nil {
-			return []FocusRegion{FocusRegionComposer}
+			return []FocusRegion{FocusRegionFormEditor}
 		}
 		return nil
 	case ScreenNewTask:
-		return []FocusRegion{FocusRegionComposer}
+		return []FocusRegion{FocusRegionFormEditor}
 	case ScreenApproval:
 		return []FocusRegion{FocusRegionActionPanel, FocusRegionDetail}
 	case ScreenClarification:
@@ -74,7 +67,12 @@ func (m Model) availableFocusRegions() []FocusRegion {
 		}
 		regions = append(regions, FocusRegionDetail)
 		return regions
-	case ScreenRunning, ScreenComplete:
+	case ScreenComplete:
+		if m.completeFollowUpVisible() {
+			return []FocusRegion{FocusRegionDetail, FocusRegionActionPanel}
+		}
+		return []FocusRegion{FocusRegionDetail}
+	case ScreenRunning:
 		return []FocusRegion{FocusRegionDetail}
 	default:
 		return nil
@@ -88,11 +86,11 @@ func (m Model) defaultFocusRegion() FocusRegion {
 	switch m.screen {
 	case ScreenTaskConfigs:
 		if m.taskConfigs.form != nil {
-			return FocusRegionComposer
+			return FocusRegionFormEditor
 		}
 		return FocusRegionNone
 	case ScreenNewTask:
-		return FocusRegionComposer
+		return FocusRegionFormEditor
 	case ScreenApproval:
 		return FocusRegionActionPanel
 	case ScreenClarification:

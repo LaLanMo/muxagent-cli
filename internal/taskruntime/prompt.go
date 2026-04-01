@@ -21,26 +21,33 @@ func completedArtifactPaths(runs []taskdomain.NodeRun) []string {
 }
 
 func buildPrompt(task taskdomain.Task, cfg *taskconfig.Config, configPath string, runs []taskdomain.NodeRun, run taskdomain.NodeRun, artifactDir string) (string, error) {
+	return buildPromptWithInheritedContext(task, cfg, configPath, runs, run, artifactDir, nil)
+}
+
+func buildPromptWithInheritedContext(task taskdomain.Task, cfg *taskconfig.Config, configPath string, runs []taskdomain.NodeRun, run taskdomain.NodeRun, artifactDir string, inherited *inheritedContext) (string, error) {
 	iteration := runIteration(runs, run)
 	if shouldResumeClarificationThread(run) {
-		return buildClarificationResumePrompt(task, run, artifactDir, iteration)
+		return buildClarificationResumePrompt(task, run, artifactDir, iteration, inherited)
 	}
 	def := cfg.NodeDefinitions[run.NodeName]
 	template, err := taskconfig.ReadPromptText(configPath, def)
 	if err != nil {
 		return "", err
 	}
-	artifactPaths := completedArtifactPaths(runs)
-	completedResults := summarizeCompletedResults(runs)
 	workflowHistory := summarizeWorkflowHistory(runs)
+	if inherited != nil {
+		workflowHistory = combineInheritedSection(
+			"## Current Task Workflow History (oldest first)",
+			workflowHistory,
+			inherited.WorkflowHistory,
+		)
+	}
 	clarificationHistory := summarizeClarificationHistory(run.Clarifications)
 	replacer := strings.NewReplacer(
 		"{{NODE_NAME}}", run.NodeName,
 		"{{CURRENT_ITERATION}}", fmt.Sprintf("%d", iteration),
 		"{{TASK_DESCRIPTION}}", task.Description,
 		"{{WORKFLOW_HISTORY}}", workflowHistory,
-		"{{ARTIFACT_PATHS}}", joinLines(artifactPaths),
-		"{{COMPLETED_RESULTS}}", completedResults,
 		"{{CLARIFICATION_HISTORY}}", clarificationHistory,
 		"{{ARTIFACT_DIR}}", artifactDir,
 	)
@@ -57,9 +64,17 @@ func shouldResumeClarificationThread(run taskdomain.NodeRun) bool {
 	return run.Clarifications[len(run.Clarifications)-1].Response != nil
 }
 
-func buildClarificationResumePrompt(task taskdomain.Task, run taskdomain.NodeRun, artifactDir string, iteration int) (string, error) {
+func buildClarificationResumePrompt(task taskdomain.Task, run taskdomain.NodeRun, artifactDir string, iteration int, inherited *inheritedContext) (string, error) {
 	latest := run.Clarifications[len(run.Clarifications)-1]
-	lines := []string{buildPromptHeader(run.NodeName, artifactDir, iteration), "", "Mission", "Resume this same step after the user answered your clarification request.", "", "Task", "```", task.Description, "```", "", "Relevant History", "Continue in the existing session or thread for this node run.", "Workflow history for this follow-up lives in the thread context above.", "", "New clarification exchange"}
+	lines := []string{buildPromptHeader(run.NodeName, artifactDir, iteration), "", "Mission", "Resume this same step after the user answered your clarification request.", "", "Task", "```", task.Description, "```", "", "Relevant History", "Continue in the existing session or thread for this node run.", "Workflow history for this follow-up lives in the thread context above."}
+	if inherited != nil {
+		lines = append(lines,
+			"",
+			"Inherited Context",
+			inherited.WorkflowHistory,
+		)
+	}
+	lines = append(lines, "", "New clarification exchange")
 	for qi, question := range latest.Request.Questions {
 		lines = append(lines, fmt.Sprintf("Q: %s", question.Question))
 		if len(question.Options) > 0 {
@@ -151,21 +166,6 @@ func runIteration(runs []taskdomain.NodeRun, current taskdomain.NodeRun) int {
 	return ordinal
 }
 
-func summarizeCompletedResults(runs []taskdomain.NodeRun) string {
-	entries := make([]string, 0, len(runs))
-	for _, run := range runs {
-		if run.Status != taskdomain.NodeRunDone || len(run.Result) == 0 {
-			continue
-		}
-		data, err := json.Marshal(run.Result)
-		if err != nil {
-			continue
-		}
-		entries = append(entries, fmt.Sprintf("- %s: %s", run.NodeName, string(data)))
-	}
-	return joinLines(entries)
-}
-
 func summarizeClarificationHistory(exchanges []taskdomain.ClarificationExchange) string {
 	entries := make([]string, 0, len(exchanges))
 	for _, exchange := range exchanges {
@@ -201,4 +201,16 @@ func joinLines(items []string) string {
 		return "(none)"
 	}
 	return strings.Join(items, "\n")
+}
+
+func combineInheritedSection(currentHeading, currentBody, inheritedBody string) string {
+	if strings.TrimSpace(inheritedBody) == "" {
+		return currentBody
+	}
+	return strings.Join([]string{
+		currentHeading,
+		currentBody,
+		"",
+		inheritedBody,
+	}, "\n")
 }

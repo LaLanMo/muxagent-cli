@@ -31,10 +31,8 @@ func (m Model) editorCursorOffset() (int, int, bool) {
 		return m.taskConfigFormEditorCursorOffset()
 	case ScreenNewTask:
 		return m.newTaskEditorCursorOffset()
-	case ScreenApproval:
-		return m.approvalEditorCursorOffset()
-	case ScreenClarification:
-		return m.clarificationEditorCursorOffset()
+	case ScreenApproval, ScreenClarification, ScreenComplete:
+		return m.detailPanelEditorCursorOffset()
 	default:
 		return 0, 0, false
 	}
@@ -76,21 +74,7 @@ func (m Model) newTaskEditorCursorOffset() (int, int, bool) {
 	return modalX + panel.EditorOffsetX, modalY + panel.EditorOffsetY, true
 }
 
-func (m Model) approvalEditorCursorOffset() (int, int, bool) {
-	snapshot := m.computeDetailLayoutSnapshot()
-	if !snapshot.PanelView.HasEditor {
-		return 0, 0, false
-	}
-	frame := snapshot.Frame
-	panel := snapshot.PanelView
-	surfaces := snapshot.Surfaces
-
-	panelX := tuiTheme.App.Canvas.GetPaddingLeft() + max(0, (frame.innerWidth-frame.contentWidth)/2)
-	panelY := tuiTheme.App.Canvas.GetPaddingTop() + frame.headerHeight + surfaces.Body.topBodyHeight + 1
-	return panelX + panel.EditorOffsetX, panelY + panel.EditorOffsetY, true
-}
-
-func (m Model) clarificationEditorCursorOffset() (int, int, bool) {
+func (m Model) detailPanelEditorCursorOffset() (int, int, bool) {
 	snapshot := m.computeDetailLayoutSnapshot()
 	if !snapshot.PanelView.HasEditor {
 		return 0, 0, false

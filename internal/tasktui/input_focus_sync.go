@@ -29,7 +29,9 @@ func (m Model) shouldFocusActiveEditor() bool {
 			return false
 		}
 		return m.focusRegion == FocusRegionChoices && m.clarification.option == clarificationOtherRowIndex(*question)
+	case ScreenComplete:
+		return m.followUpInputActive()
 	default:
-		return m.focusRegion == FocusRegionComposer
+		return m.focusRegion == FocusRegionFormEditor
 	}
 }

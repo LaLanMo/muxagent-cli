@@ -46,6 +46,17 @@ func (m Model) detailEditorSurfaceSpec(surface panelSurface) editorSurfaceSpec {
 		default:
 			spec.Rows = 1
 		}
+	case ScreenComplete:
+		switch {
+		case surface.MaxHeight >= 12:
+			spec.Rows = 4
+		case surface.MaxHeight >= 10:
+			spec.Rows = 3
+		case surface.MaxHeight >= 8:
+			spec.Rows = 2
+		default:
+			spec.Rows = 1
+		}
 	}
 	return spec
 }
@@ -86,6 +97,15 @@ func (m Model) currentEditorBindingSpec() editorBindingSpec {
 				Label:       "Other",
 			}
 		}
+	case ScreenComplete:
+		if m.current != nil {
+			return editorBindingSpec{
+				Visible:     true,
+				Slot:        followUpEditorSlot(m.current.Task.ID),
+				Placeholder: "Describe what should happen next…",
+				Label:       "Follow-up request",
+			}
+		}
 	}
 	return editorBindingSpec{}
 }
@@ -111,7 +131,7 @@ func (m Model) currentEditorSurfaceSpec() editorSurfaceSpec {
 		layout := m.computeNewTaskScreenLayout(header, footer)
 		spec.FieldWidth = max(18, layout.modalInnerWidth)
 		spec.Rows = layout.editorRows
-	case ScreenApproval, ScreenClarification:
+	case ScreenApproval, ScreenClarification, ScreenComplete:
 		snapshot := m.computeDetailLayoutSnapshot()
 		spec = snapshot.Editor
 	}

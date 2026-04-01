@@ -88,6 +88,7 @@ type Model struct {
 	pendingRuntimeCmd   *pendingRuntimeCommand
 	approval            approvalState
 	clarification       clarificationState
+	followUp            followUpState
 	newTask             newTaskState
 	submittingInput     bool
 	focusRegion         FocusRegion

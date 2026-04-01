@@ -1194,13 +1194,74 @@ func TestTaskTUICompletedArtifactsCopyPathAndContents(t *testing.T) {
 	copiedPath := waitForClipboardContents(t, clipboardPath)
 	assert.Contains(t, view.ArtifactPaths, copiedPath)
 
-	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Tab files", "Shift+Tab timeline")
+	session.sendAndWaitForAll(t, "\t", 5*time.Second, "Tab continue")
 	require.NoError(t, os.Remove(clipboardPath))
 	session.send(t, "c")
 	copiedContents := waitForClipboardContents(t, clipboardPath)
 	wantContents, err := os.ReadFile(copiedPath)
 	require.NoError(t, err)
 	assert.Equal(t, string(wantContents), copiedContents)
+
+	session.quit(t)
+}
+
+func TestTaskTUICompletedTaskCanStartFollowUpEndToEnd(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	_ = setupArtifactTUIRuntime(t, moduleRoot, workDir, "happy", false)
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 149, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Parent follow-up task")
+	session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval")
+	session.confirm(t)
+	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Continue from this task", "Tab continue")
+
+	session.sendAndWait(t, "\t", 5*time.Second)
+	session.typeText(t, "Child follow-up task")
+	session.sendAndWait(t, "\x1b[B", 5*time.Second)
+	session.send(t, "\r")
+	session.waitForAll(t, 15*time.Second, "approve_plan", "awaiting approval")
+	session.confirm(t)
+	session.waitForAll(t, 20*time.Second, "Task completed successfully")
+
+	tasks := waitForTaskCount(t, workDir, 2)
+	parentTask := findTaskByDescription(t, tasks, "Parent follow-up task")
+	childTask := findTaskByDescription(t, tasks, "Child follow-up task")
+
+	store, err := taskstore.Open(workDir)
+	require.NoError(t, err)
+	defer store.Close()
+
+	parentTaskID, err := store.GetFollowUpParentTaskID(context.Background(), childTask.ID)
+	require.NoError(t, err)
+	assert.Equal(t, parentTask.ID, parentTaskID)
+
+	parentTask, parentRuns, parentView, err := loadTaskStateByID(workDir, parentTask.ID)
+	require.NoError(t, err)
+	childTask, childRuns, childView, err := loadTaskStateByID(workDir, childTask.ID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusDone, parentView.Status)
+	assert.Equal(t, taskdomain.TaskStatusDone, childView.Status)
+
+	parentDraftRun := requireNodeRunByName(t, parentRuns, "draft_plan")
+	parentPlanPath := findArtifactPathByBase(t, taskdomain.ArtifactPaths(parentDraftRun.Result), "plan-1.md")
+	childDraftRun := requireNodeRunByName(t, childRuns, "draft_plan")
+	childInputPath := mustRunAuditPath(t, workDir, childTask, childRuns, childDraftRun, "input.md")
+	childInputBytes, err := os.ReadFile(childInputPath)
+	require.NoError(t, err)
+	childInput := string(childInputBytes)
+
+	assert.Contains(t, childInput, "## Direct Parent Task")
+	assert.Contains(t, childInput, "Description: Parent follow-up task")
+	assert.Contains(t, childInput, taskstore.TaskDir(workDir, parentTask.ID))
+	assert.Contains(t, childInput, parentPlanPath)
+	assert.NotContains(t, childInput, "## Earlier Ancestors")
 
 	session.quit(t)
 }
@@ -2262,6 +2323,22 @@ func waitForPersistedTask(t *testing.T, workDir string, want taskdomain.TaskStat
 	return task, runs, view
 }
 
+func waitForTaskCount(t *testing.T, workDir string, want int) []taskdomain.Task {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		tasks, err := loadTaskRecords(workDir)
+		if err == nil && len(tasks) == want {
+			return tasks
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	tasks, err := loadTaskRecords(workDir)
+	require.NoError(t, err)
+	require.Len(t, tasks, want)
+	return tasks
+}
+
 func waitForClipboardContents(t *testing.T, path string) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -2330,6 +2407,33 @@ func loadSingleTaskState(workDir string) (taskdomain.Task, []taskdomain.NodeRun,
 	return task, runs, taskdomain.DeriveTaskView(task, cfg, runs, blockedSteps), nil
 }
 
+func loadTaskStateByID(workDir, taskID string) (taskdomain.Task, []taskdomain.NodeRun, taskdomain.TaskView, error) {
+	store, err := taskstore.Open(workDir)
+	if err != nil {
+		return taskdomain.Task{}, nil, taskdomain.TaskView{}, err
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	task, err := store.GetTask(ctx, taskID)
+	if err != nil {
+		return taskdomain.Task{}, nil, taskdomain.TaskView{}, err
+	}
+	runs, err := store.ListNodeRunsByTask(ctx, taskID)
+	if err != nil {
+		return taskdomain.Task{}, nil, taskdomain.TaskView{}, err
+	}
+	cfg, err := taskconfig.Load(taskstore.ConfigPath(workDir, taskID))
+	if err != nil {
+		return taskdomain.Task{}, nil, taskdomain.TaskView{}, err
+	}
+	blockedSteps, err := taskengine.DeriveBlockedSteps(cfg, runs)
+	if err != nil {
+		return taskdomain.Task{}, nil, taskdomain.TaskView{}, err
+	}
+	return task, runs, taskdomain.DeriveTaskView(task, cfg, runs, blockedSteps), nil
+}
+
 func loadTaskRecords(workDir string) ([]taskdomain.Task, error) {
 	store, err := taskstore.Open(workDir)
 	if err != nil {
@@ -2337,6 +2441,17 @@ func loadTaskRecords(workDir string) ([]taskdomain.Task, error) {
 	}
 	defer store.Close()
 	return store.ListTasksByWorkDir(context.Background(), workDir)
+}
+
+func findTaskByDescription(t *testing.T, tasks []taskdomain.Task, description string) taskdomain.Task {
+	t.Helper()
+	for _, task := range tasks {
+		if task.Description == description {
+			return task
+		}
+	}
+	t.Fatalf("task %q not found in %v", description, tasks)
+	return taskdomain.Task{}
 }
 
 func registryEntry(entries []taskconfig.RegistryEntry, alias string) (taskconfig.RegistryEntry, bool) {

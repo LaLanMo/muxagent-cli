@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
@@ -18,6 +19,18 @@ import (
 type Store struct {
 	db *sql.DB
 }
+
+type sqlExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
+var (
+	ErrTaskLineageCorrupt     = errors.New("task lineage is corrupt")
+	ErrFollowUpParentConflict = errors.New("follow-up task already has a parent")
+	ErrFollowUpLineageCycle   = errors.New("follow-up lineage cycle detected")
+)
 
 const (
 	tasksTableSQL = `CREATE TABLE IF NOT EXISTS tasks (
@@ -31,7 +44,18 @@ const (
 		updated_at TEXT NOT NULL
 	);`
 	tasksWorkDirIndexSQL = `CREATE INDEX IF NOT EXISTS tasks_work_dir_updated_idx ON tasks(work_dir, updated_at DESC, created_at DESC);`
-	nodeRunsTableSQL     = `CREATE TABLE IF NOT EXISTS node_runs (
+	taskEdgesTableSQL    = `CREATE TABLE IF NOT EXISTS task_edges (
+		parent_task_id TEXT NOT NULL,
+		child_task_id TEXT NOT NULL,
+		relation_kind TEXT NOT NULL CHECK (relation_kind = 'follow_up'),
+		created_at TEXT NOT NULL,
+		CHECK(parent_task_id <> child_task_id),
+		UNIQUE(child_task_id),
+		FOREIGN KEY(parent_task_id) REFERENCES tasks(id),
+		FOREIGN KEY(child_task_id) REFERENCES tasks(id)
+	);`
+	taskEdgesParentIndexSQL = `CREATE INDEX IF NOT EXISTS task_edges_parent_idx ON task_edges(parent_task_id);`
+	nodeRunsTableSQL        = `CREATE TABLE IF NOT EXISTS node_runs (
 		id TEXT PRIMARY KEY,
 		task_id TEXT NOT NULL,
 		node_name TEXT NOT NULL,
@@ -93,28 +117,64 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) EnsureSchema(ctx context.Context) error {
+	if err := s.enableForeignKeys(ctx); err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		return s.ensureSchema(ctx, tx)
+	})
+}
+
+func (s *Store) ensureSchema(ctx context.Context, exec sqlExecutor) error {
 	stmts := []string{
 		tasksTableSQL,
 		tasksWorkDirIndexSQL,
+		taskEdgesTableSQL,
+		taskEdgesParentIndexSQL,
 		nodeRunsTableSQL,
 		nodeRunsIndexSQL,
 	}
 	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := exec.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
-	if err := s.ensureTaskColumns(ctx); err != nil {
+	if err := s.ensureTaskColumns(ctx, exec); err != nil {
 		return err
 	}
-	if err := s.ensureNodeRunsColumns(ctx); err != nil {
+	if err := s.ensureNodeRunsColumns(ctx, exec); err != nil {
 		return err
 	}
 	return nil
 }
 
+func (s *Store) enableForeignKeys(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	return err
+}
+
+func (s *Store) withTx(ctx context.Context, fn func(tx *sql.Tx) error) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+			return
+		}
+		err = tx.Commit()
+	}()
+	err = fn(tx)
+	return err
+}
+
 func (s *Store) CreateTask(ctx context.Context, task taskdomain.Task) error {
-	_, err := s.db.ExecContext(ctx, `
+	return s.createTask(ctx, s.db, task)
+}
+
+func (s *Store) createTask(ctx context.Context, exec sqlExecutor, task taskdomain.Task) error {
+	_, err := exec.ExecContext(ctx, `
 		INSERT INTO tasks (id, description, config_alias, config_path, work_dir, execution_dir, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.Description, task.ConfigAlias, task.ConfigPath, task.WorkDir, task.ExecutionWorkDir(), task.CreatedAt.Format(time.RFC3339Nano), task.UpdatedAt.Format(time.RFC3339Nano),
@@ -123,7 +183,11 @@ func (s *Store) CreateTask(ctx context.Context, task taskdomain.Task) error {
 }
 
 func (s *Store) UpdateTaskTimestamp(ctx context.Context, taskID string, updatedAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET updated_at = ? WHERE id = ?`, updatedAt.Format(time.RFC3339Nano), taskID)
+	return s.updateTaskTimestamp(ctx, s.db, taskID, updatedAt)
+}
+
+func (s *Store) updateTaskTimestamp(ctx context.Context, exec sqlExecutor, taskID string, updatedAt time.Time) error {
+	_, err := exec.ExecContext(ctx, `UPDATE tasks SET updated_at = ? WHERE id = ?`, updatedAt.Format(time.RFC3339Nano), taskID)
 	return err
 }
 
@@ -150,7 +214,32 @@ func (s *Store) ListTasksByWorkDir(ctx context.Context, workDir string) ([]taskd
 	return tasks, rows.Err()
 }
 
+func (s *Store) CreateTaskWithEntryRun(ctx context.Context, task taskdomain.Task, entryRun taskdomain.NodeRun) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := s.createTask(ctx, tx, task); err != nil {
+			return err
+		}
+		return s.saveNodeRun(ctx, tx, entryRun, task.UpdatedAt)
+	})
+}
+
+func (s *Store) CreateFollowUpTaskAtomic(ctx context.Context, parentTaskID string, task taskdomain.Task, entryRun taskdomain.NodeRun) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := s.createTask(ctx, tx, task); err != nil {
+			return err
+		}
+		if err := s.attachFollowUpParent(ctx, tx, parentTaskID, task.ID, task.CreatedAt); err != nil {
+			return err
+		}
+		return s.saveNodeRun(ctx, tx, entryRun, task.UpdatedAt)
+	})
+}
+
 func (s *Store) SaveNodeRun(ctx context.Context, run taskdomain.NodeRun) error {
+	return s.saveNodeRun(ctx, s.db, run, time.Now().UTC())
+}
+
+func (s *Store) saveNodeRun(ctx context.Context, exec sqlExecutor, run taskdomain.NodeRun, updatedAt time.Time) error {
 	resultJSON, err := encodeJSON(run.Result)
 	if err != nil {
 		return err
@@ -167,7 +256,7 @@ func (s *Store) SaveNodeRun(ctx context.Context, run taskdomain.NodeRun) error {
 	if run.CompletedAt != nil {
 		completedAt = run.CompletedAt.Format(time.RFC3339Nano)
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = exec.ExecContext(ctx, `
 		INSERT INTO node_runs (
 			id, task_id, node_name, status, session_id, failure_reason, result_json, clarifications_json, triggered_by_json, started_at, completed_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -195,7 +284,141 @@ func (s *Store) SaveNodeRun(ctx context.Context, run taskdomain.NodeRun) error {
 	if err != nil {
 		return err
 	}
-	return s.UpdateTaskTimestamp(ctx, run.TaskID, time.Now().UTC())
+	return s.updateTaskTimestamp(ctx, exec, run.TaskID, updatedAt)
+}
+
+func (s *Store) AttachFollowUpParent(ctx context.Context, parentTaskID, childTaskID string, createdAt time.Time) error {
+	return s.attachFollowUpParent(ctx, s.db, parentTaskID, childTaskID, createdAt)
+}
+
+func (s *Store) attachFollowUpParent(ctx context.Context, exec sqlExecutor, parentTaskID, childTaskID string, createdAt time.Time) error {
+	parentTaskID = strings.TrimSpace(parentTaskID)
+	childTaskID = strings.TrimSpace(childTaskID)
+	if parentTaskID == "" || childTaskID == "" {
+		return fmt.Errorf("parent and child task ids are required")
+	}
+	if parentTaskID == childTaskID {
+		return ErrFollowUpLineageCycle
+	}
+	hasCycle, err := s.pathCreatesCycle(ctx, exec, parentTaskID, childTaskID)
+	if err != nil {
+		return err
+	}
+	if hasCycle {
+		return ErrFollowUpLineageCycle
+	}
+	_, err = exec.ExecContext(ctx, `
+		INSERT INTO task_edges (parent_task_id, child_task_id, relation_kind, created_at)
+		VALUES (?, ?, ?, ?)`,
+		parentTaskID, childTaskID, taskdomain.TaskRelationFollowUp, createdAt.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return mapTaskEdgeError(err)
+	}
+	return nil
+}
+
+func (s *Store) GetFollowUpParentTaskID(ctx context.Context, childTaskID string) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT parent_task_id
+		FROM task_edges
+		WHERE child_task_id = ? AND relation_kind = ?
+		ORDER BY created_at, parent_task_id`,
+		childTaskID, taskdomain.TaskRelationFollowUp,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var parents []string
+	for rows.Next() {
+		var parentTaskID string
+		if err := rows.Scan(&parentTaskID); err != nil {
+			return "", err
+		}
+		parents = append(parents, parentTaskID)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	switch len(parents) {
+	case 0:
+		return "", nil
+	case 1:
+		return parents[0], nil
+	default:
+		return "", ErrTaskLineageCorrupt
+	}
+}
+
+func (s *Store) ListChildTaskIDs(ctx context.Context, parentTaskID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT child_task_id
+		FROM task_edges
+		WHERE parent_task_id = ? AND relation_kind = ?
+		ORDER BY created_at, child_task_id`,
+		parentTaskID, taskdomain.TaskRelationFollowUp,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var childTaskIDs []string
+	for rows.Next() {
+		var childTaskID string
+		if err := rows.Scan(&childTaskID); err != nil {
+			return nil, err
+		}
+		childTaskIDs = append(childTaskIDs, childTaskID)
+	}
+	return childTaskIDs, rows.Err()
+}
+
+func (s *Store) ListAncestorTaskIDs(ctx context.Context, taskID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH RECURSIVE lineage(task_id, depth, path, cycle) AS (
+			SELECT parent_task_id, 1, ',' || child_task_id || ',' || parent_task_id || ',', 0
+			FROM task_edges
+			WHERE child_task_id = ? AND relation_kind = ?
+			UNION ALL
+			SELECT te.parent_task_id,
+			       lineage.depth + 1,
+			       lineage.path || te.parent_task_id || ',',
+			       CASE WHEN instr(lineage.path, ',' || te.parent_task_id || ',') > 0 THEN 1 ELSE 0 END
+			FROM task_edges te
+			JOIN lineage ON te.child_task_id = lineage.task_id
+			WHERE te.relation_kind = ? AND lineage.cycle = 0
+		)
+		SELECT task_id, cycle
+		FROM lineage
+		ORDER BY depth ASC, task_id ASC`,
+		taskID, taskdomain.TaskRelationFollowUp, taskdomain.TaskRelationFollowUp,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ancestorTaskIDs []string
+	for rows.Next() {
+		var (
+			ancestorTaskID string
+			cycle          int
+		)
+		if err := rows.Scan(&ancestorTaskID, &cycle); err != nil {
+			return nil, err
+		}
+		if cycle != 0 {
+			return nil, ErrTaskLineageCorrupt
+		}
+		ancestorTaskIDs = append(ancestorTaskIDs, ancestorTaskID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ancestorTaskIDs, nil
 }
 
 func (s *Store) GetNodeRun(ctx context.Context, runID string) (taskdomain.NodeRun, error) {
@@ -360,52 +583,56 @@ func nullableString(value string) interface{} {
 	return value
 }
 
-func (s *Store) ensureTaskColumns(ctx context.Context) error {
-	hasConfigAlias, err := s.tableHasColumn(ctx, "tasks", "config_alias")
+func (s *Store) ensureTaskColumns(ctx context.Context, exec sqlExecutor) error {
+	hasConfigAlias, err := s.tableHasColumnWithExecutor(ctx, exec, "tasks", "config_alias")
 	if err != nil {
 		return err
 	}
 	if !hasConfigAlias {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN config_alias TEXT NOT NULL DEFAULT ''`); err != nil {
+		if _, err := exec.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN config_alias TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
-	hasConfigPath, err := s.tableHasColumn(ctx, "tasks", "config_path")
+	hasConfigPath, err := s.tableHasColumnWithExecutor(ctx, exec, "tasks", "config_path")
 	if err != nil {
 		return err
 	}
 	if !hasConfigPath {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN config_path TEXT NOT NULL DEFAULT ''`); err != nil {
+		if _, err := exec.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN config_path TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
-	hasExecutionDir, err := s.tableHasColumn(ctx, "tasks", "execution_dir")
+	hasExecutionDir, err := s.tableHasColumnWithExecutor(ctx, exec, "tasks", "execution_dir")
 	if err != nil {
 		return err
 	}
 	if !hasExecutionDir {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN execution_dir TEXT NOT NULL DEFAULT ''`); err != nil {
+		if _, err := exec.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN execution_dir TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE tasks SET execution_dir = work_dir WHERE execution_dir = ''`)
+	_, err = exec.ExecContext(ctx, `UPDATE tasks SET execution_dir = work_dir WHERE execution_dir = ''`)
 	return err
 }
 
-func (s *Store) ensureNodeRunsColumns(ctx context.Context) error {
-	hasFailureReason, err := s.tableHasColumn(ctx, "node_runs", "failure_reason")
+func (s *Store) ensureNodeRunsColumns(ctx context.Context, exec sqlExecutor) error {
+	hasFailureReason, err := s.tableHasColumnWithExecutor(ctx, exec, "node_runs", "failure_reason")
 	if err != nil {
 		return err
 	}
 	if hasFailureReason {
 		return nil
 	}
-	_, err = s.db.ExecContext(ctx, `ALTER TABLE node_runs ADD COLUMN failure_reason TEXT`)
+	_, err = exec.ExecContext(ctx, `ALTER TABLE node_runs ADD COLUMN failure_reason TEXT`)
 	return err
 }
 
 func (s *Store) tableHasColumn(ctx context.Context, tableName, columnName string) (bool, error) {
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+tableName+`)`)
+	return s.tableHasColumnWithExecutor(ctx, s.db, tableName, columnName)
+}
+
+func (s *Store) tableHasColumnWithExecutor(ctx context.Context, exec sqlExecutor, tableName, columnName string) (bool, error) {
+	rows, err := exec.QueryContext(ctx, `PRAGMA table_info(`+tableName+`)`)
 	if err != nil {
 		return false, err
 	}
@@ -428,6 +655,52 @@ func (s *Store) tableHasColumn(ctx context.Context, tableName, columnName string
 		}
 	}
 	return false, rows.Err()
+}
+
+func (s *Store) pathCreatesCycle(ctx context.Context, exec sqlExecutor, parentTaskID, childTaskID string) (bool, error) {
+	rows, err := exec.QueryContext(ctx, `
+		WITH RECURSIVE lineage(task_id, path) AS (
+			SELECT ?, ',' || ? || ','
+			UNION ALL
+			SELECT te.parent_task_id,
+			       lineage.path || te.parent_task_id || ','
+			FROM task_edges te
+			JOIN lineage ON te.child_task_id = lineage.task_id
+			WHERE te.relation_kind = ? AND instr(lineage.path, ',' || te.parent_task_id || ',') = 0
+		)
+		SELECT task_id
+		FROM lineage`,
+		parentTaskID, parentTaskID, taskdomain.TaskRelationFollowUp,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			return false, err
+		}
+		if taskID == childTaskID {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func mapTaskEdgeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "UNIQUE constraint failed: task_edges.child_task_id"):
+		return ErrFollowUpParentConflict
+	case strings.Contains(msg, "FOREIGN KEY constraint failed"):
+		return fmt.Errorf("follow-up lineage references a missing task: %w", err)
+	default:
+		return err
+	}
 }
 
 func DBPath(workDir string) string {

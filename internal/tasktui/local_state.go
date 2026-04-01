@@ -22,10 +22,15 @@ type failureState struct {
 	action failureAction
 }
 
+type followUpState struct {
+	choice int
+}
+
 type pendingRuntimeCommandKind int
 
 const (
 	pendingRuntimeCommandStartTask pendingRuntimeCommandKind = iota
+	pendingRuntimeCommandStartFollowUp
 	pendingRuntimeCommandRetry
 	pendingRuntimeCommandForceRetry
 	pendingRuntimeCommandContinueBlocked

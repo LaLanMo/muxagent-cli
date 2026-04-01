@@ -54,7 +54,7 @@ func (m Model) shouldFollowPendingRuntimeCommand(event taskruntime.RunEvent) boo
 	}
 	switch event.Type {
 	case taskruntime.EventTaskCreated:
-		return m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartTask
+		return m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartTask || m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartFollowUp
 	case taskruntime.EventCommandError:
 		return true
 	default:
@@ -75,7 +75,7 @@ func (m *Model) clearPendingRuntimeCommandIfSettled(event taskruntime.RunEvent) 
 	}
 	switch event.Type {
 	case taskruntime.EventTaskCreated:
-		if m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartTask {
+		if m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartTask || m.pendingRuntimeCmd.kind == pendingRuntimeCommandStartFollowUp {
 			m.syncPendingRuntimeCommandTask(event.TaskID)
 		}
 	case taskruntime.EventCommandError:
