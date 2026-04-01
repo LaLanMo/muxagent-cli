@@ -1198,10 +1198,10 @@ func TestTaskTUICompletedTaskCanStartFollowUpEndToEnd(t *testing.T) {
 	binaryPath := buildMuxagentBinary(t, moduleRoot)
 
 	workDir := canonicalPath(t, t.TempDir())
-	_ = setupArtifactTUIRuntime(t, moduleRoot, workDir, "happy", false)
+	clipboardPath := setupArtifactTUIRuntime(t, moduleRoot, workDir, "happy", true)
 
 	session := startTUISession(t, binaryPath, workDir)
-	session.resize(t, 149, 39)
+	session.resize(t, 180, 39)
 	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
@@ -1211,14 +1211,50 @@ func TestTaskTUICompletedTaskCanStartFollowUpEndToEnd(t *testing.T) {
 
 	session.sendAndWait(t, "\t", 5*time.Second)
 	session.typeText(t, "Child follow-up task")
+	beforeChildApproval := session.resetOutput()
 	session.send(t, "\r")
-	beforeChildCompletion := session.markOutput()
-	session.approvePlan(t)
-	session.waitForFreshAll(t, 20*time.Second, beforeChildCompletion, "Task completed successfully", "Continue from this task")
+	output := session.waitForFreshAll(t, 10*time.Second, beforeChildApproval, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·")
 
 	tasks := waitForTaskCount(t, workDir, 2)
 	parentTask := findTaskByDescription(t, tasks, "Parent follow-up task")
 	childTask := findTaskByDescription(t, tasks, "Child follow-up task")
+	_, parentRunsAtApproval, _, err := loadTaskStateByID(workDir, parentTask.ID)
+	require.NoError(t, err)
+	_, childRunsAtApproval, childViewAtApproval, err := loadTaskStateByID(workDir, childTask.ID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusAwaitingUser, childViewAtApproval.Status)
+
+	parentDraftRunAtApproval := requireNodeRunByName(t, parentRunsAtApproval, "draft_plan")
+	childDraftRunAtApproval := requireNodeRunByName(t, childRunsAtApproval, "draft_plan")
+	childReviewRunAtApproval := requireNodeRunByName(t, childRunsAtApproval, "review_plan")
+
+	parentDraftArtifacts := taskdomain.ArtifactPaths(parentDraftRunAtApproval.Result)
+	childDraftArtifacts := taskdomain.ArtifactPaths(childDraftRunAtApproval.Result)
+	childReviewArtifacts := taskdomain.ArtifactPaths(childReviewRunAtApproval.Result)
+	require.NotEmpty(t, parentDraftArtifacts)
+	require.NotEmpty(t, childDraftArtifacts)
+	require.NotEmpty(t, childReviewArtifacts)
+
+	assert.Contains(t, output, filepath.Base(childDraftArtifacts[0]))
+	assert.Contains(t, output, filepath.Base(childReviewArtifacts[0]))
+	assert.NotContains(t, output, filepath.Base(parentDraftArtifacts[0]))
+
+	session.send(t, "c")
+	copiedPath := waitForClipboardContents(t, clipboardPath)
+	assert.Contains(t, copiedPath, taskstore.TaskDir(workDir, childTask.ID))
+	assert.NotContains(t, copiedPath, taskstore.TaskDir(workDir, parentTask.ID))
+
+	panelOutput := session.focusApprovalActionPanel(t)
+	if strings.Contains(panelOutput, "Enter confirm") {
+		before := session.markOutput()
+		session.send(t, "\r")
+		session.waitForFreshAll(t, 5*time.Second, before, "Enter submit")
+	}
+	beforeChildCompletion := session.markOutput()
+	session.send(t, "\r")
+	session.waitForOutputChange(t, 5*time.Second, beforeChildCompletion)
+	session.waitForAll(t, 20*time.Second, "Task completed successfully", "Continue from this task")
+
 	require.Eventually(t, func() bool {
 		_, _, view, err := loadTaskStateByID(workDir, childTask.ID)
 		return err == nil && view.Status == taskdomain.TaskStatusDone

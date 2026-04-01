@@ -15,12 +15,18 @@ import (
 )
 
 func TestModelOpensAwaitingTaskIntoApprovalScreen(t *testing.T) {
+	tempDir := t.TempDir()
+	artifactPath := filepath.Join(tempDir, "plan.md")
+	require.NoError(t, os.WriteFile(artifactPath, []byte("# Plan\n"), 0o644))
+
 	view := taskdomain.TaskView{
-		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login"},
+		Task:            taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
 		Status:          taskdomain.TaskStatusAwaitingUser,
+		ArtifactPaths:   []string{artifactPath},
 		CurrentNodeName: "approve_plan",
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{artifactPath}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
 	}
 	service := &fakeService{
@@ -30,16 +36,16 @@ func TestModelOpensAwaitingTaskIntoApprovalScreen(t *testing.T) {
 			"task-1": view,
 		},
 		inputs: map[string]*taskruntime.InputRequest{
-			"run-1": {
+			"run-2": {
 				Kind:          taskruntime.InputKindHumanNode,
 				TaskID:        "task-1",
-				NodeRunID:     "run-1",
+				NodeRunID:     "run-2",
 				NodeName:      "approve_plan",
-				ArtifactPaths: []string{"/tmp/plan.md"},
+				ArtifactPaths: []string{artifactPath},
 			},
 		},
 	}
-	model := NewModel(service, "/tmp/project", "", nil, "v0.1.0")
+	model := NewModel(service, tempDir, "", nil, "v0.1.0")
 	model.tasks = service.tasks
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	model = next.(Model)
@@ -51,7 +57,7 @@ func TestModelOpensAwaitingTaskIntoApprovalScreen(t *testing.T) {
 	assert.Equal(t, FocusRegionArtifactFiles, model.focusRegion)
 	assert.Contains(t, strippedView(model.View().Content), "Approve this plan?")
 	assert.Contains(t, strippedView(model.View().Content), "Files")
-	assert.Contains(t, strippedView(model.View().Content), "Preview · approve_plan (#1) · plan.md")
+	assert.Contains(t, strippedView(model.View().Content), "Preview · draft_plan (#1) · plan.md")
 	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab timeline")
 }
 

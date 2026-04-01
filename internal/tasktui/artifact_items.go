@@ -11,6 +11,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
+	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 )
 
 const artifactPreviewMaxBytes = 64 * 1024
@@ -70,15 +71,16 @@ func artifactPaneGroups(current *taskdomain.TaskView, input *taskruntime.InputRe
 	}
 
 	if input != nil {
+		displayPaths := artifactDisplayableInputPaths(current, input)
 		index := -1
 		if existing, ok := groupIndexByRunID[input.NodeRunID]; ok {
 			index = existing
-		} else if len(input.ArtifactPaths) > 0 {
+		} else if len(displayPaths) > 0 {
 			index = len(groups)
 			groups = append(groups, artifactGroup{Label: artifactInputGroupLabel(input, ordinals)})
 		}
 		if index >= 0 {
-			for _, path := range input.ArtifactPaths {
+			for _, path := range displayPaths {
 				artifactAppendUniquePath(&groups[index].Paths, seenPaths, path)
 			}
 		}
@@ -105,6 +107,10 @@ func artifactPaneGroups(current *taskdomain.TaskView, input *taskruntime.InputRe
 	return artifactNonEmptyGroups(groups)
 }
 
+func artifactPaneHasVisibleArtifacts(current *taskdomain.TaskView, input *taskruntime.InputRequest) bool {
+	return len(artifactPaneGroups(current, input)) > 0
+}
+
 func artifactRunLabels(current *taskdomain.TaskView) (map[string]string, map[string]int) {
 	labels := map[string]string{}
 	ordinals := map[string]int{}
@@ -127,6 +133,80 @@ func artifactInputGroupLabel(input *taskruntime.InputRequest, ordinals map[strin
 		return "Current input"
 	}
 	return fmt.Sprintf("%s (#%d)", nodeName, ordinals[nodeName]+1)
+}
+
+func artifactDisplayableInputPaths(current *taskdomain.TaskView, input *taskruntime.InputRequest) []string {
+	if input == nil || len(input.ArtifactPaths) == 0 {
+		return nil
+	}
+
+	currentTaskPaths := artifactCurrentTaskPathSet(current)
+	taskDir := artifactCurrentTaskDir(current)
+	paths := make([]string, 0, len(input.ArtifactPaths))
+	seen := map[string]struct{}{}
+	for _, path := range input.ArtifactPaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := currentTaskPaths[path]; ok {
+			continue
+		}
+		if !artifactPathWithinTaskDir(path, taskDir) {
+			continue
+		}
+		artifactAppendUniquePath(&paths, seen, path)
+	}
+	return paths
+}
+
+func artifactCurrentTaskPathSet(current *taskdomain.TaskView) map[string]struct{} {
+	paths := map[string]struct{}{}
+	if current == nil {
+		return paths
+	}
+	for _, run := range current.NodeRuns {
+		for _, path := range run.ArtifactPaths {
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			paths[path] = struct{}{}
+		}
+	}
+	for _, path := range current.ArtifactPaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		paths[path] = struct{}{}
+	}
+	return paths
+}
+
+func artifactCurrentTaskDir(current *taskdomain.TaskView) string {
+	if current == nil {
+		return ""
+	}
+	taskID := strings.TrimSpace(current.Task.ID)
+	workDir := strings.TrimSpace(current.Task.WorkDir)
+	if taskID == "" || workDir == "" {
+		return ""
+	}
+	return taskstore.TaskDir(workDir, taskID)
+}
+
+func artifactPathWithinTaskDir(path, taskDir string) bool {
+	path = strings.TrimSpace(path)
+	taskDir = strings.TrimSpace(taskDir)
+	if path == "" || taskDir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(taskDir), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
 }
 
 func artifactAppendUniquePath(paths *[]string, seen map[string]struct{}, path string) {

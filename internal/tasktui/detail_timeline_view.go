@@ -78,17 +78,15 @@ func (m Model) renderNodeRunBlock(run taskdomain.NodeRunView) []string {
 		return lines
 	case taskdomain.NodeRunAwaitingUser:
 		waitLabel := "awaiting input"
-		artifactPaths := append([]string(nil), run.ArtifactPaths...)
+		showArtifactHint := len(run.ArtifactPaths) > 0
 		if m.currentInput != nil && run.ID == m.currentInput.NodeRunID {
 			if m.currentInput.Kind == taskruntime.InputKindHumanNode {
 				waitLabel = "awaiting approval"
 			}
-			if len(m.currentInput.ArtifactPaths) > 0 {
-				artifactPaths = append([]string(nil), m.currentInput.ArtifactPaths...)
-			}
+			showArtifactHint = artifactPaneHasVisibleArtifacts(m.current, m.currentInput)
 		}
 		lines := []string{renderTimelineHeadline(tuiTheme.Status.Awaiting, "●", nodeLabel, waitLabel, "")}
-		if len(artifactPaths) > 0 {
+		if showArtifactHint {
 			lines = append(lines, tuiTheme.Text.Muted.Render("  Review artifacts in the pane →"))
 		}
 		if sessionID := m.nodeRunSessionID(run); sessionID != "" {

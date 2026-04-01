@@ -12,6 +12,7 @@ import (
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
+	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,13 +31,16 @@ func TestApprovalScreenShowsExpandedArtifactsPaneAndPreview(t *testing.T) {
 		Task:   taskdomain.Task{ID: "task-1", Description: "Implement login", WorkDir: tempDir},
 		Status: taskdomain.TaskStatusAwaitingUser,
 		NodeRuns: []taskdomain.NodeRunView{
-			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-1", NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{planPath}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: "task-1", NodeName: "review_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{apiPath}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: "task-1", NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
 		},
+		ArtifactPaths: []string{planPath, apiPath},
 	}
 	model.currentInput = &taskruntime.InputRequest{
 		Kind:          taskruntime.InputKindHumanNode,
 		TaskID:        "task-1",
-		NodeRunID:     "run-1",
+		NodeRunID:     "run-3",
 		NodeName:      "approve_plan",
 		ArtifactPaths: []string{planPath, apiPath},
 	}
@@ -51,8 +55,8 @@ func TestApprovalScreenShowsExpandedArtifactsPaneAndPreview(t *testing.T) {
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Shift+Tab timeline")
 	assert.Contains(t, view, "Files")
-	assert.Contains(t, view, "Preview · approve_plan (#1) · plan.md")
-	assert.Contains(t, view, "approve_plan (#1)")
+	assert.Contains(t, view, "Preview · draft_plan (#1) · plan.md")
+	assert.Contains(t, view, "draft_plan (#1)")
 	assert.Contains(t, view, "Plan")
 	assert.NotContains(t, view, "# Plan")
 }
@@ -239,8 +243,9 @@ func TestClarificationPanelVisibleAfterTabRoundTrip(t *testing.T) {
 func TestClarificationArtifactsIncludePendingInputMarkdownWithoutPrioritizingIt(t *testing.T) {
 	tempDir := t.TempDir()
 	reviewPath := filepath.Join(tempDir, "review.md")
-	inputPath := filepath.Join(tempDir, "input.md")
+	inputPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, "task-1", 2, "implement"), "input.md")
 	require.NoError(t, os.WriteFile(reviewPath, []byte("# Review\n\nLGTM\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(inputPath), 0o755))
 	require.NoError(t, os.WriteFile(inputPath, []byte("# Clarification History\n\n## Exchange 1\n\nAnswer: pending\n"), 0o644))
 
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
@@ -280,6 +285,92 @@ func TestClarificationArtifactsIncludePendingInputMarkdownWithoutPrioritizingIt(
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Preview · review_plan (#1) · review.md")
 	assert.Contains(t, view, "LGTM")
+}
+
+func TestFollowUpApprovalArtifactsExcludeInheritedParentArtifacts(t *testing.T) {
+	tempDir := t.TempDir()
+	parentTaskID := "parent-task-12345678"
+	childTaskID := "child-task-87654321"
+	parentPlanPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, parentTaskID, 1, "draft_plan"), "parent-plan.md")
+	childPlanPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, childTaskID, 1, "draft_plan"), "child-plan.md")
+	childReviewPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, childTaskID, 2, "review_plan"), "child-review.md")
+	for _, path := range []string{parentPlanPath, childPlanPath, childReviewPath} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	}
+	require.NoError(t, os.WriteFile(parentPlanPath, []byte("# Parent Plan\n"), 0o644))
+	require.NoError(t, os.WriteFile(childPlanPath, []byte("# Child Plan\n"), 0o644))
+	require.NoError(t, os.WriteFile(childReviewPath, []byte("# Child Review\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 160, Height: 36})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:          taskdomain.Task{ID: childTaskID, Description: "Child follow-up task", WorkDir: tempDir},
+		Status:        taskdomain.TaskStatusAwaitingUser,
+		ArtifactPaths: []string{childPlanPath, childReviewPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: childTaskID, NodeName: "draft_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{childPlanPath}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-2", TaskID: childTaskID, NodeName: "review_plan", Status: taskdomain.NodeRunDone}, ArtifactPaths: []string{childReviewPath}},
+			{NodeRun: taskdomain.NodeRun{ID: "run-3", TaskID: childTaskID, NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser}},
+		},
+	}
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:          taskruntime.InputKindHumanNode,
+		TaskID:        childTaskID,
+		NodeRunID:     "run-3",
+		NodeName:      "approve_plan",
+		ArtifactPaths: []string{childPlanPath, parentPlanPath, childReviewPath},
+	}
+	model.setDetailScreen(ScreenApproval, true)
+	model.syncComponents()
+
+	require.Len(t, model.artifactItems, 2)
+	assert.Equal(t, []string{childPlanPath, childReviewPath}, []string{model.artifactItems[0].Path, model.artifactItems[1].Path})
+	assert.Equal(t, childPlanPath, selectedArtifactPath(model.artifactItems, model.artifactIndex))
+	assert.Equal(t, DetailTabArtifacts, model.activeDetailTab)
+	assert.True(t, shouldDefaultApprovalToArtifacts(ScreenApproval, model.current, model.currentInput))
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "Preview · draft_plan (#1) · child-plan.md")
+	assert.Contains(t, view, "child-plan.md")
+	assert.Contains(t, view, "child-review.md")
+	assert.NotContains(t, view, "parent-plan.md")
+}
+
+func TestApprovalDefaultsAndTimelineHintIgnoreInheritedParentArtifacts(t *testing.T) {
+	tempDir := t.TempDir()
+	parentTaskID := "parent-task-12345678"
+	childTaskID := "child-task-87654321"
+	parentPlanPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, parentTaskID, 1, "draft_plan"), "parent-plan.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(parentPlanPath), 0o755))
+	require.NoError(t, os.WriteFile(parentPlanPath, []byte("# Parent Plan\n"), 0o644))
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 140, Height: 34})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task:   taskdomain.Task{ID: childTaskID, Description: "Child follow-up task", WorkDir: tempDir},
+		Status: taskdomain.TaskStatusAwaitingUser,
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: childTaskID, NodeName: "approve_plan", Status: taskdomain.NodeRunAwaitingUser, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.currentInput = &taskruntime.InputRequest{
+		Kind:          taskruntime.InputKindHumanNode,
+		TaskID:        childTaskID,
+		NodeRunID:     "run-1",
+		NodeName:      "approve_plan",
+		ArtifactPaths: []string{parentPlanPath},
+	}
+	model.setDetailScreen(ScreenApproval, true)
+	model.syncComponents()
+
+	assert.False(t, shouldDefaultApprovalToArtifacts(ScreenApproval, model.current, model.currentInput))
+	assert.Equal(t, DetailTabTimeline, model.activeDetailTab)
+	assert.Empty(t, model.artifactItems)
+
+	timeline := strippedView(model.renderDetailTimeline(surfaceRect{Width: 100, Height: 20}))
+	assert.NotContains(t, timeline, "Review artifacts in the pane →")
 }
 
 func TestArtifactTabCyclesViaTab(t *testing.T) {

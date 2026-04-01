@@ -3,6 +3,7 @@ package tasktui
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
 
@@ -51,13 +52,13 @@ func (m *Model) setDetailScreen(screen Screen, resetArtifacts bool) {
 }
 
 func (m Model) defaultDetailTab(screen Screen) DetailTab {
-	if shouldDefaultApprovalToArtifacts(screen, m.currentInput) {
+	if shouldDefaultApprovalToArtifacts(screen, m.current, m.currentInput) {
 		return DetailTabArtifacts
 	}
 	return DetailTabTimeline
 }
 
-func shouldDefaultApprovalToArtifacts(screen Screen, input *taskruntime.InputRequest) bool {
+func shouldDefaultApprovalToArtifacts(screen Screen, current *taskdomain.TaskView, input *taskruntime.InputRequest) bool {
 	if screen != ScreenApproval || input == nil {
 		return false
 	}
@@ -67,7 +68,7 @@ func shouldDefaultApprovalToArtifacts(screen Screen, input *taskruntime.InputReq
 	if input.NodeName != approvalPlanNodeName {
 		return false
 	}
-	return len(input.ArtifactPaths) > 0
+	return artifactPaneHasVisibleArtifacts(current, input)
 }
 
 func (m *Model) returnToTaskList() tea.Cmd {
