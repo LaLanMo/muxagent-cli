@@ -246,11 +246,15 @@ func (m Model) tabHint() string {
 }
 
 func (m Model) detailHint(base string) string {
+	toggleHint := m.completeFollowUpToggleHint()
 	switch m.focusRegion {
 	case FocusRegionDetail:
 		parts := []string{"↑↓ scroll"}
 		if base != "" {
 			parts = append(parts, base)
+		}
+		if toggleHint != "" {
+			parts = append(parts, toggleHint)
 		}
 		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
@@ -264,6 +268,9 @@ func (m Model) detailHint(base string) string {
 		if base != "" {
 			parts = append(parts, base)
 		}
+		if toggleHint != "" {
+			parts = append(parts, toggleHint)
+		}
 		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
 		}
@@ -276,6 +283,9 @@ func (m Model) detailHint(base string) string {
 		if base != "" {
 			parts = append(parts, base)
 		}
+		if toggleHint != "" {
+			parts = append(parts, toggleHint)
+		}
 		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)
 		}
@@ -287,6 +297,9 @@ func (m Model) detailHint(base string) string {
 		parts := []string{}
 		if base != "" {
 			parts = append(parts, base)
+		}
+		if toggleHint != "" {
+			parts = append(parts, toggleHint)
 		}
 		if next := m.nextFocusHint(); next != "" {
 			parts = append(parts, next)

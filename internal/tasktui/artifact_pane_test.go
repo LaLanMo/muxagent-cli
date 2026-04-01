@@ -347,10 +347,10 @@ func TestArtifactsTabFocusCycleAcrossDetailScreens(t *testing.T) {
 			screen:             ScreenComplete,
 			status:             taskdomain.TaskStatusDone,
 			wantRegions:        []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview, FocusRegionActionPanel},
-			wantFilesFooter:    "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline",
-			wantPreviewFooter:  "↑↓ scroll  c copy  Esc back  Tab continue  Shift+Tab timeline",
+			wantFilesFooter:    "↑↓ files  c copy path  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline",
+			wantPreviewFooter:  "↑↓ scroll  c copy  Esc back  Ctrl+X hide  Tab continue  Shift+Tab timeline",
 			wantResponseRegion: FocusRegionActionPanel,
-			wantResponseFooter: "↑↓ select  Enter newline  Esc back  Tab artifacts  Shift+Tab timeline",
+			wantResponseFooter: "↑↓ select  Enter newline  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline",
 		},
 		{
 			name:               "approval",
@@ -474,7 +474,7 @@ func TestArtifactCopyShowsTransientFooterFeedback(t *testing.T) {
 	assert.Equal(t, "copied", model.artifactCopyStatus)
 
 	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-	assert.Contains(t, footer, "↑↓ files  copied  Esc back  Tab artifacts  Shift+Tab timeline")
+	assert.Contains(t, footer, "↑↓ files  copied  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline")
 	assert.NotContains(t, footer, "c copy path")
 
 	next, _ = model.Update(artifactCopyFeedbackExpiredMsg{token: model.artifactCopyToken})
@@ -482,7 +482,7 @@ func TestArtifactCopyShowsTransientFooterFeedback(t *testing.T) {
 	assert.Empty(t, model.artifactCopyStatus)
 
 	footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-	assert.Contains(t, footer, "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline")
+	assert.Contains(t, footer, "↑↓ files  c copy path  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline")
 }
 
 func TestArtifactPreviewCopyShowsTransientFooterFeedback(t *testing.T) {
@@ -498,7 +498,7 @@ func TestArtifactPreviewCopyShowsTransientFooterFeedback(t *testing.T) {
 	assert.Equal(t, "copied", model.artifactCopyStatus)
 
 	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-	assert.Contains(t, footer, "↑↓ scroll  copied  Esc back  Tab continue  Shift+Tab timeline")
+	assert.Contains(t, footer, "↑↓ scroll  copied  Esc back  Ctrl+X hide  Tab continue  Shift+Tab timeline")
 	assert.NotContains(t, footer, "c copy")
 
 	next, _ = model.Update(artifactCopyFeedbackExpiredMsg{token: model.artifactCopyToken})
@@ -506,7 +506,27 @@ func TestArtifactPreviewCopyShowsTransientFooterFeedback(t *testing.T) {
 	assert.Empty(t, model.artifactCopyStatus)
 
 	footer = strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-	assert.Contains(t, footer, "↑↓ scroll  c copy  Esc back  Tab continue  Shift+Tab timeline")
+	assert.Contains(t, footer, "↑↓ scroll  c copy  Esc back  Ctrl+X hide  Tab continue  Shift+Tab timeline")
+}
+
+func TestCompletedArtifactsFooterUsesContinueHintWhenFollowUpHidden(t *testing.T) {
+	model := artifactTabTestModel(t, ScreenComplete, taskdomain.TaskStatusDone, "")
+	model.followUp.hidden = true
+	model.syncComponents()
+
+	assert.Equal(t, []FocusRegion{FocusRegionArtifactFiles, FocusRegionArtifactPreview}, model.availableFocusRegions())
+
+	filesFooter := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+	assert.Contains(t, filesFooter, "↑↓ files  c copy path  Esc back  Ctrl+X continue  Tab artifacts  Shift+Tab timeline")
+	assert.NotContains(t, filesFooter, "Tab continue")
+
+	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = next.(Model)
+	assert.Equal(t, FocusRegionArtifactPreview, model.focusRegion)
+
+	previewFooter := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
+	assert.Contains(t, previewFooter, "↑↓ scroll  c copy  Esc back  Ctrl+X continue  Tab files  Shift+Tab timeline")
+	assert.NotContains(t, previewFooter, "Tab continue")
 }
 
 func TestArtifactCopyFailureBannerClearsOnSelectionChange(t *testing.T) {
@@ -563,7 +583,7 @@ func TestArtifactCopyFailureClearsSuccessFeedback(t *testing.T) {
 	assert.Contains(t, model.artifactErrorText, "Unable to copy artifact path")
 
 	footer := strippedView(model.renderDetailFooter(surfaceRect{Width: detailContentWidth(120, model.activeDetailTab)}))
-	assert.Contains(t, footer, "↑↓ files  c copy path  Esc back  Tab artifacts  Shift+Tab timeline")
+	assert.Contains(t, footer, "↑↓ files  c copy path  Esc back  Ctrl+X hide  Tab artifacts  Shift+Tab timeline")
 	assert.NotContains(t, footer, "copied")
 }
 

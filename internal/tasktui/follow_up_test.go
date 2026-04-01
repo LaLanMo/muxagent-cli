@@ -64,6 +64,7 @@ func TestCompleteScreenShowsFollowUpPanelAndDetailHint(t *testing.T) {
 	assert.Contains(t, view, "Continue from this task")
 	assert.Contains(t, view, "Creates a new linked task and carries over this task's context.")
 	assert.Contains(t, view, "Write what should happen next")
+	assert.Contains(t, view, "Ctrl+X hide")
 	assert.Contains(t, view, "Tab continue")
 }
 
@@ -77,6 +78,54 @@ func TestCompleteFollowUpFocusedEditorShowsCursor(t *testing.T) {
 
 	view := model.View()
 	require.NotNil(t, view.Cursor)
+}
+
+func TestCompleteFollowUpCtrlXHidesAndRestoresPanelDraft(t *testing.T) {
+	model, _, _ := buildCompletedFollowUpModel(t, false)
+	model.focusRegion = FocusRegionActionPanel
+	model.followUp.choice = followUpRowInput
+	model.syncComponents()
+	_ = model.syncInputFocus()
+	model = typeText(t, model, "Continue with release prep")
+
+	next, _ := model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	model = next.(Model)
+
+	assert.True(t, model.followUp.hidden)
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+	assert.Equal(t, []FocusRegion{FocusRegionDetail}, model.availableFocusRegions())
+	assert.Equal(t, "", model.editor.Slot())
+
+	hiddenView := strippedView(model.View().Content)
+	assert.NotContains(t, hiddenView, "Continue from this task")
+	assert.NotContains(t, hiddenView, "Tab continue")
+	assert.Contains(t, hiddenView, "Ctrl+X continue")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	model = next.(Model)
+
+	assert.False(t, model.followUp.hidden)
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+	assert.Contains(t, strippedView(model.View().Content), "Continue from this task")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = next.(Model)
+	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
+	assert.Equal(t, followUpEditorSlot("task-parent"), model.editor.Slot())
+	assert.Equal(t, "Continue with release prep", model.editor.Value())
+}
+
+func TestCompleteFollowUpRawCtrlXControlCodeHidesPanel(t *testing.T) {
+	model, _, _ := buildCompletedFollowUpModel(t, false)
+	model.focusRegion = FocusRegionDetail
+	model.syncComponents()
+
+	next, _ := model.Update(tea.KeyPressMsg{Code: 0x18})
+	model = next.(Model)
+
+	assert.True(t, model.followUp.hidden)
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+	assert.NotContains(t, strippedView(model.View().Content), "Continue from this task")
 }
 
 func TestCompleteFooterDoesNotRepeatConfigAlias(t *testing.T) {
@@ -185,6 +234,82 @@ func TestCompleteFollowUpCommandErrorRestoresPanelAndKeepsDraft(t *testing.T) {
 	assert.Equal(t, "Continue with release prep", model.editor.Value())
 	assert.Equal(t, "cannot start follow-up", model.errorText)
 	assert.Nil(t, model.pendingRuntimeCmd)
+}
+
+func TestCompleteFollowUpCommandErrorKeepsHiddenState(t *testing.T) {
+	model, service, _ := buildCompletedFollowUpModel(t, false)
+	model.focusRegion = FocusRegionActionPanel
+	model.followUp.choice = followUpRowInput
+	model.syncComponents()
+	_ = model.syncInputFocus()
+
+	model = typeText(t, model, "Continue with release prep")
+	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = next.(Model)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	model = next.(Model)
+	assert.True(t, model.followUp.hidden)
+
+	next, _ = model.Update(taskruntime.RunEvent{
+		Type:   taskruntime.EventCommandError,
+		TaskID: "task-parent",
+		Error:  &taskruntime.RunError{Message: "cannot start follow-up"},
+	})
+	model = next.(Model)
+
+	assert.Equal(t, ScreenComplete, model.screen)
+	assert.Equal(t, FocusRegionDetail, model.focusRegion)
+	assert.True(t, model.followUp.hidden)
+	assert.Equal(t, "cannot start follow-up", model.errorText)
+	assert.Nil(t, model.pendingRuntimeCmd)
+}
+
+func TestCompleteFollowUpTaskCompletedReshowsPanel(t *testing.T) {
+	model, _, artifactPath := buildCompletedFollowUpModel(t, true)
+	model.followUp.hidden = true
+	model.syncComponents()
+
+	now := time.Now().UTC()
+	completed := taskdomain.TaskView{
+		Task: taskdomain.Task{
+			ID:          "task-parent",
+			Description: "Parent task",
+			WorkDir:     model.workDir,
+		},
+		Status:          taskdomain.TaskStatusDone,
+		CurrentNodeName: "done",
+		ArtifactPaths:   []string{artifactPath},
+		NodeRuns: []taskdomain.NodeRunView{
+			{
+				NodeRun: taskdomain.NodeRun{
+					ID:          "run-done",
+					TaskID:      "task-parent",
+					NodeName:    "done",
+					Status:      taskdomain.NodeRunDone,
+					StartedAt:   now,
+					CompletedAt: timePtr(now),
+				},
+				ArtifactPaths: []string{artifactPath},
+			},
+		},
+	}
+
+	next, _ := model.Update(taskruntime.RunEvent{
+		Type:     taskruntime.EventTaskCompleted,
+		TaskID:   "task-parent",
+		NodeName: "done",
+		TaskView: &completed,
+	})
+	model = next.(Model)
+
+	assert.False(t, model.followUp.hidden)
+	assert.Contains(t, strippedView(model.View().Content), "Continue from this task")
 }
 
 func TestCompleteFollowUpTaskCreatedActivatesChildTaskAndClearsDraft(t *testing.T) {

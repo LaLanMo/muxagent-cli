@@ -98,7 +98,7 @@ func (m Model) currentEditorBindingSpec() editorBindingSpec {
 			}
 		}
 	case ScreenComplete:
-		if m.current != nil {
+		if m.completeFollowUpVisible() {
 			return editorBindingSpec{
 				Visible:     true,
 				Slot:        followUpEditorSlot(m.current.Task.ID),

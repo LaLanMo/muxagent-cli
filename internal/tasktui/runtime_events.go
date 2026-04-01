@@ -84,6 +84,7 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 	case taskruntime.EventTaskCompleted:
 		m.clearTaskProgress(event.TaskView)
 		m.startupText = ""
+		m.followUp.hidden = false
 		m.setDetailScreen(ScreenComplete, true)
 		m.autoScrollDetail = true
 	case taskruntime.EventTaskFailed:
@@ -121,7 +122,11 @@ func (m *Model) restoreCommandFailureState() {
 	case pendingRuntimeCommandStartFollowUp:
 		if m.current != nil {
 			m.setDetailScreen(ScreenComplete, false)
-			m.focusRegion = FocusRegionActionPanel
+			if m.completeFollowUpVisible() {
+				m.focusRegion = FocusRegionActionPanel
+			} else {
+				m.focusRegion = FocusRegionDetail
+			}
 			m.autoScrollDetail = true
 		}
 	case pendingRuntimeCommandRetry, pendingRuntimeCommandForceRetry, pendingRuntimeCommandContinueBlocked:

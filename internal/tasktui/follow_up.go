@@ -3,6 +3,7 @@ package tasktui
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
@@ -22,8 +23,12 @@ func followUpEditorSlot(taskID string) string {
 	return "followup:" + taskID
 }
 
-func (m Model) completeFollowUpVisible() bool {
+func (m Model) completeFollowUpAvailable() bool {
 	return m.screen == ScreenComplete && m.current != nil
+}
+
+func (m Model) completeFollowUpVisible() bool {
+	return m.completeFollowUpAvailable() && !m.followUp.hidden
 }
 
 func (m Model) followUpInputActive() bool {
@@ -42,6 +47,16 @@ func (m Model) canSubmitFollowUp() bool {
 	return m.completeFollowUpVisible() && !m.followUpPending() && m.followUpRequestText() != ""
 }
 
+func (m Model) completeFollowUpToggleHint() string {
+	if !m.completeFollowUpAvailable() {
+		return ""
+	}
+	if m.completeFollowUpVisible() {
+		return "Ctrl+X hide"
+	}
+	return "Ctrl+X continue"
+}
+
 func (m Model) followUpSubmitLabel() string {
 	switch {
 	case m.followUpPending():
@@ -55,6 +70,18 @@ func (m Model) followUpSubmitLabel() string {
 
 func (m *Model) selectFollowUpRow(row int) tea.Cmd {
 	m.followUp.choice = clamp(row, 0, followUpRowCount-1)
+	m.syncComponents()
+	return m.syncInputFocus()
+}
+
+func (m *Model) toggleCompleteFollowUpVisibility() tea.Cmd {
+	if !m.completeFollowUpAvailable() {
+		return nil
+	}
+	m.followUp.hidden = !m.followUp.hidden
+	if m.followUp.hidden && m.focusRegion == FocusRegionActionPanel {
+		m.focusRegion = FocusRegionDetail
+	}
 	m.syncComponents()
 	return m.syncInputFocus()
 }
@@ -79,6 +106,21 @@ func taskruntimeCommandStartFollowUp(parentTaskID, description string) taskrunti
 		ParentTaskID: parentTaskID,
 		Description:  description,
 	}
+}
+
+func (m *Model) handleCompleteToggleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if !m.completeFollowUpAvailable() || !followUpToggleKey(msg, m.keys.toggleFollowUp) {
+		return nil, false
+	}
+	return m.toggleCompleteFollowUpVisibility(), true
+}
+
+func followUpToggleKey(msg tea.KeyPressMsg, binding key.Binding) bool {
+	return keyMatches(msg, binding) ||
+		msg.Keystroke() == "ctrl+x" ||
+		msg.String() == "ctrl+x" ||
+		(msg.Code == 'x' && msg.Mod&tea.ModCtrl != 0) ||
+		msg.Code == 0x18
 }
 
 func (m Model) handleCompleteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

@@ -16,6 +16,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.syncComponents()
 		return m, cmd
 	}
+	if cmd, handled := m.handleCompleteToggleKey(msg); handled {
+		m.syncComponents()
+		return m, cmd
+	}
 	if cmd, handled := m.handleFocusedRegionKey(msg); handled {
 		m.syncComponents()
 		return m, cmd

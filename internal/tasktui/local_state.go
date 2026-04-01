@@ -24,6 +24,7 @@ type failureState struct {
 
 type followUpState struct {
 	choice int
+	hidden bool
 }
 
 type pendingRuntimeCommandKind int
