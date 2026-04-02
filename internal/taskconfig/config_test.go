@@ -98,49 +98,85 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 	setTaskConfigRuntimePath(t)
 
 	tests := []struct {
-		name         string
-		builtinID    string
-		entry        string
-		nodeCount    int
-		hasApproval  bool
-		hasImplement bool
-		hasEvaluator bool
+		name                   string
+		builtinID              string
+		entry                  string
+		nodeCount              int
+		definitionCount        int
+		topologyMaxIterations  int
+		hasApproval            bool
+		hasImplement           bool
+		hasEvaluator           bool
+		promptNode             string
+		promptPath             string
+		maxClarificationRounds int
+		absentNodes            []string
 	}{
 		{
-			name:         "default",
-			builtinID:    BuiltinIDDefault,
-			entry:        "draft_plan",
-			nodeCount:    6,
-			hasApproval:  true,
-			hasImplement: true,
-			hasEvaluator: false,
+			name:                  "default",
+			builtinID:             BuiltinIDDefault,
+			entry:                 "draft_plan",
+			nodeCount:             6,
+			definitionCount:       6,
+			topologyMaxIterations: 5,
+			hasApproval:           true,
+			hasImplement:          true,
+			hasEvaluator:          false,
 		},
 		{
-			name:         "plan-only",
-			builtinID:    BuiltinIDPlanOnly,
-			entry:        "draft_plan",
-			nodeCount:    3,
-			hasApproval:  false,
-			hasImplement: false,
-			hasEvaluator: false,
+			name:                  "plan-only",
+			builtinID:             BuiltinIDPlanOnly,
+			entry:                 "draft_plan",
+			nodeCount:             3,
+			definitionCount:       3,
+			topologyMaxIterations: 5,
+			hasApproval:           false,
+			hasImplement:          false,
+			hasEvaluator:          false,
 		},
 		{
-			name:         "autonomous",
-			builtinID:    BuiltinIDAutonomous,
-			entry:        "draft_plan",
-			nodeCount:    5,
-			hasApproval:  false,
-			hasImplement: true,
-			hasEvaluator: false,
+			name:                   "single-run",
+			builtinID:              BuiltinIDSingleRun,
+			entry:                  "handle_request",
+			nodeCount:              2,
+			definitionCount:        2,
+			topologyMaxIterations:  1,
+			hasApproval:            false,
+			hasImplement:           false,
+			hasEvaluator:           false,
+			promptNode:             "handle_request",
+			promptPath:             "./prompts/handle_request.md",
+			maxClarificationRounds: 1,
+			absentNodes: []string{
+				"approve_plan",
+				"draft_plan",
+				"review_plan",
+				"implement",
+				"verify",
+				"evaluate_progress",
+			},
 		},
 		{
-			name:         "yolo",
-			builtinID:    BuiltinIDYolo,
-			entry:        "draft_plan",
-			nodeCount:    6,
-			hasApproval:  false,
-			hasImplement: true,
-			hasEvaluator: true,
+			name:                  "autonomous",
+			builtinID:             BuiltinIDAutonomous,
+			entry:                 "draft_plan",
+			nodeCount:             5,
+			definitionCount:       5,
+			topologyMaxIterations: 5,
+			hasApproval:           false,
+			hasImplement:          true,
+			hasEvaluator:          false,
+		},
+		{
+			name:                  "yolo",
+			builtinID:             BuiltinIDYolo,
+			entry:                 "draft_plan",
+			nodeCount:             6,
+			definitionCount:       6,
+			topologyMaxIterations: 100,
+			hasApproval:           false,
+			hasImplement:          true,
+			hasEvaluator:          true,
 		},
 	}
 
@@ -152,13 +188,25 @@ func TestLoadBuiltinConfigs(t *testing.T) {
 			assert.Equal(t, 1, cfg.Version)
 			assert.Equal(t, appconfig.RuntimeCodex, cfg.Runtime)
 			assert.Equal(t, tt.entry, cfg.Topology.Entry)
+			assert.Equal(t, tt.topologyMaxIterations, cfg.Topology.MaxIterations)
 			assert.Len(t, cfg.Topology.Nodes, tt.nodeCount)
+			assert.Len(t, cfg.NodeDefinitions, tt.definitionCount)
 			_, hasApproval := cfg.NodeDefinitions["approve_plan"]
 			assert.Equal(t, tt.hasApproval, hasApproval)
 			_, hasImplement := cfg.NodeDefinitions["implement"]
 			assert.Equal(t, tt.hasImplement, hasImplement)
 			_, hasEvaluator := cfg.NodeDefinitions["evaluate_progress"]
 			assert.Equal(t, tt.hasEvaluator, hasEvaluator)
+			if tt.promptNode != "" {
+				def, ok := cfg.NodeDefinitions[tt.promptNode]
+				require.True(t, ok)
+				assert.Equal(t, tt.promptPath, def.SystemPrompt)
+				assert.Equal(t, tt.maxClarificationRounds, def.MaxClarificationRounds)
+			}
+			for _, node := range tt.absentNodes {
+				_, ok := cfg.NodeDefinitions[node]
+				assert.Falsef(t, ok, "did not expect node definition for %q", node)
+			}
 			assert.Equal(t, NodeTypeTerminal, cfg.NodeDefinitions["done"].Type)
 		})
 	}
@@ -400,6 +448,39 @@ func TestEmbeddedYoloPromptsUseOutcomeContracts(t *testing.T) {
 				assert.Falsef(t, strings.Contains(text, unwanted), "did not expect %q in %s", unwanted, tt.path)
 			}
 		})
+	}
+}
+
+func TestEmbeddedSingleRunPromptUsesMinimalDirectExecutionContract(t *testing.T) {
+	data, err := fs.ReadFile(defaultsFS, "defaults/prompts/handle_request.md")
+	require.NoError(t, err)
+	text := string(data)
+
+	contains := []string{
+		"Step: {{NODE_NAME}}",
+		"ArtifactDir: {{ARTIFACT_DIR}}",
+		"Iteration: {{CURRENT_ITERATION}}",
+		"Task\n```\n{{TASK_DESCRIPTION}}\n```",
+		"Workflow history (oldest first):",
+		"Clarifications so far:",
+		"Do the work the user asked for.",
+		"Use the workflow history and clarifications above when they are relevant.",
+		"Always write at least one result artifact under {{ARTIFACT_DIR}}.",
+		"Return only artifact paths under {{ARTIFACT_DIR}} in `file_paths`.",
+	}
+	excludes := []string{
+		"Task: {{TASK_DESCRIPTION}}",
+		"The plan was reviewed and approved.",
+		"Do not turn this into a multi-step workflow.",
+		"read-only requests",
+		"smallest verified change",
+	}
+
+	for _, want := range contains {
+		assert.Truef(t, strings.Contains(text, want), "expected %q in handle_request prompt", want)
+	}
+	for _, unwanted := range excludes {
+		assert.Falsef(t, strings.Contains(text, unwanted), "did not expect %q in handle_request prompt", unwanted)
 	}
 }
 

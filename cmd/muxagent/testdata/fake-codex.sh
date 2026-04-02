@@ -101,6 +101,9 @@ JSON
     fi
     write_result "review-${count}.md" "\"passed\":${passed}"
     ;;
+  handle_request)
+    write_result "result-${count}.md" ""
+    ;;
   implement)
     if [ "$flow" = "clarify-late" ] && [ "$count" -eq 1 ] && [ "$resume_mode" -eq 0 ]; then
       cat > "$output" <<'JSON'

@@ -460,6 +460,84 @@ func TestServiceStartFollowUpCreatesChildTaskAndPersistsLineage(t *testing.T) {
 	assert.Equal(t, "implement", childRuns[0].NodeName)
 }
 
+func TestServiceSingleRunFollowUpUsesHandleRequestAndInheritedParentContext(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	configPath := managedDefaultTestConfigPath(t)
+	writeConfigAtPath(t, singleHandleRequestFixture(), configPath)
+
+	handleRequestPrompt := strings.Join([]string{
+		"Step: {{NODE_NAME}}",
+		"ArtifactDir: {{ARTIFACT_DIR}}",
+		"Iteration: {{CURRENT_ITERATION}}",
+		"",
+		"Task",
+		"```",
+		"{{TASK_DESCRIPTION}}",
+		"```",
+		"",
+		"Workflow history (oldest first):",
+		"{{WORKFLOW_HISTORY}}",
+		"",
+		"Clarifications so far:",
+		"{{CLARIFICATION_HISTORY}}",
+	}, "\n")
+	promptPath := filepath.Join(filepath.Dir(configPath), "prompts", "handle_request.md")
+	require.NoError(t, os.WriteFile(promptPath, []byte(handleRequestPrompt), 0o644))
+
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"handle_request": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-result.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-result.md")},
+			},
+		},
+	}
+	workDir := t.TempDir()
+	service, err := NewService(workDir, executor)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{
+		Type:        CommandStartTask,
+		Description: "parent task",
+		ConfigAlias: taskconfig.BuiltinIDSingleRun,
+		ConfigPath:  configPath,
+		WorkDir:     service.workDir,
+	})
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	service.Dispatch(startFollowUpCommand(parentCompleted.TaskID, "child task"))
+	childCompleted := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID != parentCompleted.TaskID
+	})
+
+	parentTask, err := service.store.GetTask(context.Background(), parentCompleted.TaskID)
+	require.NoError(t, err)
+	childTask, err := service.store.GetTask(context.Background(), childCompleted.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, parentTask.ConfigAlias, childTask.ConfigAlias)
+	assert.Equal(t, parentTask.ConfigPath, childTask.ConfigPath)
+	assert.Equal(t, taskconfig.BuiltinIDSingleRun, childTask.ConfigAlias)
+
+	childRuns, err := service.store.ListNodeRunsByTask(context.Background(), childCompleted.TaskID)
+	require.NoError(t, err)
+	require.Len(t, childRuns, 2)
+	assert.Equal(t, "handle_request", childRuns[0].NodeName)
+
+	handleRequests := executor.requestsForNode("handle_request")
+	require.Len(t, handleRequests, 2)
+	childPrompt := handleRequests[1].Prompt
+	assert.Contains(t, childPrompt, "## Direct Parent Task")
+	assert.Contains(t, childPrompt, "Description: parent task")
+	assert.Contains(t, childPrompt, taskstore.TaskDir(service.workDir, parentCompleted.TaskID))
+	assert.Contains(t, childPrompt, "parent-result.md")
+}
+
 func TestServiceStartFollowUpInheritsWorktreeMode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -2308,6 +2386,34 @@ func singleAgentTerminalFixture() *taskconfig.Config {
 		NodeDefinitions: map[string]taskconfig.NodeDefinition{
 			"implement": artifactAgentNode(),
 			"done":      {Type: taskconfig.NodeTypeTerminal},
+		},
+	}
+}
+
+func singleHandleRequestFixture() *taskconfig.Config {
+	def := artifactAgentNodeWithPrompt("./prompts/handle_request.md")
+	def.MaxClarificationRounds = 1
+	return &taskconfig.Config{
+		Version: 1,
+		Clarification: taskconfig.ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: taskconfig.Topology{
+			MaxIterations: 1,
+			Entry:         "handle_request",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "handle_request"},
+				{Name: "done"},
+			},
+			Edges: []taskconfig.Edge{
+				{From: "handle_request", To: "done"},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"handle_request": def,
+			"done":           {Type: taskconfig.NodeTypeTerminal},
 		},
 	}
 }

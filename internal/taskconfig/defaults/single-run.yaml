@@ -1,0 +1,34 @@
+version: 1
+description: "One-pass workflow: handle one request once, then stop."
+
+clarification:
+  max_questions: 4
+  max_options_per_question: 4
+  min_options_per_question: 2
+
+topology:
+  max_iterations: 1
+  entry: handle_request
+  nodes:
+    - name: handle_request
+    - name: done
+  edges:
+    - from: handle_request
+      to: done
+
+node_definitions:
+  handle_request:
+    system_prompt: ./prompts/handle_request.md
+    max_clarification_rounds: 1
+    result_schema:
+      type: object
+      additionalProperties: false
+      required:
+        - file_paths
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+  done:
+    type: terminal

@@ -17,15 +17,16 @@ func TestLoadCatalogSeedsBuiltinModesAndRegistryMetadata(t *testing.T) {
 
 	catalog, err := LoadCatalog()
 	require.NoError(t, err)
-	require.Len(t, catalog.Entries, 4)
+	require.Len(t, catalog.Entries, 5)
 	assert.Equal(t, DefaultAlias, catalog.DefaultAlias)
 
 	assert.Equal(t, DefaultAlias, catalog.Entries[0].Alias)
 	assert.Equal(t, BuiltinIDDefault, catalog.Entries[0].BuiltinID)
 	assert.True(t, catalog.Entries[0].Builtin)
 	assert.Equal(t, BuiltinIDPlanOnly, catalog.Entries[1].BuiltinID)
-	assert.Equal(t, BuiltinIDAutonomous, catalog.Entries[2].BuiltinID)
-	assert.Equal(t, BuiltinIDYolo, catalog.Entries[3].BuiltinID)
+	assert.Equal(t, BuiltinIDSingleRun, catalog.Entries[2].BuiltinID)
+	assert.Equal(t, BuiltinIDAutonomous, catalog.Entries[3].BuiltinID)
+	assert.Equal(t, BuiltinIDYolo, catalog.Entries[4].BuiltinID)
 	for _, entry := range catalog.Entries {
 		cfg, err := entry.LoadConfig()
 		require.NoError(t, err)
@@ -35,7 +36,7 @@ func TestLoadCatalogSeedsBuiltinModesAndRegistryMetadata(t *testing.T) {
 
 	reg, err := LoadRegistry()
 	require.NoError(t, err)
-	require.Len(t, reg.Configs, 4)
+	require.Len(t, reg.Configs, 5)
 	assert.Equal(t, DefaultAlias, reg.DefaultAlias)
 
 	defaultEntry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDDefault)
@@ -46,6 +47,10 @@ func TestLoadCatalogSeedsBuiltinModesAndRegistryMetadata(t *testing.T) {
 	planOnlyEntry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDPlanOnly)
 	require.True(t, ok)
 	assert.Equal(t, "builtin/plan-only", planOnlyEntry.Path)
+
+	singleRunEntry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDSingleRun)
+	require.True(t, ok)
+	assert.Equal(t, "builtin/single-run", singleRunEntry.Path)
 
 	autonomousEntry, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDAutonomous)
 	require.True(t, ok)
@@ -75,15 +80,16 @@ func TestLoadCatalogKeepsBuiltinsFirstAndAllowsBrokenUserBundles(t *testing.T) {
 
 	catalog, err := LoadCatalog()
 	require.NoError(t, err)
-	require.Len(t, catalog.Entries, 5)
+	require.Len(t, catalog.Entries, 6)
 
 	assert.Equal(t, BuiltinIDDefault, catalog.Entries[0].BuiltinID)
 	assert.Equal(t, BuiltinIDPlanOnly, catalog.Entries[1].BuiltinID)
-	assert.Equal(t, BuiltinIDAutonomous, catalog.Entries[2].BuiltinID)
-	assert.Equal(t, BuiltinIDYolo, catalog.Entries[3].BuiltinID)
-	assert.Equal(t, "broken", catalog.Entries[4].Alias)
-	assert.False(t, catalog.Entries[4].Builtin)
-	assert.Equal(t, filepath.Join(brokenDir, managedConfigFile), catalog.Entries[4].Path)
+	assert.Equal(t, BuiltinIDSingleRun, catalog.Entries[2].BuiltinID)
+	assert.Equal(t, BuiltinIDAutonomous, catalog.Entries[3].BuiltinID)
+	assert.Equal(t, BuiltinIDYolo, catalog.Entries[4].BuiltinID)
+	assert.Equal(t, "broken", catalog.Entries[5].Alias)
+	assert.False(t, catalog.Entries[5].Builtin)
+	assert.Equal(t, filepath.Join(brokenDir, managedConfigFile), catalog.Entries[5].Path)
 }
 
 func TestLoadCatalogClassifiesMissingLegacyDefaultRowAsBuiltin(t *testing.T) {
@@ -129,7 +135,7 @@ func TestLoadCatalogStampsLegacyDefaultAsBuiltinAndPreservesCustomFiles(t *testi
 
 	catalog, err := LoadCatalog()
 	require.NoError(t, err)
-	require.Len(t, catalog.Entries, 4)
+	require.Len(t, catalog.Entries, 5)
 
 	defaultEntry, ok := catalog.Entry(DefaultAlias)
 	require.True(t, ok)
@@ -212,6 +218,39 @@ func TestLoadCatalogFallsBackWhenBuiltinAliasIsAlreadyUserOwned(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "builtin-plan-only", builtinRow.Alias)
 	assert.Equal(t, "builtin/plan-only", builtinRow.Path)
+}
+
+func TestLoadCatalogFallsBackWhenBuiltinSingleRunAliasIsAlreadyUserOwned(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeSimpleUserBundle(t, "single-run-user", "single-run")
+	_, err := SaveRegistry(Registry{
+		DefaultAlias: DefaultAlias,
+		Configs: []RegistryEntry{
+			{Alias: "single-run", Path: "single-run-user"},
+		},
+	})
+	require.NoError(t, err)
+
+	catalog, err := LoadCatalog()
+	require.NoError(t, err)
+
+	builtinEntry, ok := catalog.Entry("builtin-single-run")
+	require.True(t, ok)
+	assert.True(t, builtinEntry.Builtin)
+	assert.Equal(t, BuiltinIDSingleRun, builtinEntry.BuiltinID)
+
+	userEntry, ok := catalog.Entry("single-run")
+	require.True(t, ok)
+	assert.False(t, userEntry.Builtin)
+
+	reg, err := LoadRegistry()
+	require.NoError(t, err)
+	builtinRow, ok := registryEntryByBuiltinID(reg.Configs, BuiltinIDSingleRun)
+	require.True(t, ok)
+	assert.Equal(t, "builtin-single-run", builtinRow.Alias)
+	assert.Equal(t, "builtin/single-run", builtinRow.Path)
 }
 
 func TestLoadCatalogFallsBackWhenBuiltinYoloAliasIsAlreadyUserOwned(t *testing.T) {

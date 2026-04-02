@@ -110,6 +110,9 @@ case "$node_name" in
     fi
     write_result "review-${count}.md" "\"passed\":${passed}"
     ;;
+  handle_request)
+    write_result "result-${count}.md" ""
+    ;;
   implement)
     if [ "$flow" = "implement-fail-once" ] && [ "$count" -eq 1 ]; then
       echo "simulated implement failure" >&2

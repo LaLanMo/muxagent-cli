@@ -9,7 +9,7 @@ with Codex or Claude Code.
 ## What MuxAgent Does
 
 - **Task System** — Run code tasks through graph-based workflows with explicit
-  planning, review, approval, implementation, and verification steps. Three
+  planning, review, approval, implementation, and verification steps. Five
   ready-made configs cover different risk tolerances. Supports Codex and
   Claude Code runtimes.
 - **Remote Control** — Monitor and control Claude Code sessions from your
@@ -42,9 +42,9 @@ Official installs include everything needed to run MuxAgent with Claude Code.
 muxagent
 ```
 
-This opens the workflow CLI. Pick a task config (`default`, `autonomous`, or
-`plan-only`), describe the task, and MuxAgent routes the agent through the
-workflow for you.
+This opens the workflow CLI. Pick a task config (`default`, `plan-only`,
+`single-run`, `autonomous`, or `yolo`), describe the task, and MuxAgent routes
+the agent through the workflow for you.
 
 ### Remote Control
 
@@ -69,7 +69,7 @@ starting the daemon.
 ## Workflow Graphs
 
 A task config defines a workflow graph — the sequence of nodes and the edges
-between them that an AI agent follows. MuxAgent ships four ready-made configs:
+between them that an AI agent follows. MuxAgent ships five ready-made configs:
 
 **`default`** — When you want human sign-off before code changes land.
 
@@ -83,15 +83,6 @@ between them that an AI agent follows. MuxAgent ships four ready-made configs:
      (review rejected)                    (verify failed)
 ```
 
-**`autonomous`** — When you trust the agent and want fast iteration.
-
-```
-       plan ──▶ review ──▶ implement ──▶ verify ──▶ done
-        ▲         │           ▲              │
-        └─────────┘           └──────────────┘
-     (review rejected)         (verify failed)
-```
-
 **`plan-only`** — When you want a reviewed plan without touching code.
 
 ```
@@ -99,6 +90,21 @@ between them that an AI agent follows. MuxAgent ships four ready-made configs:
         ▲         │
         └─────────┘
      (review rejected)
+```
+
+**`single-run`** — Handle one request once, then stop.
+
+```
+   handle_request ──▶ done
+```
+
+**`autonomous`** — When you trust the agent and want fast iteration.
+
+```
+       plan ──▶ review ──▶ implement ──▶ verify ──▶ done
+        ▲         │           ▲              │
+        └─────────┘           └──────────────┘
+     (review rejected)         (verify failed)
 ```
 
 **`yolo`** — Fully autonomous multi-wave mode. No approval, no clarification.
@@ -118,15 +124,19 @@ Workflow configs are different from runtime selection:
 - a workflow config chooses the graph, bundled prompts, and product intent
 - runtime selection chooses which coding runtime executes agent nodes, for example `codex` or `claude-code`
 
+Follow-up tasks inherit the parent task config. If a task starts in
+`single-run`, its follow-up tasks also start in `single-run`.
+
 ## Customizing Workflows
 
 The included workflow configs are stored as task config bundles under `~/.muxagent/taskconfigs`.
 You can clone them and modify the YAML to change the workflow graph, prompts,
 runtime, iteration limits, or clarification settings.
 
-If you already have a user config named `plan-only`, `autonomous`, or `yolo`, MuxAgent
-preserves it and installs the built-in config under a fallback alias such as
-`builtin-plan-only`. Existing bundle files are never overwritten.
+If you already have a user config named `plan-only`, `single-run`,
+`autonomous`, or `yolo`, MuxAgent preserves it and installs the built-in
+config under a fallback alias such as `builtin-plan-only`. Existing bundle
+files are never overwritten.
 
 See [Task Config Semantics](docs/task-config-semantics.md) for the full edge,
 iteration, and schema specification.

@@ -34,14 +34,15 @@ func TestTaskConfigScreenLoadsBuiltinsAndBrokenConfigHealth(t *testing.T) {
 	model = openTaskConfigScreen(t, model)
 
 	require.Equal(t, ScreenTaskConfigs, model.screen)
-	require.Len(t, model.taskConfigs.entries, 5)
+	require.Len(t, model.taskConfigs.entries, 6)
 
 	assert.Equal(t, "default", model.taskConfigs.entries[0].Alias)
 	assert.Equal(t, "plan-only", model.taskConfigs.entries[1].Alias)
-	assert.Equal(t, "autonomous", model.taskConfigs.entries[2].Alias)
-	assert.Equal(t, "yolo", model.taskConfigs.entries[3].Alias)
+	assert.Equal(t, "single-run", model.taskConfigs.entries[2].Alias)
+	assert.Equal(t, "autonomous", model.taskConfigs.entries[3].Alias)
+	assert.Equal(t, "yolo", model.taskConfigs.entries[4].Alias)
 
-	broken := model.taskConfigs.entries[4]
+	broken := model.taskConfigs.entries[5]
 	assert.Equal(t, "broken", broken.Alias)
 	assert.False(t, broken.Builtin)
 	assert.NotEmpty(t, broken.LoadErr)

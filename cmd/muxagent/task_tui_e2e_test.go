@@ -52,6 +52,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 	require.Greater(t, len(longDescription), 512)
 	defaultPromptFiles := []string{"draft_plan.md", "implement.md", "review_plan.md", "verify.md"}
 	defaultSchemaFiles := []string{"draft_plan.json", "implement.json", "review_plan.json", "verify.json"}
+	singleRunPromptFiles := []string{"handle_request.md"}
+	singleRunSchemaFiles := []string{"handle_request.json"}
 	yoloPromptFiles := []string{"yolo_draft_plan.md", "yolo_evaluate_progress.md", "yolo_implement.md", "yolo_review_plan.md", "yolo_verify.md"}
 	yoloSchemaFiles := []string{"draft_plan.json", "evaluate_progress.json", "implement.json", "review_plan.json", "verify.json"}
 
@@ -142,6 +144,36 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 			},
 		},
 		{
+			name:        "single-run handles one request and stops",
+			flow:        "happy",
+			description: "Summarize the current issue once",
+			drive: func(t *testing.T, session *tuiSession) {
+				session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+				session.send(t, "\r")
+				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "plan-only")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "single-run")
+				session.submitNewTask(t, "Summarize the current issue once")
+				session.waitForAll(t, 10*time.Second, "Task completed successfully")
+			},
+			expectedArtifacts:   []string{"01-handle_request"},
+			expectedPrompts:     singleRunPromptFiles,
+			expectedSchemas:     singleRunSchemaFiles,
+			requirePromptHeader: true,
+			verify: func(t *testing.T, task taskdomain.Task, runs []taskdomain.NodeRun, view taskdomain.TaskView) {
+				require.Len(t, runs, 2)
+				assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+				assert.Equal(t, "done", view.CurrentNodeName)
+				assert.Equal(t, taskconfig.BuiltinIDSingleRun, task.ConfigAlias)
+				assertNodeRunCounts(t, runs, map[string]int{
+					"handle_request": 1,
+					"done":           1,
+				})
+			},
+		},
+		{
 			name:        "autonomous loops on failed verify without human approval",
 			flow:        "verify-fail-once",
 			description: "Fix the flaky flow autonomously",
@@ -151,6 +183,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.send(t, "\x0e")
 				session.waitForAll(t, 5*time.Second, "plan-only")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "single-run")
 				session.send(t, "\x0e")
 				session.waitForAll(t, 5*time.Second, "autonomous")
 				session.submitNewTask(t, "Fix the flaky flow autonomously")
@@ -185,6 +219,8 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 				session.send(t, "\x0e")
 				session.waitForAll(t, 5*time.Second, "plan-only")
+				session.send(t, "\x0e")
+				session.waitForAll(t, 5*time.Second, "single-run")
 				session.send(t, "\x0e")
 				session.waitForAll(t, 5*time.Second, "autonomous")
 				session.send(t, "\x0e")
@@ -1288,6 +1324,68 @@ func TestTaskTUICompletedTaskCanStartFollowUpEndToEnd(t *testing.T) {
 	assert.Contains(t, childInput, taskstore.TaskDir(workDir, parentTask.ID))
 	assert.Contains(t, childInput, parentPlanPath)
 	assert.NotContains(t, childInput, "## Earlier Ancestors")
+
+	session.quit(t)
+}
+
+func TestTaskTUISingleRunFollowUpUsesHandleRequestEndToEnd(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	setupArtifactTUIRuntime(t, moduleRoot, workDir, "slow-happy", false)
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 180, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.send(t, "\x0e")
+	session.waitForAll(t, 5*time.Second, "plan-only")
+	session.send(t, "\x0e")
+	session.waitForAll(t, 5*time.Second, "single-run")
+	session.submitNewTask(t, "Parent single-run task")
+	session.waitForAll(t, 20*time.Second, "Task completed successfully", "Continue from this task", "Tab continue")
+
+	session.sendAndWait(t, "\t", 5*time.Second)
+	session.typeText(t, "Child single-run task")
+	beforeChildStart := session.markOutput()
+	session.send(t, "\r")
+	session.waitForFreshAll(t, 20*time.Second, beforeChildStart, "Task completed successfully", "Continue from this task")
+
+	tasks := waitForTaskCount(t, workDir, 2)
+	parentTask := findTaskByDescription(t, tasks, "Parent single-run task")
+	childTask := findTaskByDescription(t, tasks, "Child single-run task")
+	assert.Equal(t, taskconfig.BuiltinIDSingleRun, parentTask.ConfigAlias)
+	assert.Equal(t, parentTask.ConfigAlias, childTask.ConfigAlias)
+
+	parentTask, parentRuns, parentView, err := loadTaskStateByID(workDir, parentTask.ID)
+	require.NoError(t, err)
+	childTask, childRuns, childView, err := loadTaskStateByID(workDir, childTask.ID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusDone, parentView.Status)
+	assert.Equal(t, taskdomain.TaskStatusDone, childView.Status)
+	assertNodeRunCounts(t, parentRuns, map[string]int{
+		"handle_request": 1,
+		"done":           1,
+	})
+	assertNodeRunCounts(t, childRuns, map[string]int{
+		"handle_request": 1,
+		"done":           1,
+	})
+
+	parentHandleRun := requireNodeRunByName(t, parentRuns, "handle_request")
+	parentResultPath := findArtifactPathByBase(t, taskdomain.ArtifactPaths(parentHandleRun.Result), "result-1.md")
+	childHandleRun := requireNodeRunByName(t, childRuns, "handle_request")
+	childInputPath := mustRunAuditPath(t, workDir, childTask, childRuns, childHandleRun, "input.md")
+	childInputBytes, err := os.ReadFile(childInputPath)
+	require.NoError(t, err)
+	childInput := string(childInputBytes)
+
+	assert.Contains(t, childInput, "## Direct Parent Task")
+	assert.Contains(t, childInput, "Description: Parent single-run task")
+	assert.Contains(t, childInput, taskstore.TaskDir(workDir, parentTask.ID))
+	assert.Contains(t, childInput, parentResultPath)
 
 	session.quit(t)
 }
