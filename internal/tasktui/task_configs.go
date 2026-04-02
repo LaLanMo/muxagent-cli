@@ -71,6 +71,17 @@ func (m Model) selectedTaskConfigPath() string {
 	return m.selectedTaskConfigEntry().Path
 }
 
+func taskConfigRuntime(cfg *taskconfig.Config) appconfig.RuntimeID {
+	if cfg == nil {
+		return ""
+	}
+	runtime, err := taskconfig.ResolveRuntime(cfg)
+	if err != nil {
+		return ""
+	}
+	return runtime
+}
+
 func (m *Model) cycleTaskConfig(delta int) bool {
 	entries := m.configCatalog.Entries
 	if len(entries) <= 1 {
@@ -109,15 +120,7 @@ func (m *Model) cycleTaskConfig(delta int) bool {
 }
 
 func (m Model) effectiveLaunchRuntime() appconfig.RuntimeID {
-	cfg := m.selectedTaskConfig()
-	if cfg == nil {
-		return ""
-	}
-	runtime, err := taskconfig.ResolveRuntime(cfg)
-	if err != nil {
-		return ""
-	}
-	return runtime
+	return taskConfigRuntime(m.selectedTaskConfig())
 }
 
 func (m Model) taskConfigSummary(alias string) (taskConfigSummary, bool) {
@@ -211,4 +214,162 @@ func (m *Model) launchTaskConfigEntry() (taskconfig.CatalogEntry, error) {
 	}
 	m.selectedConfigAlias = fallbackAlias
 	return entry, nil
+}
+
+type followUpConfigOption struct {
+	Selection followUpConfigSelection
+	Config    *taskconfig.Config
+}
+
+func (m Model) inheritedFollowUpConfigSelection() followUpConfigSelection {
+	if m.current == nil {
+		return followUpConfigSelection{}
+	}
+	return followUpConfigSelection{
+		Alias:     strings.TrimSpace(m.current.Task.ConfigAlias),
+		Path:      strings.TrimSpace(m.current.Task.ConfigPath),
+		Inherited: true,
+	}
+}
+
+func (m *Model) seedFollowUpConfigSelection() {
+	m.followUp.config = m.inheritedFollowUpConfigSelection()
+}
+
+func (m Model) selectedFollowUpConfigSelection() followUpConfigSelection {
+	selection := m.followUp.config
+	if strings.TrimSpace(selection.Alias) == "" && strings.TrimSpace(selection.Path) == "" {
+		return m.inheritedFollowUpConfigSelection()
+	}
+	return selection
+}
+
+func (m Model) followUpConfigOptions() []followUpConfigOption {
+	inherited := m.inheritedFollowUpConfigSelection()
+	options := make([]followUpConfigOption, 0, len(m.configCatalog.Entries)+1)
+	inheritedRepresented := false
+	for _, entry := range m.configCatalog.Entries {
+		if !m.taskConfigIsLaunchable(entry.Alias) {
+			continue
+		}
+		cfg := entry.Config
+		if cfg == nil {
+			loaded, err := entry.LoadConfig()
+			if err != nil {
+				continue
+			}
+			cfg = loaded
+		}
+		if inherited.Alias != "" && inherited.Path != "" && entry.Alias == inherited.Alias && entry.Path == inherited.Path {
+			inheritedRepresented = true
+		}
+		options = append(options, followUpConfigOption{
+			Selection: followUpConfigSelection{
+				Alias: entry.Alias,
+				Path:  entry.Path,
+			},
+			Config: cfg,
+		})
+	}
+	if inherited.Alias != "" && inherited.Path != "" && !inheritedRepresented {
+		options = append([]followUpConfigOption{{
+			Selection: inherited,
+			Config:    m.currentConfig,
+		}}, options...)
+	}
+	return options
+}
+
+func followUpConfigSelectionEqual(left, right followUpConfigSelection) bool {
+	return left.Alias == right.Alias && left.Path == right.Path && left.Inherited == right.Inherited
+}
+
+func (m Model) followUpConfigOptionIndex(selection followUpConfigSelection, options []followUpConfigOption) int {
+	for i, option := range options {
+		if followUpConfigSelectionEqual(selection, option.Selection) {
+			return i
+		}
+	}
+	for i, option := range options {
+		if selection.Alias == option.Selection.Alias && selection.Path == option.Selection.Path {
+			return i
+		}
+	}
+	if !selection.Inherited {
+		for i, option := range options {
+			if selection.Alias == option.Selection.Alias {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func (m *Model) cycleFollowUpConfig(delta int) bool {
+	options := m.followUpConfigOptions()
+	if len(options) <= 1 || delta == 0 {
+		return false
+	}
+	index := m.followUpConfigOptionIndex(m.selectedFollowUpConfigSelection(), options)
+	if index < 0 {
+		index = 0
+	}
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
+	index = (index + step) % len(options)
+	if index < 0 {
+		index += len(options)
+	}
+	m.followUp.config = options[index].Selection
+	return true
+}
+
+func (m Model) selectedFollowUpConfig() (*taskconfig.Config, string) {
+	selection := m.selectedFollowUpConfigSelection()
+	if selection.Inherited {
+		return m.currentConfig, selection.Path
+	}
+	entry, ok := m.configCatalog.Entry(selection.Alias)
+	if !ok {
+		return nil, selection.Path
+	}
+	cfg := entry.Config
+	if cfg == nil {
+		loaded, err := entry.LoadConfig()
+		if err == nil {
+			cfg = loaded
+		}
+	}
+	return cfg, firstNonEmpty(entry.Path, selection.Path)
+}
+
+func (m *Model) followUpLaunchConfigSelection() (followUpConfigSelection, error) {
+	selection := m.selectedFollowUpConfigSelection()
+	selection.Alias = strings.TrimSpace(selection.Alias)
+	selection.Path = strings.TrimSpace(selection.Path)
+	if selection.Alias == "" {
+		return followUpConfigSelection{}, errors.New("follow-up task config alias is required")
+	}
+	if selection.Path == "" {
+		return followUpConfigSelection{}, errors.New("follow-up task config path is required")
+	}
+	if selection.Inherited {
+		return selection, nil
+	}
+	if summary, ok := m.taskConfigSummary(selection.Alias); ok && strings.TrimSpace(summary.LoadErr) != "" {
+		return followUpConfigSelection{}, fmt.Errorf("task config %q is invalid: %s", selection.Alias, summary.LoadErr)
+	}
+	entry, ok, err := m.loadTaskConfigEntry(selection.Alias)
+	if err != nil {
+		return followUpConfigSelection{}, fmt.Errorf("task config %q is invalid: %w", selection.Alias, err)
+	}
+	if !ok {
+		return followUpConfigSelection{}, fmt.Errorf("task config %q is no longer available", selection.Alias)
+	}
+	return followUpConfigSelection{
+		Alias: entry.Alias,
+		Path:  entry.Path,
+	}, nil
 }

@@ -14,6 +14,7 @@ func (m *Model) resetInputState() {
 	m.clarification.other = nil
 	m.followUp.choice = 0
 	m.followUp.hidden = false
+	m.followUp.config = followUpConfigSelection{}
 	m.submittingInput = false
 	m.focusRegion = FocusRegionNone
 	m.editor.ClearAll()

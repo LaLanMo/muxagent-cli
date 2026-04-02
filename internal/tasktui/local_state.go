@@ -22,9 +22,16 @@ type failureState struct {
 	action failureAction
 }
 
+type followUpConfigSelection struct {
+	Alias     string
+	Path      string
+	Inherited bool
+}
+
 type followUpState struct {
 	choice int
 	hidden bool
+	config followUpConfigSelection
 }
 
 type pendingRuntimeCommandKind int

@@ -124,8 +124,10 @@ Workflow configs are different from runtime selection:
 - a workflow config chooses the graph, bundled prompts, and product intent
 - runtime selection chooses which coding runtime executes agent nodes, for example `codex` or `claude-code`
 
-Follow-up tasks inherit the parent task config. If a task starts in
-`single-run`, its follow-up tasks also start in `single-run`.
+Follow-up tasks inherit the parent task config by default. From the completed
+task screen you can switch the next follow-up to another config before launch.
+If a task starts in `single-run`, leaving the follow-up unchanged keeps the
+child in `single-run`.
 
 ## Customizing Workflows
 

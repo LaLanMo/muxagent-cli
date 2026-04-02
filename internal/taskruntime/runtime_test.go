@@ -538,6 +538,139 @@ func TestServiceSingleRunFollowUpUsesHandleRequestAndInheritedParentContext(t *t
 	assert.Contains(t, childPrompt, "parent-result.md")
 }
 
+func TestServiceStartFollowUpUsesExplicitConfigOverride(t *testing.T) {
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")},
+			},
+			"handle_request": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-result.md")},
+			},
+		},
+	})
+	defer service.Close()
+
+	overridePath := writeOverrideConfig(t, singleHandleRequestFixture())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "parent task"))
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	cmd := startFollowUpCommand(parentCompleted.TaskID, "child task")
+	cmd.ConfigAlias = taskconfig.BuiltinIDSingleRun
+	cmd.ConfigPath = overridePath
+	service.Dispatch(cmd)
+	childCompleted := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID != parentCompleted.TaskID
+	})
+
+	childTask, err := service.store.GetTask(context.Background(), childCompleted.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, taskconfig.BuiltinIDSingleRun, childTask.ConfigAlias)
+	assert.Equal(t, overridePath, childTask.ConfigPath)
+
+	childRuns, err := service.store.ListNodeRunsByTask(context.Background(), childCompleted.TaskID)
+	require.NoError(t, err)
+	require.Len(t, childRuns, 2)
+	assert.Equal(t, "handle_request", childRuns[0].NodeName)
+}
+
+func TestServiceStartFollowUpRejectsPartialConfigOverride(t *testing.T) {
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")}},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "parent task"))
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	tests := []struct {
+		name    string
+		command RunCommand
+		wantErr string
+	}{
+		{
+			name: "missing override path",
+			command: RunCommand{
+				Type:         CommandStartFollowUp,
+				ParentTaskID: parentCompleted.TaskID,
+				Description:  "child task",
+				ConfigAlias:  taskconfig.BuiltinIDSingleRun,
+			},
+			wantErr: "provided together",
+		},
+		{
+			name: "missing override alias",
+			command: RunCommand{
+				Type:         CommandStartFollowUp,
+				ParentTaskID: parentCompleted.TaskID,
+				Description:  "child task",
+				ConfigPath:   "/tmp/single-run.yaml",
+			},
+			wantErr: "provided together",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := service.handleCommand(context.Background(), tt.command)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestServiceStartFollowUpUsesStoredConfigWhenAliasMissingFromCatalog(t *testing.T) {
+	configPath := writeOverrideConfig(t, singleAgentTerminalFixture())
+	service := newTestService(t, &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("parent-impl.md")},
+				{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("child-impl.md")},
+			},
+		},
+	})
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(RunCommand{
+		Type:        CommandStartTask,
+		Description: "parent task",
+		ConfigAlias: "legacy-config",
+		ConfigPath:  configPath,
+		WorkDir:     service.workDir,
+	})
+	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
+
+	service.Dispatch(startFollowUpCommand(parentCompleted.TaskID, "child task"))
+	childCompleted := waitForEventWhere(t, service.Events(), 5*time.Second, func(event RunEvent) bool {
+		return event.Type == EventTaskCompleted && event.TaskID != parentCompleted.TaskID
+	})
+
+	childTask, err := service.store.GetTask(context.Background(), childCompleted.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, "legacy-config", childTask.ConfigAlias)
+	assert.Equal(t, configPath, childTask.ConfigPath)
+
+	childRuns, err := service.store.ListNodeRunsByTask(context.Background(), childCompleted.TaskID)
+	require.NoError(t, err)
+	require.Len(t, childRuns, 2)
+	assert.Equal(t, "implement", childRuns[0].NodeName)
+}
+
 func TestServiceStartFollowUpInheritsWorktreeMode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -951,7 +1084,7 @@ func TestServiceFollowUpPostCommitStartupFailureMarksEntryRunFailed(t *testing.T
 	})
 	parentCompleted := waitForEvent(t, service.Events(), EventTaskCompleted)
 
-	err = service.startFollowUpTask(context.Background(), parentCompleted.TaskID, "broken child")
+	err = service.startFollowUpTask(context.Background(), parentCompleted.TaskID, "broken child", "", "")
 	require.Error(t, err)
 	views, err := service.ListTaskViews(context.Background(), workDir)
 	require.NoError(t, err)

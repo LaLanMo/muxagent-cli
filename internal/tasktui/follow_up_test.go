@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
@@ -17,10 +18,20 @@ import (
 func buildCompletedFollowUpModel(t *testing.T, withArtifact bool) (Model, *fakeService, string) {
 	t.Helper()
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	setTaskTUIRuntimePath(t, "codex")
+	_, err := taskconfig.EnsureManagedDefaultAssets()
+	require.NoError(t, err)
 	service := &fakeService{events: make(chan taskruntime.RunEvent, 8)}
 	model := NewModel(service, tempDir, "", nil, "v0.1.0")
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	model = next.(Model)
+	entry := model.selectedTaskConfigEntry()
+	cfg := entry.Config
+	if cfg == nil {
+		cfg, err = entry.LoadConfig()
+		require.NoError(t, err)
+	}
 
 	artifactPath := ""
 	artifactPaths := []string(nil)
@@ -32,7 +43,13 @@ func buildCompletedFollowUpModel(t *testing.T, withArtifact bool) (Model, *fakeS
 
 	now := time.Now().UTC()
 	model.current = &taskdomain.TaskView{
-		Task:            taskdomain.Task{ID: "task-parent", Description: "Parent task", WorkDir: tempDir},
+		Task: taskdomain.Task{
+			ID:          "task-parent",
+			Description: "Parent task",
+			ConfigAlias: entry.Alias,
+			ConfigPath:  entry.Path,
+			WorkDir:     tempDir,
+		},
 		Status:          taskdomain.TaskStatusDone,
 		CurrentNodeName: "done",
 		ArtifactPaths:   artifactPaths,
@@ -50,9 +67,11 @@ func buildCompletedFollowUpModel(t *testing.T, withArtifact bool) (Model, *fakeS
 			},
 		},
 	}
+	model.currentConfig = cfg
 	model.activeTaskID = "task-parent"
 	model.screen = ScreenComplete
 	model.focusRegion = FocusRegionDetail
+	model.seedFollowUpConfigSelection()
 	model.syncComponents()
 	return model, service, artifactPath
 }
@@ -62,10 +81,44 @@ func TestCompleteScreenShowsFollowUpPanelAndDetailHint(t *testing.T) {
 
 	view := strippedView(model.View().Content)
 	assert.Contains(t, view, "Continue from this task")
+	assert.Contains(t, view, "config default")
+	assert.Contains(t, view, "inherited")
 	assert.Contains(t, view, "Creates a new linked task and carries over this task's context.")
 	assert.Contains(t, view, "Follow-up request")
 	assert.Contains(t, view, "Ctrl+X hide")
 	assert.Contains(t, view, "Tab continue")
+}
+
+func TestCompletedTaskOpenSeedsInheritedFollowUpSelection(t *testing.T) {
+	base, _, _ := buildCompletedFollowUpModel(t, false)
+	completed := *base.current
+	cfg := base.currentConfig
+	service := &fakeService{
+		events: make(chan taskruntime.RunEvent, 8),
+		tasks:  []taskdomain.TaskView{completed},
+		openViews: map[string]taskdomain.TaskView{
+			completed.Task.ID: completed,
+		},
+		configs: map[string]*taskconfig.Config{
+			completed.Task.ID: cfg,
+		},
+	}
+
+	model := NewModel(service, base.workDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	next, _ = model.Update(tasksLoadedMsg{tasks: service.tasks})
+	model = next.(Model)
+	model = openFirstTaskFromList(t, model)
+
+	assert.Equal(t, ScreenComplete, model.screen)
+	assert.Equal(t, followUpConfigSelection{
+		Alias:     completed.Task.ConfigAlias,
+		Path:      completed.Task.ConfigPath,
+		Inherited: true,
+	}, model.selectedFollowUpConfigSelection())
+	assert.Contains(t, strippedView(model.View().Content), "config default")
+	assert.Contains(t, strippedView(model.View().Content), "inherited")
 }
 
 func TestCompleteFollowUpFocusedEditorShowsCursor(t *testing.T) {
@@ -86,9 +139,14 @@ func TestCompleteFollowUpCtrlXHidesAndRestoresPanelDraft(t *testing.T) {
 	model.followUp.choice = followUpRowInput
 	model.syncComponents()
 	_ = model.syncInputFocus()
+	next, _ := model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	selection := model.selectedFollowUpConfigSelection()
+	assert.False(t, selection.Inherited)
+	assert.Equal(t, taskconfig.BuiltinIDPlanOnly, selection.Alias)
 	model = typeText(t, model, "Continue with release prep")
 
-	next, _ := model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	model = next.(Model)
 
 	assert.True(t, model.followUp.hidden)
@@ -113,6 +171,7 @@ func TestCompleteFollowUpCtrlXHidesAndRestoresPanelDraft(t *testing.T) {
 	assert.Equal(t, FocusRegionActionPanel, model.focusRegion)
 	assert.Equal(t, followUpEditorSlot("task-parent"), model.editor.Slot())
 	assert.Equal(t, "Continue with release prep", model.editor.Value())
+	assert.Equal(t, selection, model.selectedFollowUpConfigSelection())
 }
 
 func TestCompleteFollowUpRawCtrlXControlCodeHidesPanel(t *testing.T) {
@@ -170,6 +229,36 @@ func TestCompleteFollowUpArtifactsTabRoundTripPreservesDraftAndRefocusesEditor(t
 	assert.Equal(t, "Continue with release prep", model.editor.Value())
 }
 
+func TestCompleteFollowUpCyclesConfigsWithoutChangingNewTaskSelection(t *testing.T) {
+	model, _, _ := buildCompletedFollowUpModel(t, false)
+	model.focusRegion = FocusRegionActionPanel
+	model.followUp.choice = followUpRowInput
+	model.syncComponents()
+
+	next, _ := model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	selection := model.selectedFollowUpConfigSelection()
+	assert.Equal(t, taskconfig.BuiltinIDPlanOnly, selection.Alias)
+	assert.False(t, selection.Inherited)
+	assert.Equal(t, taskconfig.DefaultAlias, model.selectedConfigAlias)
+	assert.Contains(t, strippedView(model.View().Content), "config plan-only")
+	assert.NotContains(t, strippedView(model.View().Content), "config plan-only · inherited")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	selection = model.selectedFollowUpConfigSelection()
+	assert.Equal(t, taskconfig.BuiltinIDSingleRun, selection.Alias)
+	assert.False(t, selection.Inherited)
+	assert.Equal(t, taskconfig.DefaultAlias, model.selectedConfigAlias)
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "config single-run")
+	assert.Contains(t, view, "handle_request")
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = next.(Model)
+	assert.Equal(t, taskconfig.BuiltinIDPlanOnly, model.selectedFollowUpConfigSelection().Alias)
+}
+
 func TestCompleteFollowUpCtrlJInsertsNewlineAndEnterSubmits(t *testing.T) {
 	model, service, _ := buildCompletedFollowUpModel(t, false)
 	model.focusRegion = FocusRegionActionPanel
@@ -187,6 +276,7 @@ func TestCompleteFollowUpCtrlJInsertsNewlineAndEnterSubmits(t *testing.T) {
 
 	assert.Equal(t, "Continue with release\nprep", model.editor.Value())
 	assert.Empty(t, service.dispatched)
+	expectedConfig := model.selectedFollowUpConfigSelection()
 
 	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(Model)
@@ -196,9 +286,32 @@ func TestCompleteFollowUpCtrlJInsertsNewlineAndEnterSubmits(t *testing.T) {
 	assert.Equal(t, taskruntime.CommandStartFollowUp, service.dispatched[0].Type)
 	assert.Equal(t, "task-parent", service.dispatched[0].ParentTaskID)
 	assert.Equal(t, "Continue with release\nprep", service.dispatched[0].Description)
+	assert.Equal(t, expectedConfig.Alias, service.dispatched[0].ConfigAlias)
+	assert.Equal(t, expectedConfig.Path, service.dispatched[0].ConfigPath)
 	assert.Equal(t, ScreenComplete, model.screen)
 	require.NotNil(t, model.pendingRuntimeCmd)
 	assert.Equal(t, pendingRuntimeCommandStartFollowUp, model.pendingRuntimeCmd.kind)
+}
+
+func TestCompleteFollowUpMissingCatalogInheritedSelectionDispatchesStoredParentConfig(t *testing.T) {
+	model, service, _ := buildCompletedFollowUpModel(t, false)
+	model.current.Task.ConfigAlias = "legacy"
+	model.current.Task.ConfigPath = filepath.Join(t.TempDir(), "legacy-config.yaml")
+	model.currentConfig = retryTUIConfig(2)
+	model.seedFollowUpConfigSelection()
+	model.focusRegion = FocusRegionActionPanel
+	model.followUp.choice = followUpRowInput
+	model.syncComponents()
+	_ = model.syncInputFocus()
+	model = typeText(t, model, "Continue with legacy config")
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+	require.Nil(t, cmd())
+	require.Len(t, service.dispatched, 1)
+	assert.Equal(t, "legacy", service.dispatched[0].ConfigAlias)
+	assert.Equal(t, model.current.Task.ConfigPath, service.dispatched[0].ConfigPath)
 }
 
 func TestCompleteFollowUpCommandErrorRestoresPanelAndKeepsDraft(t *testing.T) {
@@ -207,6 +320,11 @@ func TestCompleteFollowUpCommandErrorRestoresPanelAndKeepsDraft(t *testing.T) {
 	model.followUp.choice = followUpRowInput
 	model.syncComponents()
 	_ = model.syncInputFocus()
+	next, _ := model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	next, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	expectedConfig := model.selectedFollowUpConfigSelection()
 
 	model = typeText(t, model, "Continue with release prep")
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -227,6 +345,7 @@ func TestCompleteFollowUpCommandErrorRestoresPanelAndKeepsDraft(t *testing.T) {
 	assert.Equal(t, followUpRowInput, model.followUp.choice)
 	assert.Equal(t, "Continue with release prep", model.editor.Value())
 	assert.Equal(t, "cannot start follow-up", model.errorText)
+	assert.Equal(t, expectedConfig, model.selectedFollowUpConfigSelection())
 	assert.Nil(t, model.pendingRuntimeCmd)
 }
 
@@ -236,6 +355,9 @@ func TestCompleteFollowUpCommandErrorKeepsHiddenState(t *testing.T) {
 	model.followUp.choice = followUpRowInput
 	model.syncComponents()
 	_ = model.syncInputFocus()
+	next, _ := model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = next.(Model)
+	expectedConfig := model.selectedFollowUpConfigSelection()
 
 	model = typeText(t, model, "Continue with release prep")
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -259,6 +381,7 @@ func TestCompleteFollowUpCommandErrorKeepsHiddenState(t *testing.T) {
 	assert.Equal(t, FocusRegionDetail, model.focusRegion)
 	assert.True(t, model.followUp.hidden)
 	assert.Equal(t, "cannot start follow-up", model.errorText)
+	assert.Equal(t, expectedConfig, model.selectedFollowUpConfigSelection())
 	assert.Nil(t, model.pendingRuntimeCmd)
 }
 
@@ -301,6 +424,7 @@ func TestCompleteFollowUpTaskCompletedReshowsPanel(t *testing.T) {
 	model = next.(Model)
 
 	assert.False(t, model.followUp.hidden)
+	assert.True(t, model.selectedFollowUpConfigSelection().Inherited)
 	assert.Contains(t, strippedView(model.View().Content), "Continue from this task")
 }
 

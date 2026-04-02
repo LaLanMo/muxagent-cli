@@ -1390,6 +1390,59 @@ func TestTaskTUISingleRunFollowUpUsesHandleRequestEndToEnd(t *testing.T) {
 	session.quit(t)
 }
 
+func TestTaskTUIFollowUpCanSwitchConfigEndToEnd(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	setupArtifactTUIRuntime(t, moduleRoot, workDir, "slow-happy", false)
+
+	catalog, err := taskconfig.LoadCatalog()
+	require.NoError(t, err)
+	singleRunEntry, ok := catalog.Entry(taskconfig.BuiltinIDSingleRun)
+	require.True(t, ok)
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 180, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Parent switched follow-up task")
+	session.approvePlan(t)
+	session.waitForAll(t, 20*time.Second, "Task completed successfully", "Continue from this task", "Tab continue")
+
+	session.sendAndWait(t, "\t", 5*time.Second)
+	session.waitForAll(t, 5*time.Second, "Enter submit", "Ctrl+P/N config", "config default", "inherited")
+
+	session.sendAndWait(t, "\x0e", 5*time.Second)
+	session.waitForAll(t, 5*time.Second, "plan-only · runtime codex")
+
+	session.sendAndWait(t, "\x0e", 5*time.Second)
+	session.waitForAll(t, 5*time.Second, "single-run · runtime codex", "handle_request", "Ctrl+P/N config")
+
+	session.typeText(t, "Child switched to single-run")
+	beforeChildStart := session.markOutput()
+	session.send(t, "\r")
+	session.waitForFreshAll(t, 20*time.Second, beforeChildStart, "Task completed successfully", "Continue from this task")
+
+	tasks := waitForTaskCount(t, workDir, 2)
+	parentTask := findTaskByDescription(t, tasks, "Parent switched follow-up task")
+	childTask := findTaskByDescription(t, tasks, "Child switched to single-run")
+	assert.Equal(t, taskconfig.DefaultAlias, parentTask.ConfigAlias)
+	assert.Equal(t, taskconfig.BuiltinIDSingleRun, childTask.ConfigAlias)
+	assert.Equal(t, singleRunEntry.Path, childTask.ConfigPath)
+
+	_, childRuns, childView, err := loadTaskStateByID(workDir, childTask.ID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusDone, childView.Status)
+	assertNodeRunCounts(t, childRuns, map[string]int{
+		"handle_request": 1,
+		"done":           1,
+	})
+
+	session.quit(t)
+}
+
 func TestTaskTUISmallTerminalCompletedArtifactsTabSwitchAndReopen(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)

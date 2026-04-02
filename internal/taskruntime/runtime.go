@@ -129,7 +129,7 @@ func (s *Service) handleCommand(ctx context.Context, cmd RunCommand) error {
 	case CommandStartTask:
 		return s.startTask(ctx, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath, firstNonEmpty(cmd.WorkDir, s.workDir), cmd.UseWorktree)
 	case CommandStartFollowUp:
-		return s.startFollowUpTask(ctx, cmd.ParentTaskID, cmd.Description)
+		return s.startFollowUpTask(ctx, cmd.ParentTaskID, cmd.Description, cmd.ConfigAlias, cmd.ConfigPath)
 	case CommandSubmitInput:
 		return s.submitInput(ctx, cmd.TaskID, cmd.NodeRunID, cmd.Payload)
 	case CommandRetryNode:
@@ -147,7 +147,7 @@ func (s *Service) startTask(ctx context.Context, description, configAlias, confi
 	return s.startTaskWithInheritedLaunch(ctx, "", description, configAlias, configPath, workDir, useWorktree)
 }
 
-func (s *Service) startFollowUpTask(ctx context.Context, parentTaskID, description string) error {
+func (s *Service) startFollowUpTask(ctx context.Context, parentTaskID, description, configAlias, configPath string) error {
 	parentTaskID = strings.TrimSpace(parentTaskID)
 	if parentTaskID == "" {
 		return errors.New("parent task id is required")
@@ -163,8 +163,17 @@ func (s *Service) startFollowUpTask(ctx context.Context, parentTaskID, descripti
 	if strings.TrimSpace(parentTask.ConfigAlias) == "" || strings.TrimSpace(parentTask.ConfigPath) == "" {
 		return fmt.Errorf("parent task %q is missing launch metadata", parentTaskID)
 	}
+	configAlias = strings.TrimSpace(configAlias)
+	configPath = strings.TrimSpace(configPath)
+	switch {
+	case configAlias == "" && configPath == "":
+		configAlias = parentTask.ConfigAlias
+		configPath = parentTask.ConfigPath
+	case configAlias == "" || configPath == "":
+		return errors.New("follow-up task config alias and path must be provided together")
+	}
 	useWorktree := strings.TrimSpace(parentTask.ExecutionDir) != "" && parentTask.ExecutionDir != parentTask.WorkDir
-	return s.startTaskWithInheritedLaunch(ctx, parentTaskID, description, parentTask.ConfigAlias, parentTask.ConfigPath, parentTask.WorkDir, useWorktree)
+	return s.startTaskWithInheritedLaunch(ctx, parentTaskID, description, configAlias, configPath, parentTask.WorkDir, useWorktree)
 }
 
 func (s *Service) startTaskWithInheritedLaunch(ctx context.Context, parentTaskID, description, configAlias, configPath, workDir string, useWorktree bool) (err error) {

@@ -17,6 +17,9 @@ func (m *Model) activateTask(view taskdomain.TaskView, cfg *taskconfig.Config, i
 	}
 	m.currentInput = input
 	m.resetInputState()
+	if view.Status == taskdomain.TaskStatusDone {
+		m.seedFollowUpConfigSelection()
+	}
 	m.artifactErrorText = ""
 	m.clearArtifactCopyStatus()
 	m.setDetailScreen(detailScreenForActiveTask(m.current, m.currentInput), true)

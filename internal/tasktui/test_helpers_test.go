@@ -182,6 +182,7 @@ type fakeService struct {
 	dispatched []taskruntime.RunCommand
 	tasks      []taskdomain.TaskView
 	openViews  map[string]taskdomain.TaskView
+	configs    map[string]*taskconfig.Config
 	inputs     map[string]*taskruntime.InputRequest
 }
 
@@ -192,7 +193,7 @@ func (f *fakeService) ListTaskViews(ctx context.Context, workDir string) ([]task
 	return append([]taskdomain.TaskView(nil), f.tasks...), nil
 }
 func (f *fakeService) LoadTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, *taskconfig.Config, error) {
-	return f.openViews[taskID], nil, nil
+	return f.openViews[taskID], f.configs[taskID], nil
 }
 func (f *fakeService) BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*taskruntime.InputRequest, error) {
 	return f.inputs[nodeRunID], nil

@@ -182,6 +182,35 @@ func (m Model) newTaskSubtitle() string {
 	return subtitle
 }
 
+func (m Model) followUpSubtitle() string {
+	selection := m.selectedFollowUpConfigSelection()
+	alias := strings.TrimSpace(selection.Alias)
+	if alias == "" {
+		return ""
+	}
+	cfg, path := m.selectedFollowUpConfig()
+	parts := []string{"config " + alias}
+	if selection.Inherited {
+		parts = append(parts, "inherited")
+	}
+	if runtime := strings.TrimSpace(string(taskConfigRuntime(cfg))); runtime != "" {
+		parts = append(parts, "runtime "+runtime)
+	}
+	if cfg != nil && len(cfg.Topology.Nodes) > 0 {
+		nodeNames := make([]string, 0, len(cfg.Topology.Nodes))
+		for _, node := range cfg.Topology.Nodes {
+			nodeNames = append(nodeNames, node.Name)
+		}
+		parts = append(parts, strings.Join(nodeNames, ", "))
+	} else if path != "" {
+		parts = append(parts, "source "+filepath.Base(path))
+	}
+	if !selection.Inherited && cfg == nil {
+		parts = append(parts, "unavailable")
+	}
+	return strings.Join(parts, " · ")
+}
+
 func (m Model) renderApprovalPanel(surface panelSurface) string {
 	return m.buildApprovalPanel(surface, m.detailEditorSurfaceSpec(surface)).View
 }
@@ -259,6 +288,7 @@ func (m Model) buildFollowUpPanel(surface panelSurface, editorSpec editorSurface
 	innerWidth := max(1, width-panelStyle.GetHorizontalFrameSize())
 	content := []string{
 		renderOpaquePanelSurface(innerWidth, tuiTheme.Panel.Title.Render("Continue from this task")),
+		renderOpaquePanelSurface(innerWidth, tuiTheme.Modal.Subtitle.Render(m.followUpSubtitle())),
 		renderOpaqueMeasuredPanelText(innerWidth, tuiTheme.Panel.Body, "Creates a new linked task and carries over this task's context."),
 		"",
 	}

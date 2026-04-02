@@ -84,6 +84,7 @@ func (m *Model) handleEvent(event taskruntime.RunEvent) {
 	case taskruntime.EventTaskCompleted:
 		m.clearTaskProgress(event.TaskView)
 		m.startupText = ""
+		m.seedFollowUpConfigSelection()
 		m.followUp.hidden = false
 		m.setDetailScreen(ScreenComplete, true)
 		m.autoScrollDetail = true
