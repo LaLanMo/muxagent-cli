@@ -247,11 +247,15 @@ func (m Model) tabHint() string {
 
 func (m Model) detailHint(base string) string {
 	toggleHint := m.completeFollowUpToggleHint()
+	lineageHint := m.detailLineageHint()
 	switch m.focusRegion {
 	case FocusRegionDetail:
 		parts := []string{"↑↓ scroll"}
 		if base != "" {
 			parts = append(parts, base)
+		}
+		if lineageHint != "" {
+			parts = append(parts, lineageHint)
 		}
 		if toggleHint != "" {
 			parts = append(parts, toggleHint)
@@ -268,6 +272,9 @@ func (m Model) detailHint(base string) string {
 		if base != "" {
 			parts = append(parts, base)
 		}
+		if lineageHint != "" {
+			parts = append(parts, lineageHint)
+		}
 		if toggleHint != "" {
 			parts = append(parts, toggleHint)
 		}
@@ -282,6 +289,9 @@ func (m Model) detailHint(base string) string {
 		parts := []string{"↑↓ scroll", m.artifactCopyHint("c copy")}
 		if base != "" {
 			parts = append(parts, base)
+		}
+		if lineageHint != "" {
+			parts = append(parts, lineageHint)
 		}
 		if toggleHint != "" {
 			parts = append(parts, toggleHint)
@@ -332,6 +342,13 @@ func (m Model) detailHint(base string) string {
 	default:
 		return joinHintParts(base)
 	}
+}
+
+func (m Model) detailLineageHint() string {
+	if !m.canOpenDirectParent() {
+		return ""
+	}
+	return "p parent"
 }
 
 func (m Model) renderDetailPanel(surface panelSurface) string {

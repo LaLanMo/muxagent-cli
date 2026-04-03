@@ -76,6 +76,50 @@ func buildCompletedFollowUpModel(t *testing.T, withArtifact bool) (Model, *fakeS
 	return model, service, artifactPath
 }
 
+func buildChildFollowUpDetailModel(t *testing.T) (Model, *fakeService) {
+	t.Helper()
+	tempDir := t.TempDir()
+	service := &fakeService{
+		events: make(chan taskruntime.RunEvent, 8),
+		openViews: map[string]taskdomain.TaskView{
+			"task-parent": {
+				Task: taskdomain.Task{
+					ID:          "task-parent",
+					Description: "Parent task",
+					WorkDir:     tempDir,
+				},
+				Status:          taskdomain.TaskStatusDone,
+				CurrentNodeName: "done",
+				NodeRuns: []taskdomain.NodeRunView{
+					{NodeRun: taskdomain.NodeRun{ID: "run-parent", TaskID: "task-parent", NodeName: "done", Status: taskdomain.NodeRunDone, StartedAt: time.Now().UTC(), CompletedAt: timePtr(time.Now().UTC())}},
+				},
+			},
+		},
+	}
+	model := NewModel(service, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task: taskdomain.Task{
+			ID:          "task-child",
+			Description: "Child task",
+			WorkDir:     tempDir,
+		},
+		Status:                taskdomain.TaskStatusRunning,
+		CurrentNodeName:       "implement",
+		ParentTaskID:          "task-parent",
+		ParentTaskDescription: "Parent task",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-child", TaskID: "task-child", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.activeTaskID = "task-child"
+	model.screen = ScreenRunning
+	model.focusRegion = FocusRegionDetail
+	model.syncComponents()
+	return model, service
+}
+
 func TestCompleteScreenShowsFollowUpPanelAndDetailHint(t *testing.T) {
 	model, _, _ := buildCompletedFollowUpModel(t, false)
 
@@ -87,6 +131,14 @@ func TestCompleteScreenShowsFollowUpPanelAndDetailHint(t *testing.T) {
 	assert.Contains(t, view, "Follow-up request")
 	assert.Contains(t, view, "Ctrl+X hide")
 	assert.Contains(t, view, "Tab continue")
+}
+
+func TestChildTaskShowsDirectParentHint(t *testing.T) {
+	model, _ := buildChildFollowUpDetailModel(t)
+
+	view := strippedView(model.View().Content)
+	assert.Contains(t, view, "follow-up of Parent task")
+	assert.Contains(t, view, "p parent")
 }
 
 func TestCompletedTaskOpenSeedsInheritedFollowUpSelection(t *testing.T) {
@@ -473,4 +525,38 @@ func TestCompleteFollowUpTaskCreatedActivatesChildTaskAndClearsDraft(t *testing.
 	assert.Equal(t, "", model.editor.Slot())
 	_, ok := model.editor.DraftValue(followUpEditorSlot("task-parent"))
 	assert.False(t, ok)
+}
+
+func TestOpenParentShortcutLoadsDirectParentTask(t *testing.T) {
+	model, _ := buildChildFollowUpDetailModel(t)
+
+	next, cmd := model.Update(tea.KeyPressMsg{Text: "p", Code: 'p'})
+	model = next.(Model)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	require.IsType(t, taskOpenedMsg{}, msg)
+	next, _ = model.Update(msg)
+	model = next.(Model)
+
+	require.NotNil(t, model.current)
+	assert.Equal(t, "task-parent", model.current.Task.ID)
+	assert.Equal(t, "task-parent", model.activeTaskID)
+	assert.Equal(t, ScreenComplete, model.screen)
+}
+
+func TestOpenParentShortcutDoesNotHijackFollowUpEditor(t *testing.T) {
+	model, _, _ := buildCompletedFollowUpModel(t, false)
+	model.current.ParentTaskID = "task-parent-older"
+	model.current.ParentTaskDescription = "Older parent task"
+	model.focusRegion = FocusRegionActionPanel
+	model.followUp.choice = followUpRowInput
+	model.syncComponents()
+	_ = model.syncInputFocus()
+
+	next, _ := model.Update(tea.KeyPressMsg{Text: "p", Code: 'p'})
+	model = next.(Model)
+
+	assert.Equal(t, "p", model.editor.Value())
+	assert.Equal(t, "task-parent", model.current.Task.ID)
 }

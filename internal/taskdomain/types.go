@@ -112,14 +112,16 @@ type ClarificationAnswer struct {
 }
 
 type TaskView struct {
-	Task            Task
-	Status          TaskStatus
-	CurrentNodeName string
-	CurrentNodeType taskconfig.NodeType
-	CurrentIssue    *TaskIssue
-	ArtifactPaths   []string
-	NodeRuns        []NodeRunView
-	BlockedSteps    []BlockedStep
+	Task                  Task
+	Status                TaskStatus
+	CurrentNodeName       string
+	CurrentNodeType       taskconfig.NodeType
+	CurrentIssue          *TaskIssue
+	ParentTaskID          string
+	ParentTaskDescription string
+	ArtifactPaths         []string
+	NodeRuns              []NodeRunView
+	BlockedSteps          []BlockedStep
 }
 
 type NodeRunView struct {

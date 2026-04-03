@@ -451,8 +451,13 @@ func TestServiceStartFollowUpCreatesChildTaskAndPersistsLineage(t *testing.T) {
 	assert.Equal(t, parentTask.ConfigPath, childTask.ConfigPath)
 	assert.Equal(t, parentTask.WorkDir, childTask.WorkDir)
 	assert.Equal(t, parentTask.ExecutionDir, childTask.ExecutionDir)
+	require.NotNil(t, childCreated.TaskView)
+	assert.Equal(t, parentCompleted.TaskID, childCreated.TaskView.ParentTaskID)
+	assert.Equal(t, parentTask.Description, childCreated.TaskView.ParentTaskDescription)
 	require.NotNil(t, childCompleted.TaskView)
 	assert.Equal(t, taskdomain.TaskStatusDone, childCompleted.TaskView.Status)
+	assert.Equal(t, parentCompleted.TaskID, childCompleted.TaskView.ParentTaskID)
+	assert.Equal(t, parentTask.Description, childCompleted.TaskView.ParentTaskDescription)
 
 	childRuns, err := service.store.ListNodeRunsByTask(context.Background(), childCreated.TaskID)
 	require.NoError(t, err)

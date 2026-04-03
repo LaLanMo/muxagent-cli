@@ -241,6 +241,9 @@ func (s *Service) startTaskWithInheritedLaunch(ctx context.Context, parentTaskID
 	committed = true
 
 	view := taskdomain.DeriveTaskView(task, materialized.Config, []taskdomain.NodeRun{nodeRun}, nil)
+	if loadedView, _, loadErr := s.LoadTaskView(ctx, taskID); loadErr == nil {
+		view = loadedView
+	}
 	s.publish(RunEvent{
 		Type:     EventTaskCreated,
 		TaskID:   taskID,

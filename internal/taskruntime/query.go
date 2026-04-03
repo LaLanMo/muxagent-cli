@@ -50,7 +50,11 @@ func (s *Service) LoadTaskView(ctx context.Context, taskID string) (taskdomain.T
 	if err != nil {
 		return taskdomain.TaskView{}, nil, err
 	}
-	return taskdomain.DeriveTaskView(task, cfg, runs, blockedSteps), cfg, nil
+	view := taskdomain.DeriveTaskView(task, cfg, runs, blockedSteps)
+	if err := s.loadTaskLineage(ctx, &view); err != nil {
+		return taskdomain.TaskView{}, nil, err
+	}
+	return view, cfg, nil
 }
 
 func (s *Service) BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*InputRequest, error) {
@@ -82,6 +86,26 @@ func (s *Service) BuildInputRequest(ctx context.Context, taskID, nodeRunID strin
 func (s *Service) refreshTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, error) {
 	view, _, err := s.LoadTaskView(ctx, taskID)
 	return view, err
+}
+
+func (s *Service) loadTaskLineage(ctx context.Context, view *taskdomain.TaskView) error {
+	if view == nil {
+		return nil
+	}
+	parentTaskID, err := s.store.GetFollowUpParentTaskID(ctx, view.Task.ID)
+	if err != nil {
+		return err
+	}
+	if parentTaskID == "" {
+		return nil
+	}
+	parentTask, err := s.store.GetTask(ctx, parentTaskID)
+	if err != nil {
+		return err
+	}
+	view.ParentTaskID = parentTaskID
+	view.ParentTaskDescription = parentTask.Description
+	return nil
 }
 
 func (s *Service) buildInputRequest(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, runs []taskdomain.NodeRun, run taskdomain.NodeRun) (*InputRequest, error) {

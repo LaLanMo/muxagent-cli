@@ -1328,6 +1328,35 @@ func TestTaskTUICompletedTaskCanStartFollowUpEndToEnd(t *testing.T) {
 	session.quit(t)
 }
 
+func TestTaskTUIChildTaskCanOpenDirectParentFromDetail(t *testing.T) {
+	moduleRoot := moduleRoot(t)
+	binaryPath := buildMuxagentBinary(t, moduleRoot)
+
+	workDir := canonicalPath(t, t.TempDir())
+	setupArtifactTUIRuntime(t, moduleRoot, workDir, "happy", true)
+
+	session := startTUISession(t, binaryPath, workDir)
+	session.resize(t, 180, 39)
+	session.waitForAll(t, 10*time.Second, "No tasks in this working directory yet.", "new task")
+	session.send(t, "\r")
+	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
+	session.submitNewTask(t, "Parent follow-up task")
+	session.approvePlan(t)
+	session.waitForAll(t, 15*time.Second, "Task completed successfully", "Continue from this task", "Tab continue")
+
+	session.sendAndWait(t, "\t", 5*time.Second)
+	session.typeText(t, "Child follow-up task")
+	beforeChildApproval := session.resetOutput()
+	session.send(t, "\r")
+	session.waitForFreshAll(t, 10*time.Second, beforeChildApproval, "approve_plan", "awaiting approval", "follow-up of Parent follow-up task", "p parent")
+
+	beforeParentOpen := session.resetOutput()
+	session.send(t, "p")
+	session.waitForFreshAll(t, 10*time.Second, beforeParentOpen, "Parent follow-up task", "Continue from this task", "Ctrl+X hide")
+
+	session.quit(t)
+}
+
 func TestTaskTUISingleRunFollowUpUsesHandleRequestEndToEnd(t *testing.T) {
 	moduleRoot := moduleRoot(t)
 	binaryPath := buildMuxagentBinary(t, moduleRoot)

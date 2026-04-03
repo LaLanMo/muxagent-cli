@@ -240,3 +240,32 @@ func TestWideDetailHeaderKeepsMeasuredTitleInsideFullWidthFrame(t *testing.T) {
 	assert.LessOrEqual(t, ansi.StringWidth(strings.TrimRight(headerLines[1], " ")), detailTitleMeasureWidth(innerWidth))
 	assert.Equal(t, innerWidth, ansi.StringWidth(headerLines[len(headerLines)-1]))
 }
+
+func TestDetailHeaderShowsDirectParentLineage(t *testing.T) {
+	tempDir := t.TempDir()
+
+	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, tempDir, "", nil, "v0.1.0")
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model = next.(Model)
+	model.current = &taskdomain.TaskView{
+		Task: taskdomain.Task{
+			ID:          "task-child",
+			Description: "Child task",
+			WorkDir:     tempDir,
+		},
+		Status:                taskdomain.TaskStatusRunning,
+		CurrentNodeName:       "implement",
+		ParentTaskID:          "task-parent",
+		ParentTaskDescription: "Parent task",
+		NodeRuns: []taskdomain.NodeRunView{
+			{NodeRun: taskdomain.NodeRun{ID: "run-1", TaskID: "task-child", NodeName: "implement", Status: taskdomain.NodeRunRunning, StartedAt: time.Now().UTC()}},
+		},
+	}
+	model.screen = ScreenRunning
+	model.syncComponents()
+
+	innerWidth, _ := innerSize(120, 32)
+	header := strippedView(model.renderDetailHeader(detailContentWidth(innerWidth, model.activeDetailTab)))
+
+	assert.Contains(t, header, "follow-up of Parent task")
+}

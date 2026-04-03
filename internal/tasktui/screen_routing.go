@@ -28,6 +28,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.syncComponents()
 		return m, cmd
 	}
+	if cmd, handled := m.handleLineageNavigationKey(msg); handled {
+		m.syncComponents()
+		return m, cmd
+	}
 
 	return m.handleScreenKey(msg)
 }
@@ -51,6 +55,25 @@ func (m *Model) handleTabSwitchKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.activeDetailTab = DetailTabArtifacts
 		m.focusRegion = FocusRegionArtifactFiles
 		return m.syncInputFocus(), true
+	}
+}
+
+func (m *Model) handleLineageNavigationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if !m.canOpenDirectParent() || !keyMatches(msg, m.keys.openParent) {
+		return nil, false
+	}
+	return m.openTaskCmd(m.current.ParentTaskID), true
+}
+
+func (m Model) canOpenDirectParent() bool {
+	if !m.isDetailScreen() || m.current == nil || m.current.ParentTaskID == "" {
+		return false
+	}
+	switch m.focusRegion {
+	case FocusRegionDetail, FocusRegionArtifactFiles, FocusRegionArtifactPreview:
+		return true
+	default:
+		return false
 	}
 }
 

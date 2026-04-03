@@ -21,11 +21,15 @@ func (m Model) renderDetailHeader(width int) string {
 	}
 	title := tuiTheme.Header.TaskLabel.Render(clampWrappedText("Task: "+m.current.Task.Description, detailTitleMeasureWidth(width), 2))
 	summary := m.renderDetailSummaryLine(width)
+	lineage := m.renderDetailLineageLine(width)
 	stageStrip := m.renderDetailStageStrip(width)
 	divider := tuiTheme.App.Divider.Render(strings.Repeat("─", max(8, width)))
 	lines := []string{title}
 	if strings.TrimSpace(summary) != "" {
 		lines = append(lines, summary)
+	}
+	if strings.TrimSpace(lineage) != "" {
+		lines = append(lines, lineage)
 	}
 	if strings.TrimSpace(stageStrip) != "" {
 		lines = append(lines, stageStrip)
@@ -63,6 +67,18 @@ func (m Model) renderDetailSummaryLine(width int) string {
 		parts = append(parts, tuiTheme.Header.MetaValue.Render("config "+alias))
 	}
 	return fitLine(ansi.Truncate(strings.Join(parts, tuiTheme.Header.MetaLabel.Render(" · ")), width, "…"), width)
+}
+
+func (m Model) renderDetailLineageLine(width int) string {
+	if m.current == nil || strings.TrimSpace(m.current.ParentTaskID) == "" {
+		return ""
+	}
+	label := taskListPrimaryDescription(strings.TrimSpace(m.current.ParentTaskDescription))
+	if label == "" {
+		label = "(no description)"
+	}
+	line := tuiTheme.Header.MetaLabel.Render("follow-up of ") + tuiTheme.Header.MetaStrong.Render(label)
+	return fitLine(ansi.Truncate(line, width, "…"), width)
 }
 
 func detailCurrentNodeSummary(view taskdomain.TaskView) string {

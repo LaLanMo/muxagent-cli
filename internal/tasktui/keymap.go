@@ -14,6 +14,7 @@ type appKeyMap struct {
 	prevQuestion    key.Binding
 	nextQuestion    key.Binding
 	copy            key.Binding
+	openParent      key.Binding
 	nextFocus       key.Binding
 	toggleDetailTab key.Binding
 	toggleWorktree  key.Binding
@@ -37,6 +38,7 @@ func newAppKeyMap() appKeyMap {
 		prevQuestion:    key.NewBinding(key.WithKeys("ctrl+p")),
 		nextQuestion:    key.NewBinding(key.WithKeys("ctrl+n")),
 		copy:            key.NewBinding(key.WithKeys("c")),
+		openParent:      key.NewBinding(key.WithKeys("p")),
 		nextFocus:       key.NewBinding(key.WithKeys("tab")),
 		toggleDetailTab: key.NewBinding(key.WithKeys("shift+tab")),
 		toggleWorktree:  key.NewBinding(key.WithKeys("ctrl+t")),
