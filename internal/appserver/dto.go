@@ -11,23 +11,25 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
 
-type taskDto struct {
-	ID           string    `json:"id"`
-	Description  string    `json:"description"`
-	ConfigAlias  string    `json:"config_alias"`
-	ConfigPath   string    `json:"config_path"`
-	WorkDir      string    `json:"work_dir"`
-	ExecutionDir string    `json:"execution_dir"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+type taskDTO struct {
+	ID                    string    `json:"id"`
+	Description           string    `json:"description"`
+	ConfigAlias           string    `json:"config_alias"`
+	ConfigPath            string    `json:"config_path"`
+	WorkDir               string    `json:"work_dir"`
+	ExecutionDir          string    `json:"execution_dir"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+	ParentTaskID          string    `json:"parent_task_id,omitempty"`
+	ParentTaskDescription string    `json:"parent_task_description,omitempty"`
 }
 
-type triggeredByDto struct {
+type triggeredByDTO struct {
 	NodeRunID string `json:"node_run_id"`
 	Reason    string `json:"reason"`
 }
 
-type nodeRunViewDto struct {
+type nodeRunViewDTO struct {
 	ID             string                             `json:"id"`
 	TaskID         string                             `json:"task_id"`
 	NodeName       string                             `json:"node_name"`
@@ -36,21 +38,21 @@ type nodeRunViewDto struct {
 	FailureReason  string                             `json:"failure_reason,omitempty"`
 	Result         map[string]interface{}             `json:"result,omitempty"`
 	Clarifications []taskdomain.ClarificationExchange `json:"clarifications,omitempty"`
-	TriggeredBy    *triggeredByDto                    `json:"triggered_by,omitempty"`
+	TriggeredBy    *triggeredByDTO                    `json:"triggered_by,omitempty"`
 	StartedAt      time.Time                          `json:"started_at"`
 	CompletedAt    *time.Time                         `json:"completed_at,omitempty"`
 	ArtifactPaths  []string                           `json:"artifact_paths,omitempty"`
 }
 
-type blockedStepDto struct {
+type blockedStepDTO struct {
 	NodeName    string          `json:"node_name"`
 	Iteration   int             `json:"iteration"`
 	Reason      string          `json:"reason"`
-	TriggeredBy *triggeredByDto `json:"triggered_by,omitempty"`
+	TriggeredBy *triggeredByDTO `json:"triggered_by,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
-type taskIssueDto struct {
+type taskIssueDTO struct {
 	Kind       string    `json:"kind"`
 	NodeName   string    `json:"node_name"`
 	Iteration  int       `json:"iteration"`
@@ -58,23 +60,23 @@ type taskIssueDto struct {
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
-type taskViewDto struct {
-	Task            taskDto          `json:"task"`
+type taskViewDTO struct {
+	Task            taskDTO          `json:"task"`
 	Status          string           `json:"status"`
 	CurrentNodeName string           `json:"current_node_name"`
 	CurrentNodeType string           `json:"current_node_type"`
-	CurrentIssue    *taskIssueDto    `json:"current_issue,omitempty"`
+	CurrentIssue    *taskIssueDTO    `json:"current_issue,omitempty"`
 	ArtifactPaths   []string         `json:"artifact_paths,omitempty"`
-	NodeRuns        []nodeRunViewDto `json:"node_runs,omitempty"`
-	BlockedSteps    []blockedStepDto `json:"blocked_steps,omitempty"`
+	NodeRuns        []nodeRunViewDTO `json:"node_runs,omitempty"`
+	BlockedSteps    []blockedStepDTO `json:"blocked_steps,omitempty"`
 }
 
-type configViewDto struct {
+type configViewDTO struct {
 	Path   string             `json:"path"`
 	Config *taskconfig.Config `json:"config,omitempty"`
 }
 
-type inputRequestDto struct {
+type inputRequestDTO struct {
 	Kind          string                             `json:"kind"`
 	TaskID        string                             `json:"task_id"`
 	NodeRunID     string                             `json:"node_run_id"`
@@ -84,7 +86,7 @@ type inputRequestDto struct {
 	ArtifactPaths []string                           `json:"artifact_paths,omitempty"`
 }
 
-type messagePartDto struct {
+type messagePartDTO struct {
 	MessageID string `json:"message_id"`
 	PartID    string `json:"part_id"`
 	Role      string `json:"role"`
@@ -92,13 +94,13 @@ type messagePartDto struct {
 	Text      string `json:"text"`
 }
 
-type toolDiffDto struct {
+type toolDiffDTO struct {
 	Path    string  `json:"path"`
 	OldText *string `json:"old_text,omitempty"`
 	NewText string  `json:"new_text"`
 }
 
-type toolCallDto struct {
+type toolCallDTO struct {
 	CallID        string        `json:"call_id"`
 	ParentCallID  string        `json:"parent_call_id,omitempty"`
 	Name          string        `json:"name"`
@@ -109,22 +111,22 @@ type toolCallDto struct {
 	OutputText    string        `json:"output_text,omitempty"`
 	ErrorText     string        `json:"error_text,omitempty"`
 	Paths         []string      `json:"paths,omitempty"`
-	Diffs         []toolDiffDto `json:"diffs,omitempty"`
+	Diffs         []toolDiffDTO `json:"diffs,omitempty"`
 	RawInputJSON  string        `json:"raw_input_json,omitempty"`
 	RawOutputJSON string        `json:"raw_output_json,omitempty"`
 }
 
-type planStepDto struct {
+type planStepDTO struct {
 	Text   string `json:"text"`
 	Status string `json:"status"`
 }
 
-type planSnapshotDto struct {
+type planSnapshotDTO struct {
 	PlanID string        `json:"plan_id"`
-	Steps  []planStepDto `json:"steps,omitempty"`
+	Steps  []planStepDTO `json:"steps,omitempty"`
 }
 
-type usageSnapshotDto struct {
+type usageSnapshotDTO struct {
 	InputTokens       int64 `json:"input_tokens"`
 	CachedInputTokens int64 `json:"cached_input_tokens"`
 	OutputTokens      int64 `json:"output_tokens"`
@@ -132,39 +134,39 @@ type usageSnapshotDto struct {
 	DurationMS        int64 `json:"duration_ms"`
 }
 
-type streamEventDto struct {
+type streamEventDTO struct {
 	Kind      string            `json:"kind"`
 	SessionID string            `json:"session_id,omitempty"`
 	Raw       string            `json:"raw,omitempty"`
-	Message   *messagePartDto   `json:"message,omitempty"`
-	Tool      *toolCallDto      `json:"tool,omitempty"`
-	Plan      *planSnapshotDto  `json:"plan,omitempty"`
-	Usage     *usageSnapshotDto `json:"usage,omitempty"`
+	Message   *messagePartDTO   `json:"message,omitempty"`
+	Tool      *toolCallDTO      `json:"tool,omitempty"`
+	Plan      *planSnapshotDTO  `json:"plan,omitempty"`
+	Usage     *usageSnapshotDTO `json:"usage,omitempty"`
 }
 
-type progressInfoDto struct {
+type progressInfoDTO struct {
 	Message   string           `json:"message,omitempty"`
 	SessionID string           `json:"session_id,omitempty"`
-	Events    []streamEventDto `json:"events,omitempty"`
+	Events    []streamEventDTO `json:"events,omitempty"`
 }
 
-type runErrorDto struct {
+type runErrorDTO struct {
 	Message string `json:"message"`
 }
 
-type runEventDto struct {
+type runEventDTO struct {
 	Type         string             `json:"type"`
 	TaskID       string             `json:"task_id,omitempty"`
 	NodeRunID    string             `json:"node_run_id,omitempty"`
 	NodeName     string             `json:"node_name,omitempty"`
-	TaskView     *taskViewDto       `json:"task_view,omitempty"`
+	TaskView     *taskViewDTO       `json:"task_view,omitempty"`
 	Config       *taskconfig.Config `json:"config,omitempty"`
-	Progress     *progressInfoDto   `json:"progress,omitempty"`
-	InputRequest *inputRequestDto   `json:"input_request,omitempty"`
-	Error        *runErrorDto       `json:"error,omitempty"`
+	Progress     *progressInfoDTO   `json:"progress,omitempty"`
+	InputRequest *inputRequestDTO   `json:"input_request,omitempty"`
+	Error        *runErrorDTO       `json:"error,omitempty"`
 }
 
-type configCatalogEntryDto struct {
+type configCatalogEntryDTO struct {
 	Alias       string              `json:"alias"`
 	BundlePath  string              `json:"bundle_path,omitempty"`
 	ConfigPath  string              `json:"config_path"`
@@ -179,7 +181,7 @@ type configCatalogEntryDto struct {
 	Launchable  bool                `json:"launchable"`
 }
 
-type artifactRefDto struct {
+type artifactRefDTO struct {
 	TaskID       string `json:"task_id"`
 	NodeRunID    string `json:"node_run_id,omitempty"`
 	NodeName     string `json:"node_name,omitempty"`
@@ -192,17 +194,17 @@ type artifactRefDto struct {
 	Markdown     bool   `json:"markdown"`
 }
 
-func taskViewToDTO(view taskdomain.TaskView) taskViewDto {
-	nodeRuns := make([]nodeRunViewDto, 0, len(view.NodeRuns))
+func taskViewToDTO(view taskdomain.TaskView) taskViewDTO {
+	nodeRuns := make([]nodeRunViewDTO, 0, len(view.NodeRuns))
 	for _, run := range view.NodeRuns {
 		nodeRuns = append(nodeRuns, nodeRunViewToDTO(run))
 	}
-	blockedSteps := make([]blockedStepDto, 0, len(view.BlockedSteps))
+	blockedSteps := make([]blockedStepDTO, 0, len(view.BlockedSteps))
 	for _, step := range view.BlockedSteps {
 		blockedSteps = append(blockedSteps, blockedStepToDTO(step))
 	}
-	return taskViewDto{
-		Task:            taskToDTO(view.Task),
+	return taskViewDTO{
+		Task:            taskToDTO(view.Task, view.ParentTaskID, view.ParentTaskDescription),
 		Status:          string(view.Status),
 		CurrentNodeName: view.CurrentNodeName,
 		CurrentNodeType: string(view.CurrentNodeType),
@@ -213,21 +215,23 @@ func taskViewToDTO(view taskdomain.TaskView) taskViewDto {
 	}
 }
 
-func taskToDTO(task taskdomain.Task) taskDto {
-	return taskDto{
-		ID:           task.ID,
-		Description:  task.Description,
-		ConfigAlias:  task.ConfigAlias,
-		ConfigPath:   task.ConfigPath,
-		WorkDir:      task.WorkDir,
-		ExecutionDir: task.ExecutionDir,
-		CreatedAt:    task.CreatedAt,
-		UpdatedAt:    task.UpdatedAt,
+func taskToDTO(task taskdomain.Task, parentTaskID, parentTaskDescription string) taskDTO {
+	return taskDTO{
+		ID:                    task.ID,
+		Description:           task.Description,
+		ConfigAlias:           task.ConfigAlias,
+		ConfigPath:            task.ConfigPath,
+		WorkDir:               task.WorkDir,
+		ExecutionDir:          task.ExecutionDir,
+		CreatedAt:             task.CreatedAt,
+		UpdatedAt:             task.UpdatedAt,
+		ParentTaskID:          parentTaskID,
+		ParentTaskDescription: parentTaskDescription,
 	}
 }
 
-func nodeRunViewToDTO(run taskdomain.NodeRunView) nodeRunViewDto {
-	return nodeRunViewDto{
+func nodeRunViewToDTO(run taskdomain.NodeRunView) nodeRunViewDTO {
+	return nodeRunViewDTO{
 		ID:             run.ID,
 		TaskID:         run.TaskID,
 		NodeName:       run.NodeName,
@@ -243,8 +247,8 @@ func nodeRunViewToDTO(run taskdomain.NodeRunView) nodeRunViewDto {
 	}
 }
 
-func blockedStepToDTO(step taskdomain.BlockedStep) blockedStepDto {
-	return blockedStepDto{
+func blockedStepToDTO(step taskdomain.BlockedStep) blockedStepDTO {
+	return blockedStepDTO{
 		NodeName:    step.NodeName,
 		Iteration:   step.Iteration,
 		Reason:      step.Reason,
@@ -253,11 +257,11 @@ func blockedStepToDTO(step taskdomain.BlockedStep) blockedStepDto {
 	}
 }
 
-func taskIssueToDTO(issue *taskdomain.TaskIssue) *taskIssueDto {
+func taskIssueToDTO(issue *taskdomain.TaskIssue) *taskIssueDTO {
 	if issue == nil {
 		return nil
 	}
-	return &taskIssueDto{
+	return &taskIssueDTO{
 		Kind:       string(issue.Kind),
 		NodeName:   issue.NodeName,
 		Iteration:  issue.Iteration,
@@ -266,21 +270,21 @@ func taskIssueToDTO(issue *taskdomain.TaskIssue) *taskIssueDto {
 	}
 }
 
-func triggeredByToDTO(triggeredBy *taskdomain.TriggeredBy) *triggeredByDto {
+func triggeredByToDTO(triggeredBy *taskdomain.TriggeredBy) *triggeredByDTO {
 	if triggeredBy == nil {
 		return nil
 	}
-	return &triggeredByDto{
+	return &triggeredByDTO{
 		NodeRunID: triggeredBy.NodeRunID,
 		Reason:    triggeredBy.Reason,
 	}
 }
 
-func inputRequestToDTO(input *taskruntime.InputRequest) *inputRequestDto {
+func inputRequestToDTO(input *taskruntime.InputRequest) *inputRequestDTO {
 	if input == nil {
 		return nil
 	}
-	dto := &inputRequestDto{
+	dto := &inputRequestDTO{
 		Kind:          string(input.Kind),
 		TaskID:        input.TaskID,
 		NodeRunID:     input.NodeRunID,
@@ -295,8 +299,8 @@ func inputRequestToDTO(input *taskruntime.InputRequest) *inputRequestDto {
 	return dto
 }
 
-func runEventToDTO(event taskruntime.RunEvent) runEventDto {
-	dto := runEventDto{
+func runEventToDTO(event taskruntime.RunEvent) runEventDTO {
+	dto := runEventDTO{
 		Type:      string(event.Type),
 		TaskID:    event.TaskID,
 		NodeRunID: event.NodeRunID,
@@ -315,31 +319,31 @@ func runEventToDTO(event taskruntime.RunEvent) runEventDto {
 		dto.InputRequest = inputRequestToDTO(event.InputRequest)
 	}
 	if event.Error != nil {
-		dto.Error = &runErrorDto{Message: event.Error.Message}
+		dto.Error = &runErrorDTO{Message: event.Error.Message}
 	}
 	return dto
 }
 
-func progressInfoToDTO(progress taskruntime.ProgressInfo) progressInfoDto {
-	events := make([]streamEventDto, 0, len(progress.Events))
+func progressInfoToDTO(progress taskruntime.ProgressInfo) progressInfoDTO {
+	events := make([]streamEventDTO, 0, len(progress.Events))
 	for _, event := range progress.Events {
 		events = append(events, streamEventToDTO(event))
 	}
-	return progressInfoDto{
+	return progressInfoDTO{
 		Message:   progress.Message,
 		SessionID: progress.SessionID,
 		Events:    events,
 	}
 }
 
-func streamEventToDTO(event taskexecutor.StreamEvent) streamEventDto {
-	dto := streamEventDto{
+func streamEventToDTO(event taskexecutor.StreamEvent) streamEventDTO {
+	dto := streamEventDTO{
 		Kind:      string(event.Kind),
 		SessionID: event.SessionID,
 		Raw:       event.Raw,
 	}
 	if event.Message != nil {
-		dto.Message = &messagePartDto{
+		dto.Message = &messagePartDTO{
 			MessageID: event.Message.MessageID,
 			PartID:    event.Message.PartID,
 			Role:      string(event.Message.Role),
@@ -348,15 +352,15 @@ func streamEventToDTO(event taskexecutor.StreamEvent) streamEventDto {
 		}
 	}
 	if event.Tool != nil {
-		diffs := make([]toolDiffDto, 0, len(event.Tool.Diffs))
+		diffs := make([]toolDiffDTO, 0, len(event.Tool.Diffs))
 		for _, diff := range event.Tool.Diffs {
-			diffs = append(diffs, toolDiffDto{
+			diffs = append(diffs, toolDiffDTO{
 				Path:    diff.Path,
 				OldText: diff.OldText,
 				NewText: diff.NewText,
 			})
 		}
-		dto.Tool = &toolCallDto{
+		dto.Tool = &toolCallDTO{
 			CallID:        event.Tool.CallID,
 			ParentCallID:  event.Tool.ParentCallID,
 			Name:          event.Tool.Name,
@@ -373,17 +377,17 @@ func streamEventToDTO(event taskexecutor.StreamEvent) streamEventDto {
 		}
 	}
 	if event.Plan != nil {
-		steps := make([]planStepDto, 0, len(event.Plan.Steps))
+		steps := make([]planStepDTO, 0, len(event.Plan.Steps))
 		for _, step := range event.Plan.Steps {
-			steps = append(steps, planStepDto{Text: step.Text, Status: step.Status})
+			steps = append(steps, planStepDTO{Text: step.Text, Status: step.Status})
 		}
-		dto.Plan = &planSnapshotDto{
+		dto.Plan = &planSnapshotDTO{
 			PlanID: event.Plan.PlanID,
 			Steps:  steps,
 		}
 	}
 	if event.Usage != nil {
-		dto.Usage = &usageSnapshotDto{
+		dto.Usage = &usageSnapshotDTO{
 			InputTokens:       event.Usage.InputTokens,
 			CachedInputTokens: event.Usage.CachedInputTokens,
 			OutputTokens:      event.Usage.OutputTokens,
@@ -394,13 +398,13 @@ func streamEventToDTO(event taskexecutor.StreamEvent) streamEventDto {
 	return dto
 }
 
-func buildConfigCatalogResult(catalog *taskconfig.Catalog, reg taskconfig.Registry) configCatalogResult {
+func buildConfigCatalogResult(catalog *taskconfig.Catalog, reg taskconfig.Registry, defaultUseWorktree bool) configCatalogResult {
 	if catalog == nil {
-		return configCatalogResult{}
+		return configCatalogResult{DefaultUseWorktree: defaultUseWorktree}
 	}
-	entries := make([]configCatalogEntryDto, 0, len(catalog.Entries))
+	entries := make([]configCatalogEntryDTO, 0, len(catalog.Entries))
 	for _, entry := range catalog.Entries {
-		dto := configCatalogEntryDto{
+		dto := configCatalogEntryDTO{
 			Alias:      entry.Alias,
 			ConfigPath: entry.Path,
 			IsDefault:  entry.Alias == catalog.DefaultAlias,
@@ -429,8 +433,9 @@ func buildConfigCatalogResult(catalog *taskconfig.Catalog, reg taskconfig.Regist
 		entries = append(entries, dto)
 	}
 	return configCatalogResult{
-		DefaultAlias: catalog.DefaultAlias,
-		Entries:      entries,
+		DefaultAlias:       catalog.DefaultAlias,
+		DefaultUseWorktree: defaultUseWorktree,
+		Entries:            entries,
 	}
 }
 

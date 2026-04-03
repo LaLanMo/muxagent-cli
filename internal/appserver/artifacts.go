@@ -11,15 +11,15 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 )
 
-func (s *Server) loadTaskArtifactRefs(ctx context.Context, taskID string) ([]artifactRefDto, error) {
-	view, _, err := s.service.LoadTaskView(ctx, taskID)
+func loadTaskArtifactRefs(ctx context.Context, readModel *taskReadModel, taskID string) ([]artifactRefDTO, error) {
+	view, _, err := readModel.LoadTaskView(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
 	var input *taskruntime.InputRequest
 	if view.Status == taskdomain.TaskStatusAwaitingUser {
 		if nodeRunID := latestAwaitingRunID(view); nodeRunID != "" {
-			input, err = s.service.BuildInputRequest(ctx, taskID, nodeRunID)
+			input, err = readModel.BuildInputRequest(ctx, taskID, nodeRunID)
 			if err != nil {
 				return nil, err
 			}
@@ -28,8 +28,8 @@ func (s *Server) loadTaskArtifactRefs(ctx context.Context, taskID string) ([]art
 	return buildTaskArtifactRefs(view, input), nil
 }
 
-func buildTaskArtifactRefs(view taskdomain.TaskView, input *taskruntime.InputRequest) []artifactRefDto {
-	refs := make([]artifactRefDto, 0)
+func buildTaskArtifactRefs(view taskdomain.TaskView, input *taskruntime.InputRequest) []artifactRefDTO {
+	refs := make([]artifactRefDTO, 0)
 	seenResolved := map[string]struct{}{}
 	runOrdinals := map[string]int{}
 	runLabels := map[string]string{}
@@ -70,7 +70,7 @@ func buildTaskArtifactRefs(view taskdomain.TaskView, input *taskruntime.InputReq
 				continue
 			}
 			seenResolved[resolvedPath] = struct{}{}
-			refs = append(refs, artifactRefDto{
+			refs = append(refs, artifactRefDTO{
 				TaskID:       view.Task.ID,
 				NodeRunID:    input.NodeRunID,
 				NodeName:     input.NodeName,
@@ -98,7 +98,7 @@ func buildTaskArtifactRefs(view taskdomain.TaskView, input *taskruntime.InputReq
 			continue
 		}
 		seenResolved[resolvedPath] = struct{}{}
-		refs = append(refs, artifactRefDto{
+		refs = append(refs, artifactRefDTO{
 			TaskID:       view.Task.ID,
 			RawPath:      rawPath,
 			ResolvedPath: resolvedPath,
@@ -112,10 +112,10 @@ func buildTaskArtifactRefs(view taskdomain.TaskView, input *taskruntime.InputReq
 	return refs
 }
 
-func artifactRefForRun(task taskdomain.Task, sequence int, run taskdomain.NodeRunView, rawPath, sourceLabel string) (artifactRefDto, bool) {
+func artifactRefForRun(task taskdomain.Task, sequence int, run taskdomain.NodeRunView, rawPath, sourceLabel string) (artifactRefDTO, bool) {
 	rawPath = strings.TrimSpace(rawPath)
 	if rawPath == "" {
-		return artifactRefDto{}, false
+		return artifactRefDTO{}, false
 	}
 
 	resolvedPath := rawPath
@@ -124,7 +124,7 @@ func artifactRefForRun(task taskdomain.Task, sequence int, run taskdomain.NodeRu
 	}
 	resolvedPath = filepath.Clean(resolvedPath)
 	if !artifactPathWithinWorkspace(resolvedPath, task.WorkDir) {
-		return artifactRefDto{}, false
+		return artifactRefDTO{}, false
 	}
 	previewName := filepath.Base(resolvedPath)
 	previewTitle := previewName
@@ -132,7 +132,7 @@ func artifactRefForRun(task taskdomain.Task, sequence int, run taskdomain.NodeRu
 		previewTitle = sourceLabel + " · " + previewName
 	}
 
-	return artifactRefDto{
+	return artifactRefDTO{
 		TaskID:       task.ID,
 		NodeRunID:    run.ID,
 		NodeName:     run.NodeName,

@@ -2,63 +2,54 @@ package appserver
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
+	"github.com/LaLanMo/muxagent-cli/internal/filelock"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
-	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
+	"github.com/LaLanMo/muxagent-cli/internal/worktree"
+	"github.com/google/uuid"
 )
 
-type RuntimeService interface {
-	Run(ctx context.Context) error
-	Events() <-chan taskruntime.RunEvent
-	Dispatch(cmd taskruntime.RunCommand)
-	ListTaskViews(ctx context.Context, workDir string) ([]taskdomain.TaskView, error)
-	LoadTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, *taskconfig.Config, error)
-	BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*taskruntime.InputRequest, error)
-	PrepareShutdown(ctx context.Context) error
-	Close() error
-}
-
 type Options struct {
-	Service                   RuntimeService
-	WorkDir                   string
+	StateDir                  string
 	ServerVersion             string
+	LoadConfig                func() (appconfig.Config, error)
 	LoadCatalog               func() (*taskconfig.Catalog, error)
 	LoadRegistry              func() (taskconfig.Registry, error)
 	LoadTaskLaunchPreferences func() appconfig.TaskLaunchPreferences
 	WorktreeAvailable         func(string) bool
+	RuntimeFactory            runtimeServiceFactory
+	Now                       func() time.Time
 }
 
 type Server struct {
-	service       RuntimeService
-	workDir       string
-	serverVersion string
-
+	stateDir                  string
+	serverVersion             string
+	runtimeCount              int
 	loadCatalog               func() (*taskconfig.Catalog, error)
 	loadRegistry              func() (taskconfig.Registry, error)
 	loadTaskLaunchPreferences func() appconfig.TaskLaunchPreferences
 	worktreeAvailable         func(string) bool
+	now                       func() time.Time
+	lockPath                  string
+	registry                  *workspaceRegistry
+	runtimes                  *runtimeManager
 
-	mu              sync.Mutex
-	initialized     bool
-	pendingCommands []pendingClientCommand
-}
-
-type pendingClientCommand struct {
-	method          string
-	clientCommandID string
-	taskID          string
-	nodeRunID       string
+	mu               sync.Mutex
+	initialized      bool
+	connectedClients int
+	pendingCommands  []pendingClientCommand
+	notificationSink func(notification)
 }
 
 type stopMode int
@@ -69,17 +60,9 @@ const (
 )
 
 func New(opts Options) (*Server, error) {
-	if opts.Service == nil {
-		return nil, errors.New("app-server requires a runtime service")
+	if opts.LoadConfig == nil {
+		opts.LoadConfig = appconfig.LoadEffective
 	}
-	workDir := strings.TrimSpace(opts.WorkDir)
-	if workDir == "" {
-		return nil, errors.New("app-server requires a workdir")
-	}
-	if !filepath.IsAbs(workDir) {
-		return nil, errors.New("app-server requires an absolute workdir")
-	}
-	workDir = taskstore.NormalizeWorkDir(workDir)
 	if opts.LoadCatalog == nil {
 		opts.LoadCatalog = taskconfig.LoadCatalog
 	}
@@ -90,102 +73,140 @@ func New(opts Options) (*Server, error) {
 		opts.LoadTaskLaunchPreferences = appconfig.LoadTaskLaunchPreferences
 	}
 	if opts.WorktreeAvailable == nil {
-		opts.WorktreeAvailable = func(string) bool { return false }
+		opts.WorktreeAvailable = func(path string) bool {
+			_, err := worktree.FindRepoRoot(path)
+			return err == nil
+		}
 	}
-	return &Server{
-		service:                   opts.Service,
-		workDir:                   workDir,
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+
+	stateDir, err := resolveStateDir(opts.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := opts.LoadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load effective config: %w", err)
+	}
+	registry := newWorkspaceRegistry(workspacesFilePath(stateDir), opts.Now)
+	if err := registry.Load(); err != nil {
+		return nil, fmt.Errorf("load workspace registry: %w", err)
+	}
+
+	s := &Server{
+		stateDir:                  stateDir,
 		serverVersion:             opts.ServerVersion,
+		runtimeCount:              len(cfg.ConfiguredRuntimeIDs()),
 		loadCatalog:               opts.LoadCatalog,
 		loadRegistry:              opts.LoadRegistry,
 		loadTaskLaunchPreferences: opts.LoadTaskLaunchPreferences,
 		worktreeAvailable:         opts.WorktreeAvailable,
-	}, nil
+		now:                       opts.Now,
+		lockPath:                  singletonLockPath(stateDir),
+		registry:                  registry,
+	}
+	s.runtimes = newRuntimeManager(opts.RuntimeFactory, s.handleRuntimeEvent)
+	return s, nil
 }
 
-func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	defer s.service.Close()
+func (s *Server) StateDir() string {
+	return s.stateDir
+}
 
-	writer := newFrameWriter(stdout)
-	reader := newFrameReader(stdin)
-
-	runErrCh := make(chan error, 1)
-	go func() {
-		runErrCh <- s.service.Run(ctx)
+func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) (err error) {
+	lock, err := filelock.Acquire(s.lockPath, "muxagent app-server is already running")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Release()
 	}()
 
-	eventErrCh := make(chan error, 1)
-	go s.forwardEvents(ctx, writer, eventErrCh)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	for {
-		frame, err := reader.readFrame()
-		if err != nil {
-			cancel()
-			if errors.Is(err, io.EOF) {
-				return s.waitForRun(ctx, runErrCh, nil)
-			}
-			return s.waitForRun(ctx, runErrCh, err)
-		}
+	s.setConnectedClients(1)
+	defer s.setConnectedClients(0)
 
-		select {
-		case err := <-eventErrCh:
-			cancel()
-			return s.waitForRun(ctx, runErrCh, err)
-		default:
-		}
+	reader := newFrameReader(stdin)
+	writer := newFrameWriter(stdout)
+	outgoing := make(chan any, 256)
+	writeErrCh := make(chan error, 1)
+	writerDone := make(chan struct{})
 
-		stopAfter, err := s.handleFrame(ctx, frame, writer)
-		if err != nil {
-			cancel()
-			return s.waitForRun(ctx, runErrCh, err)
-		}
-		if stopAfter == stopModeDrainAndExit {
-			return s.waitForShutdown(cancel, runErrCh, eventErrCh)
-		}
-	}
-}
-
-func (s *Server) forwardEvents(ctx context.Context, writer *frameWriter, errCh chan<- error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-s.service.Events():
-			if !ok {
-				return
-			}
-			params := eventNotificationParams{Event: runEventToDTO(event)}
-			if clientCommandID := s.claimPendingClientCommandID(event); clientCommandID != "" {
-				params.ClientCommandID = clientCommandID
-			}
-			if err := writer.writeJSON(notification{
-				JSONRPC: jsonRPCVersion,
-				Method:  string(event.Type),
-				Params:  params,
-			}); err != nil {
+	go func() {
+		defer close(writerDone)
+		for payload := range outgoing {
+			if err := writer.writeJSON(payload); err != nil {
 				select {
-				case errCh <- err:
+				case writeErrCh <- err:
 				default:
 				}
 				return
 			}
 		}
+	}()
+
+	s.setNotificationSink(func(n notification) {
+		select {
+		case outgoing <- n:
+		case <-ctx.Done():
+		}
+	})
+	defer s.setNotificationSink(nil)
+	defer func() {
+		_ = s.runtimes.closeAll()
+		close(outgoing)
+		<-writerDone
+		select {
+		case writeErr := <-writeErrCh:
+			if err == nil && writeErr != nil {
+				err = writeErr
+			}
+		default:
+		}
+	}()
+
+	for {
+		select {
+		case writeErr := <-writeErrCh:
+			if writeErr != nil {
+				return writeErr
+			}
+		default:
+		}
+
+		frame, readErr := reader.readFrame()
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return readErr
+		}
+
+		stopAfter, handleErr := s.handleFrame(ctx, frame, outgoing)
+		if handleErr != nil {
+			return handleErr
+		}
+		if stopAfter == stopModeDrainAndExit {
+			return nil
+		}
 	}
 }
 
-func (s *Server) handleFrame(ctx context.Context, frame []byte, writer *frameWriter) (stopMode, error) {
+func (s *Server) handleFrame(ctx context.Context, frame []byte, outgoing chan<- any) (stopMode, error) {
 	var msg incomingMessage
 	if err := json.Unmarshal(frame, &msg); err != nil {
-		return stopModeContinue, writer.writeJSON(response{
+		return stopModeContinue, enqueueJSON(outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      json.RawMessage("null"),
 			Error:   &rpcError{Code: errorCodeParseError, Message: "parse error"},
 		})
 	}
 	if msg.JSONRPC != jsonRPCVersion {
-		return stopModeContinue, writer.writeJSON(response{
+		return stopModeContinue, enqueueJSON(outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      requestIDOrNull(msg.ID),
 			Error:   &rpcError{Code: errorCodeInvalidRequest, Message: "jsonrpc must be 2.0"},
@@ -195,57 +216,67 @@ func (s *Server) handleFrame(ctx context.Context, frame []byte, writer *frameWri
 		return stopModeContinue, nil
 	}
 	if !msg.isRequest() {
-		return stopModeContinue, writer.writeJSON(response{
+		return stopModeContinue, enqueueJSON(outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      requestIDOrNull(msg.ID),
 			Error:   &rpcError{Code: errorCodeInvalidRequest, Message: "request must include method and id"},
 		})
 	}
 	if !s.isInitialized() && msg.Method != methodInitialize {
-		return stopModeContinue, writer.writeJSON(response{
+		return stopModeContinue, enqueueJSON(outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      requestIDOrNull(msg.ID),
 			Error:   &rpcError{Code: errorCodeNotInitialized, Message: "server not initialized"},
 		})
 	}
 
-	result, stopAfter, rpcErr := s.handleRequest(ctx, request{
+	result, notifications, stopAfter, rpcErr := s.handleRequest(ctx, request{
 		JSONRPC: msg.JSONRPC,
 		ID:      msg.ID,
 		Method:  msg.Method,
 		Params:  msg.Params,
 	})
-	resp := response{
+	if err := enqueueJSON(outgoing, response{
 		JSONRPC: jsonRPCVersion,
 		ID:      msg.ID,
 		Result:  result,
 		Error:   rpcErr,
-	}
-	if err := writer.writeJSON(resp); err != nil {
+	}); err != nil {
 		return stopModeContinue, err
+	}
+	for _, outgoingNotification := range notifications {
+		if err := enqueueJSON(outgoing, outgoingNotification); err != nil {
+			return stopModeContinue, err
+		}
 	}
 	return stopAfter, nil
 }
 
-func (s *Server) handleRequest(ctx context.Context, req request) (any, stopMode, *rpcError) {
+func (s *Server) handleRequest(ctx context.Context, req request) (any, []notification, stopMode, *rpcError) {
 	switch req.Method {
 	case methodInitialize:
 		params, err := decodeParams[initializeParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
 		}
 		if params.ProtocolVersion != protocolVersion {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: fmt.Sprintf("unsupported protocol version %d", params.ProtocolVersion)}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: fmt.Sprintf("unsupported protocol version %d", params.ProtocolVersion)}
 		}
 		s.markInitialized()
 		return initializeResult{
 			ProtocolVersion: protocolVersion,
 			ServerName:      "muxagent app-server",
 			ServerVersion:   s.serverVersion,
-			WorkDir:         s.workDir,
-			Capabilities: serverCapabilitiesDto{
+			Capabilities: serverCapabilitiesDTO{
 				Methods: []string{
 					methodInitialize,
+					methodServiceStatus,
+					methodServiceShutdown,
+					methodWorkspaceList,
+					methodWorkspaceAdd,
+					methodWorkspaceRemove,
+					methodWorkspaceUpdate,
+					methodWorkspaceGet,
 					methodTaskList,
 					methodTaskGet,
 					methodTaskInputRequest,
@@ -256,47 +287,141 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, stopMode,
 					methodTaskContinueBlocked,
 					methodArtifactList,
 					methodConfigCatalog,
-					methodServiceStatus,
-					methodServiceShutdown,
 				},
-				Notifications: []string{
-					string(taskruntime.EventTaskCreated),
-					string(taskruntime.EventNodeStarted),
-					string(taskruntime.EventNodeProgress),
-					string(taskruntime.EventNodeCompleted),
-					string(taskruntime.EventNodeFailed),
-					string(taskruntime.EventInputRequested),
-					string(taskruntime.EventTaskCompleted),
-					string(taskruntime.EventTaskFailed),
-					string(taskruntime.EventCommandError),
-				},
+				Notifications: []string{methodNotification},
 			},
-		}, stopModeContinue, nil
-	case methodTaskList:
-		views, err := s.service.ListTaskViews(ctx, s.workDir)
+		}, nil, stopModeContinue, nil
+
+	case methodServiceStatus:
+		return serviceStatusResult{
+			StateDir:         s.stateDir,
+			ServerVersion:    s.serverVersion,
+			ProtocolVersion:  protocolVersion,
+			WorkspaceCount:   s.registry.Count(),
+			RuntimeCount:     s.runtimeCount,
+			ConnectedClients: s.connectedClientCount(),
+		}, nil, stopModeContinue, nil
+
+	case methodServiceShutdown:
+		return serviceShutdownResult{Accepted: true}, nil, stopModeDrainAndExit, nil
+
+	case methodWorkspaceList:
+		return workspaceListResult{Workspaces: s.workspaceDTOs(s.registry.List())}, nil, stopModeContinue, nil
+
+	case methodWorkspaceAdd:
+		params, err := decodeParams[workspaceAddParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
 		}
-		tasks := make([]taskViewDto, 0, len(views))
+		record, created, err := s.registry.Add(params.Path, params.DisplayName)
+		if err != nil {
+			return nil, nil, stopModeContinue, mapWorkspaceError(err)
+		}
+		dto := s.workspaceDTO(record)
+		kind := notificationWorkspaceUpdated
+		if created {
+			kind = notificationWorkspaceAdded
+		}
+		return workspaceAddResult{Workspace: dto}, []notification{
+			s.newNotification(kind, dto.WorkspaceID, workspaceNotificationPayload{Workspace: dto}),
+		}, stopModeContinue, nil
+
+	case methodWorkspaceUpdate:
+		params, err := decodeParams[workspaceUpdateParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		record, err := s.registry.Update(strings.TrimSpace(params.WorkspaceID), params.DisplayName)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil, stopModeContinue, workspaceMissingRPCError(params.WorkspaceID)
+			}
+			return nil, nil, stopModeContinue, mapWorkspaceError(err)
+		}
+		dto := s.workspaceDTO(record)
+		return workspaceUpdateResult{Workspace: dto}, []notification{
+			s.newNotification(notificationWorkspaceUpdated, dto.WorkspaceID, workspaceNotificationPayload{Workspace: dto}),
+		}, stopModeContinue, nil
+
+	case methodWorkspaceRemove:
+		params, err := decodeParams[workspaceRemoveParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspaceID := strings.TrimSpace(params.WorkspaceID)
+		removed, err := s.registry.Remove(workspaceID)
+		if err != nil {
+			return nil, nil, stopModeContinue, mapWorkspaceError(err)
+		}
+		if !removed {
+			return nil, nil, stopModeContinue, workspaceMissingRPCError(params.WorkspaceID)
+		}
+		if err := s.runtimes.remove(workspaceID); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		return workspaceRemoveResult{Removed: true}, []notification{
+			s.newNotification(notificationWorkspaceRemoved, workspaceID, workspaceRemovedPayload{Removed: true}),
+		}, stopModeContinue, nil
+
+	case methodWorkspaceGet:
+		params, err := decodeParams[workspaceGetParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		record, ok := s.registry.Get(strings.TrimSpace(params.WorkspaceID))
+		if !ok {
+			return nil, nil, stopModeContinue, workspaceMissingRPCError(params.WorkspaceID)
+		}
+		return workspaceGetResult{Workspace: s.workspaceDTO(record)}, nil, stopModeContinue, nil
+
+	case methodTaskList:
+		params, err := decodeParams[taskListParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		model, rpcErr := s.openWorkspaceReadModel(workspace)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		defer func() { _ = model.Close() }()
+		views, err := model.ListTaskViews(ctx)
+		if err != nil {
+			return nil, nil, stopModeContinue, runtimeLookupRPCError(err)
+		}
+		tasks := make([]taskViewDTO, 0, len(views))
 		for _, view := range views {
 			tasks = append(tasks, taskViewToDTO(view))
 		}
-		return taskListResult{Tasks: tasks}, stopModeContinue, nil
+		return taskListResult{Tasks: tasks}, nil, stopModeContinue, nil
+
 	case methodTaskGet:
 		params, err := decodeParams[taskGetParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
 		}
-		view, cfg, err := s.service.LoadTaskView(ctx, params.TaskID)
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		model, rpcErr := s.openWorkspaceReadModel(workspace)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		defer func() { _ = model.Close() }()
+		view, cfg, err := model.LoadTaskView(ctx, strings.TrimSpace(params.TaskID))
 		if err != nil {
-			return nil, stopModeContinue, runtimeLookupRPCError(err)
+			return nil, nil, stopModeContinue, runtimeLookupRPCError(err)
 		}
 		var input *taskruntime.InputRequest
 		if view.Status == taskdomain.TaskStatusAwaitingUser {
 			if nodeRunID := latestAwaitingRunID(view); nodeRunID != "" {
-				input, err = s.service.BuildInputRequest(ctx, params.TaskID, nodeRunID)
+				input, err = model.BuildInputRequest(ctx, params.TaskID, nodeRunID)
 				if err != nil {
-					return nil, stopModeContinue, runtimeLookupRPCError(err)
+					return nil, nil, stopModeContinue, runtimeLookupRPCError(err)
 				}
 			}
 		}
@@ -305,54 +430,76 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, stopMode,
 			InputRequest: inputRequestToDTO(input),
 		}
 		if cfg != nil {
-			result.Config = &configViewDto{
+			result.Config = &configViewDTO{
 				Path:   view.Task.ConfigPath,
 				Config: cfg,
 			}
 		}
-		return result, stopModeContinue, nil
+		return result, nil, stopModeContinue, nil
+
 	case methodTaskInputRequest:
 		params, err := decodeParams[taskInputRequestParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
 		}
-		input, err := s.service.BuildInputRequest(ctx, params.TaskID, params.NodeRunID)
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		model, rpcErr := s.openWorkspaceReadModel(workspace)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		defer func() { _ = model.Close() }()
+		input, err := model.BuildInputRequest(ctx, strings.TrimSpace(params.TaskID), strings.TrimSpace(params.NodeRunID))
 		if err != nil {
-			return nil, stopModeContinue, runtimeLookupRPCError(err)
+			return nil, nil, stopModeContinue, runtimeLookupRPCError(err)
 		}
-		return taskInputRequestResult{InputRequest: inputRequestToDTO(input)}, stopModeContinue, nil
+		return taskInputRequestResult{InputRequest: inputRequestToDTO(input)}, nil, stopModeContinue, nil
+
 	case methodTaskStart:
 		params, err := decodeParams[taskStartParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
 		}
 		if strings.TrimSpace(params.ConfigAlias) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "config_alias is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "config_alias is required"}
 		}
 		if strings.TrimSpace(params.ConfigPath) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "config_path is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "config_path is required"}
 		}
 		cmd := taskruntime.RunCommand{
 			Type:        taskruntime.CommandStartTask,
 			Description: params.Description,
 			ConfigAlias: params.ConfigAlias,
 			ConfigPath:  params.ConfigPath,
-			WorkDir:     s.workDir,
+			WorkDir:     workspace.Path,
 			UseWorktree: params.UseWorktree,
 		}
-		s.enqueuePendingClientCommand(methodTaskStart, params.ClientCommandID, cmd)
-		s.service.Dispatch(cmd)
-		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, stopModeContinue, nil
+		s.enqueuePendingClientCommand(workspace.WorkspaceID, methodTaskStart, params.ClientCommandID, cmd)
+		if err := s.runtimes.dispatch(workspace, cmd); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, nil, stopModeContinue, nil
+
 	case methodTaskStartFollowUp:
 		params, err := decodeParams[taskStartFollowUpParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
 		}
 		if strings.TrimSpace(params.ParentTaskID) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "parent_task_id is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "parent_task_id is required"}
 		}
 		if xorBlank(params.ConfigAlias, params.ConfigPath) {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "config_alias and config_path must be provided together"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "config_alias and config_path must be provided together"}
 		}
 		cmd := taskruntime.RunCommand{
 			Type:         taskruntime.CommandStartFollowUp,
@@ -361,19 +508,26 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, stopMode,
 			ConfigAlias:  params.ConfigAlias,
 			ConfigPath:   params.ConfigPath,
 		}
-		s.enqueuePendingClientCommand(methodTaskStartFollowUp, params.ClientCommandID, cmd)
-		s.service.Dispatch(cmd)
-		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, stopModeContinue, nil
+		s.enqueuePendingClientCommand(workspace.WorkspaceID, methodTaskStartFollowUp, params.ClientCommandID, cmd)
+		if err := s.runtimes.dispatch(workspace, cmd); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, nil, stopModeContinue, nil
+
 	case methodTaskSubmitInput:
 		params, err := decodeParams[taskSubmitInputParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
 		}
 		if strings.TrimSpace(params.TaskID) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
 		}
 		if strings.TrimSpace(params.NodeRunID) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "node_run_id is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "node_run_id is required"}
 		}
 		payload := params.Payload
 		if payload == nil {
@@ -385,19 +539,26 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, stopMode,
 			NodeRunID: params.NodeRunID,
 			Payload:   payload,
 		}
-		s.enqueuePendingClientCommand(methodTaskSubmitInput, params.ClientCommandID, cmd)
-		s.service.Dispatch(cmd)
-		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, stopModeContinue, nil
+		s.enqueuePendingClientCommand(workspace.WorkspaceID, methodTaskSubmitInput, params.ClientCommandID, cmd)
+		if err := s.runtimes.dispatch(workspace, cmd); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, nil, stopModeContinue, nil
+
 	case methodTaskRetryNode:
 		params, err := decodeParams[taskRetryNodeParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
 		}
 		if strings.TrimSpace(params.TaskID) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
 		}
 		if strings.TrimSpace(params.NodeRunID) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "node_run_id is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "node_run_id is required"}
 		}
 		cmd := taskruntime.RunCommand{
 			Type:      taskruntime.CommandRetryNode,
@@ -405,63 +566,164 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, stopMode,
 			NodeRunID: params.NodeRunID,
 			Force:     params.Force,
 		}
-		s.enqueuePendingClientCommand(methodTaskRetryNode, params.ClientCommandID, cmd)
-		s.service.Dispatch(cmd)
-		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, stopModeContinue, nil
+		s.enqueuePendingClientCommand(workspace.WorkspaceID, methodTaskRetryNode, params.ClientCommandID, cmd)
+		if err := s.runtimes.dispatch(workspace, cmd); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, nil, stopModeContinue, nil
+
 	case methodTaskContinueBlocked:
 		params, err := decodeParams[taskContinueBlockedParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
 		}
 		if strings.TrimSpace(params.TaskID) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
 		}
 		cmd := taskruntime.RunCommand{
 			Type:   taskruntime.CommandContinueBlocked,
 			TaskID: params.TaskID,
 		}
-		s.enqueuePendingClientCommand(methodTaskContinueBlocked, params.ClientCommandID, cmd)
-		s.service.Dispatch(cmd)
-		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, stopModeContinue, nil
+		s.enqueuePendingClientCommand(workspace.WorkspaceID, methodTaskContinueBlocked, params.ClientCommandID, cmd)
+		if err := s.runtimes.dispatch(workspace, cmd); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		return commandAcceptedResult{Accepted: true, ClientCommandID: params.ClientCommandID}, nil, stopModeContinue, nil
+
 	case methodArtifactList:
 		params, err := decodeParams[artifactListParams](req.Params)
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
 		}
 		if strings.TrimSpace(params.TaskID) == "" {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "task_id is required"}
 		}
-		artifacts, err := s.loadTaskArtifactRefs(ctx, params.TaskID)
+		model, rpcErr := s.openWorkspaceReadModel(workspace)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		defer func() { _ = model.Close() }()
+		artifacts, err := loadTaskArtifactRefs(ctx, model, strings.TrimSpace(params.TaskID))
 		if err != nil {
-			return nil, stopModeContinue, runtimeLookupRPCError(err)
+			return nil, nil, stopModeContinue, runtimeLookupRPCError(err)
 		}
-		return artifactListResult{Artifacts: artifacts}, stopModeContinue, nil
+		return artifactListResult{Artifacts: artifacts}, nil, stopModeContinue, nil
+
 	case methodConfigCatalog:
 		catalog, err := s.loadCatalog()
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
 		}
 		reg, err := s.loadRegistry()
 		if err != nil {
-			return nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
 		}
-		return buildConfigCatalogResult(catalog, reg), stopModeContinue, nil
-	case methodServiceStatus:
 		prefs := s.loadTaskLaunchPreferences()
-		worktreeAvailable := s.worktreeAvailable(s.workDir)
-		return serviceStatusResult{
-			WorkDir:            s.workDir,
-			ServerVersion:      s.serverVersion,
-			ProtocolVersion:    protocolVersion,
-			WorktreeAvailable:  worktreeAvailable,
-			DefaultUseWorktree: worktreeAvailable && prefs.UseWorktree,
-		}, stopModeContinue, nil
-	case methodServiceShutdown:
-		s.service.Dispatch(taskruntime.RunCommand{Type: taskruntime.CommandShutdown})
-		return serviceShutdownResult{Accepted: true}, stopModeDrainAndExit, nil
+		return buildConfigCatalogResult(catalog, reg, prefs.UseWorktree), nil, stopModeContinue, nil
+
 	default:
-		return nil, stopModeContinue, &rpcError{Code: errorCodeMethodNotFound, Message: fmt.Sprintf("method %q not found", req.Method)}
+		return nil, nil, stopModeContinue, &rpcError{Code: errorCodeMethodNotFound, Message: fmt.Sprintf("method %q not found", req.Method)}
 	}
+}
+
+func (s *Server) workspaceDTOs(records []workspaceRecord) []workspaceSummaryDTO {
+	items := make([]workspaceSummaryDTO, 0, len(records))
+	for _, record := range records {
+		items = append(items, s.workspaceDTO(record))
+	}
+	return items
+}
+
+func (s *Server) workspaceDTO(record workspaceRecord) workspaceSummaryDTO {
+	reachable := false
+	if info, err := os.Stat(record.Path); err == nil && info.IsDir() {
+		reachable = true
+	}
+	worktreeAvailable := false
+	if reachable && s.worktreeAvailable(record.Path) {
+		worktreeAvailable = true
+	}
+	dto := workspaceSummaryDTO{
+		WorkspaceID:       record.WorkspaceID,
+		Path:              record.Path,
+		DisplayName:       normalizedDisplayName(record.DisplayName, record.Path),
+		Source:            record.Source,
+		Reachable:         reachable,
+		WorktreeAvailable: worktreeAvailable,
+		AddedAt:           record.AddedAt.UTC(),
+		TaskCounts:        taskCountsDTO{},
+		Actor:             s.runtimes.snapshot(record.WorkspaceID),
+	}
+	if !record.LastOpenedAt.IsZero() {
+		at := record.LastOpenedAt.UTC()
+		dto.LastOpenedAt = &at
+	}
+	return dto
+}
+
+func (s *Server) openWorkspaceReadModel(workspace workspaceRecord) (*taskReadModel, *rpcError) {
+	model, err := openTaskReadModel(workspace.Path)
+	if err != nil {
+		return nil, mapWorkspaceError(err)
+	}
+	return model, nil
+}
+
+func (s *Server) requireWorkspace(workspaceID string) (workspaceRecord, *rpcError) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return workspaceRecord{}, &rpcError{Code: errorCodeInvalidParams, Message: "workspace_id is required"}
+	}
+	record, ok := s.registry.Get(workspaceID)
+	if !ok {
+		return workspaceRecord{}, workspaceMissingRPCError(workspaceID)
+	}
+	return record, nil
+}
+
+func (s *Server) handleRuntimeEvent(workspaceID string, event taskruntime.RunEvent) {
+	payload := taskNotificationPayload{
+		ClientCommandID: s.claimPendingClientCommandID(workspaceID, event),
+		Event:           runEventToDTO(event),
+	}
+	s.emitNotification(s.newNotification(string(event.Type), workspaceID, payload))
+}
+
+func (s *Server) newNotification(kind, workspaceID string, payload any) notification {
+	return notification{
+		JSONRPC: jsonRPCVersion,
+		Method:  methodNotification,
+		Params: notificationParams{
+			EventID:     "evt_" + uuid.NewString(),
+			At:          s.now().UTC(),
+			Kind:        kind,
+			WorkspaceID: workspaceID,
+			Payload:     payload,
+		},
+	}
+}
+
+func (s *Server) emitNotification(n notification) {
+	s.mu.Lock()
+	sink := s.notificationSink
+	s.mu.Unlock()
+	if sink != nil {
+		sink(n)
+	}
+}
+
+func (s *Server) setNotificationSink(sink func(notification)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notificationSink = sink
 }
 
 func (s *Server) markInitialized() {
@@ -476,100 +738,42 @@ func (s *Server) isInitialized() bool {
 	return s.initialized
 }
 
-func (s *Server) enqueuePendingClientCommand(method, clientCommandID string, cmd taskruntime.RunCommand) {
-	clientCommandID = strings.TrimSpace(clientCommandID)
-	if clientCommandID == "" {
-		return
-	}
-
+func (s *Server) setConnectedClients(count int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pendingCommands = append(s.pendingCommands, pendingClientCommand{
-		method:          method,
-		clientCommandID: clientCommandID,
-		taskID:          strings.TrimSpace(cmd.TaskID),
-		nodeRunID:       strings.TrimSpace(cmd.NodeRunID),
-	})
+	s.connectedClients = count
 }
 
-func (s *Server) claimPendingClientCommandID(event taskruntime.RunEvent) string {
+func (s *Server) connectedClientCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	for i, pending := range s.pendingCommands {
-		if !pending.matches(event) {
-			continue
-		}
-		clientCommandID := pending.clientCommandID
-		s.pendingCommands = append(s.pendingCommands[:i], s.pendingCommands[i+1:]...)
-		return clientCommandID
-	}
-	return ""
+	return s.connectedClients
 }
 
-func (p pendingClientCommand) matches(event taskruntime.RunEvent) bool {
-	if p.matchesDispatchCommandError(event) {
-		return true
-	}
+func enqueueJSON(outgoing chan<- any, payload any) error {
+	outgoing <- payload
+	return nil
+}
 
-	switch p.method {
-	case methodTaskStart, methodTaskStartFollowUp:
-		return event.Type == taskruntime.EventTaskCreated
-	case methodTaskSubmitInput:
-		if event.TaskID != p.taskID || event.NodeRunID != p.nodeRunID {
-			return false
-		}
-		switch event.Type {
-		case taskruntime.EventNodeStarted, taskruntime.EventNodeCompleted, taskruntime.EventInputRequested:
-			return true
-		default:
-			return false
-		}
-	case methodTaskRetryNode:
-		return event.TaskID == p.taskID && event.Type == taskruntime.EventNodeStarted
-	case methodTaskContinueBlocked:
-		if event.TaskID != p.taskID {
-			return false
-		}
-		switch event.Type {
-		case taskruntime.EventNodeStarted, taskruntime.EventNodeCompleted, taskruntime.EventInputRequested:
-			return true
-		default:
-			return false
-		}
-	default:
-		return false
+func workspaceMissingRPCError(workspaceID string) *rpcError {
+	return &rpcError{
+		Code:    errorCodeWorkspaceMissing,
+		Message: "workspace not found",
+		Data: map[string]any{
+			"workspace_id": workspaceID,
+		},
 	}
 }
 
-func (p pendingClientCommand) matchesDispatchCommandError(event taskruntime.RunEvent) bool {
-	if !isDispatchCommandError(event) {
-		return false
+func mapWorkspaceError(err error) *rpcError {
+	if err == nil {
+		return nil
 	}
-	switch p.method {
-	case methodTaskStart, methodTaskStartFollowUp:
-		return strings.TrimSpace(event.TaskID) == ""
-	default:
-		return event.TaskID == p.taskID
+	msg := err.Error()
+	if strings.Contains(msg, "workspace unavailable") || strings.Contains(msg, "path unavailable") {
+		return &rpcError{Code: errorCodeWorkspaceUnreachable, Message: msg}
 	}
-}
-
-func isDispatchCommandError(event taskruntime.RunEvent) bool {
-	return event.Type == taskruntime.EventCommandError &&
-		strings.TrimSpace(event.NodeRunID) == "" &&
-		strings.TrimSpace(event.NodeName) == "" &&
-		event.TaskView == nil &&
-		event.Progress == nil &&
-		event.InputRequest == nil
-}
-
-func runtimeLookupRPCError(err error) *rpcError {
-	if errors.Is(err, sql.ErrNoRows) ||
-		errors.Is(err, taskruntime.ErrNodeRunTaskMismatch) ||
-		errors.Is(err, taskruntime.ErrNodeRunNotAwaitingUser) {
-		return &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
-	}
-	return &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+	return &rpcError{Code: errorCodeInvalidParams, Message: msg}
 }
 
 func decodeParams[T any](raw json.RawMessage) (T, error) {
@@ -588,48 +792,4 @@ func requestIDOrNull(id json.RawMessage) json.RawMessage {
 		return json.RawMessage("null")
 	}
 	return id
-}
-
-func latestAwaitingRunID(view taskdomain.TaskView) string {
-	for i := len(view.NodeRuns) - 1; i >= 0; i-- {
-		if view.NodeRuns[i].Status == taskdomain.NodeRunAwaitingUser {
-			return view.NodeRuns[i].ID
-		}
-	}
-	return ""
-}
-
-func xorBlank(values ...string) bool {
-	blankCount := 0
-	for _, value := range values {
-		if strings.TrimSpace(value) == "" {
-			blankCount++
-		}
-	}
-	return blankCount > 0 && blankCount < len(values)
-}
-
-func (s *Server) waitForRun(ctx context.Context, runErrCh <-chan error, fallback error) error {
-	select {
-	case err := <-runErrCh:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-	case <-ctx.Done():
-	}
-	return fallback
-}
-
-func (s *Server) waitForShutdown(cancel context.CancelFunc, runErrCh <-chan error, eventErrCh <-chan error) error {
-	select {
-	case err := <-runErrCh:
-		cancel()
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-		return nil
-	case err := <-eventErrCh:
-		cancel()
-		return s.waitForRun(context.Background(), runErrCh, err)
-	}
 }

@@ -1,6 +1,9 @@
 package appserver
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	jsonRPCVersion  = "2.0"
@@ -9,6 +12,14 @@ const (
 
 const (
 	methodInitialize          = "initialize"
+	methodNotification        = "notification"
+	methodServiceStatus       = "service.status"
+	methodServiceShutdown     = "service.shutdown"
+	methodWorkspaceList       = "workspace.list"
+	methodWorkspaceAdd        = "workspace.add"
+	methodWorkspaceRemove     = "workspace.remove"
+	methodWorkspaceUpdate     = "workspace.update"
+	methodWorkspaceGet        = "workspace.get"
 	methodTaskList            = "task.list"
 	methodTaskGet             = "task.get"
 	methodTaskInputRequest    = "task.input_request"
@@ -19,19 +30,25 @@ const (
 	methodTaskContinueBlocked = "task.continue_blocked"
 	methodArtifactList        = "artifact.list"
 	methodConfigCatalog       = "config.catalog"
-	methodServiceStatus       = "service.status"
-	methodServiceShutdown     = "service.shutdown"
+)
+
+const (
+	notificationWorkspaceAdded   = "workspace.added"
+	notificationWorkspaceUpdated = "workspace.updated"
+	notificationWorkspaceRemoved = "workspace.removed"
 )
 
 type errorCode int
 
 const (
-	errorCodeParseError     errorCode = -32700
-	errorCodeInvalidRequest errorCode = -32600
-	errorCodeMethodNotFound errorCode = -32601
-	errorCodeInvalidParams  errorCode = -32602
-	errorCodeInternalError  errorCode = -32603
-	errorCodeNotInitialized errorCode = -32000
+	errorCodeParseError           errorCode = -32700
+	errorCodeInvalidRequest       errorCode = -32600
+	errorCodeMethodNotFound       errorCode = -32601
+	errorCodeInvalidParams        errorCode = -32602
+	errorCodeInternalError        errorCode = -32603
+	errorCodeNotInitialized       errorCode = -32000
+	errorCodeWorkspaceMissing     errorCode = -32010
+	errorCodeWorkspaceUnreachable errorCode = -32011
 )
 
 type request struct {
@@ -57,6 +74,7 @@ type response struct {
 type rpcError struct {
 	Code    errorCode `json:"code"`
 	Message string    `json:"message"`
+	Data    any       `json:"data,omitempty"`
 }
 
 type incomingMessage struct {
@@ -84,25 +102,91 @@ type initializeResult struct {
 	ProtocolVersion int                   `json:"protocol_version"`
 	ServerName      string                `json:"server_name"`
 	ServerVersion   string                `json:"server_version"`
-	WorkDir         string                `json:"work_dir"`
-	Capabilities    serverCapabilitiesDto `json:"capabilities"`
+	Capabilities    serverCapabilitiesDTO `json:"capabilities"`
 }
 
-type serverCapabilitiesDto struct {
+type serverCapabilitiesDTO struct {
 	Methods       []string `json:"methods"`
 	Notifications []string `json:"notifications"`
 }
 
+type serviceStatusResult struct {
+	StateDir         string `json:"state_dir"`
+	ServerVersion    string `json:"server_version"`
+	ProtocolVersion  int    `json:"protocol_version"`
+	WorkspaceCount   int    `json:"workspace_count"`
+	RuntimeCount     int    `json:"runtime_count"`
+	ConnectedClients int    `json:"connected_clients"`
+}
+
+type serviceShutdownResult struct {
+	Accepted bool `json:"accepted"`
+}
+
+type workspaceListResult struct {
+	Workspaces []workspaceSummaryDTO `json:"workspaces"`
+}
+
+type workspaceGetParams struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+type workspaceGetResult struct {
+	Workspace workspaceSummaryDTO `json:"workspace"`
+}
+
+type workspaceAddParams struct {
+	Path        string `json:"path"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+type workspaceAddResult struct {
+	Workspace workspaceSummaryDTO `json:"workspace"`
+}
+
+type workspaceUpdateParams struct {
+	WorkspaceID string `json:"workspace_id"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+type workspaceUpdateResult struct {
+	Workspace workspaceSummaryDTO `json:"workspace"`
+}
+
+type workspaceRemoveParams struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+type workspaceRemoveResult struct {
+	Removed bool `json:"removed"`
+}
+
+type workspaceSummaryDTO struct {
+	WorkspaceID       string            `json:"workspace_id"`
+	Path              string            `json:"path"`
+	DisplayName       string            `json:"display_name"`
+	Source            string            `json:"source"`
+	Reachable         bool              `json:"reachable"`
+	WorktreeAvailable bool              `json:"worktree_available"`
+	AddedAt           time.Time         `json:"added_at"`
+	LastOpenedAt      *time.Time        `json:"last_opened_at,omitempty"`
+	TaskCounts        taskCountsDTO     `json:"task_counts"`
+	Actor             workspaceActorDTO `json:"actor"`
+}
+
 type taskGetParams struct {
-	TaskID string `json:"task_id"`
+	WorkspaceID string `json:"workspace_id"`
+	TaskID      string `json:"task_id"`
 }
 
 type taskInputRequestParams struct {
-	TaskID    string `json:"task_id"`
-	NodeRunID string `json:"node_run_id"`
+	WorkspaceID string `json:"workspace_id"`
+	TaskID      string `json:"task_id"`
+	NodeRunID   string `json:"node_run_id"`
 }
 
 type taskStartParams struct {
+	WorkspaceID     string `json:"workspace_id"`
 	ClientCommandID string `json:"client_command_id,omitempty"`
 	Description     string `json:"description,omitempty"`
 	ConfigAlias     string `json:"config_alias,omitempty"`
@@ -111,6 +195,7 @@ type taskStartParams struct {
 }
 
 type taskStartFollowUpParams struct {
+	WorkspaceID     string `json:"workspace_id"`
 	ClientCommandID string `json:"client_command_id,omitempty"`
 	ParentTaskID    string `json:"parent_task_id"`
 	Description     string `json:"description,omitempty"`
@@ -119,6 +204,7 @@ type taskStartFollowUpParams struct {
 }
 
 type taskSubmitInputParams struct {
+	WorkspaceID     string                 `json:"workspace_id"`
 	ClientCommandID string                 `json:"client_command_id,omitempty"`
 	TaskID          string                 `json:"task_id"`
 	NodeRunID       string                 `json:"node_run_id"`
@@ -126,6 +212,7 @@ type taskSubmitInputParams struct {
 }
 
 type taskRetryNodeParams struct {
+	WorkspaceID     string `json:"workspace_id"`
 	ClientCommandID string `json:"client_command_id,omitempty"`
 	TaskID          string `json:"task_id"`
 	NodeRunID       string `json:"node_run_id"`
@@ -133,43 +220,62 @@ type taskRetryNodeParams struct {
 }
 
 type taskContinueBlockedParams struct {
+	WorkspaceID     string `json:"workspace_id"`
 	ClientCommandID string `json:"client_command_id,omitempty"`
 	TaskID          string `json:"task_id"`
 }
 
 type artifactListParams struct {
-	TaskID string `json:"task_id"`
+	WorkspaceID string `json:"workspace_id"`
+	TaskID      string `json:"task_id"`
 }
 
-type serviceStatusResult struct {
-	WorkDir            string `json:"work_dir"`
-	ServerVersion      string `json:"server_version"`
-	ProtocolVersion    int    `json:"protocol_version"`
-	WorktreeAvailable  bool   `json:"worktree_available"`
-	DefaultUseWorktree bool   `json:"default_use_worktree"`
+type taskCountsDTO struct {
+	Running  int `json:"running"`
+	Awaiting int `json:"awaiting"`
+	Done     int `json:"done"`
+	Failed   int `json:"failed"`
+}
+
+type workspaceActorDTO struct {
+	State     string `json:"state"`
+	LastError string `json:"last_error"`
+}
+
+type notificationParams struct {
+	EventID     string    `json:"event_id"`
+	At          time.Time `json:"at"`
+	Kind        string    `json:"kind"`
+	WorkspaceID string    `json:"workspace_id,omitempty"`
+	Payload     any       `json:"payload,omitempty"`
+}
+
+type taskListParams struct {
+	WorkspaceID string `json:"workspace_id"`
 }
 
 type taskListResult struct {
-	Tasks []taskViewDto `json:"tasks"`
+	Tasks []taskViewDTO `json:"tasks"`
 }
 
 type taskGetResult struct {
-	Task         taskViewDto      `json:"task"`
-	Config       *configViewDto   `json:"config,omitempty"`
-	InputRequest *inputRequestDto `json:"input_request,omitempty"`
+	Task         taskViewDTO      `json:"task"`
+	Config       *configViewDTO   `json:"config,omitempty"`
+	InputRequest *inputRequestDTO `json:"input_request,omitempty"`
 }
 
 type taskInputRequestResult struct {
-	InputRequest *inputRequestDto `json:"input_request,omitempty"`
+	InputRequest *inputRequestDTO `json:"input_request,omitempty"`
 }
 
 type configCatalogResult struct {
-	DefaultAlias string                  `json:"default_alias"`
-	Entries      []configCatalogEntryDto `json:"entries"`
+	DefaultAlias       string                  `json:"default_alias"`
+	DefaultUseWorktree bool                    `json:"default_use_worktree"`
+	Entries            []configCatalogEntryDTO `json:"entries"`
 }
 
 type artifactListResult struct {
-	Artifacts []artifactRefDto `json:"artifacts"`
+	Artifacts []artifactRefDTO `json:"artifacts"`
 }
 
 type commandAcceptedResult struct {
@@ -177,11 +283,15 @@ type commandAcceptedResult struct {
 	ClientCommandID string `json:"client_command_id,omitempty"`
 }
 
-type serviceShutdownResult struct {
-	Accepted bool `json:"accepted"`
+type taskNotificationPayload struct {
+	ClientCommandID string      `json:"client_command_id,omitempty"`
+	Event           runEventDTO `json:"event"`
 }
 
-type eventNotificationParams struct {
-	ClientCommandID string      `json:"client_command_id,omitempty"`
-	Event           runEventDto `json:"event"`
+type workspaceNotificationPayload struct {
+	Workspace workspaceSummaryDTO `json:"workspace"`
+}
+
+type workspaceRemovedPayload struct {
+	Removed bool `json:"removed"`
 }

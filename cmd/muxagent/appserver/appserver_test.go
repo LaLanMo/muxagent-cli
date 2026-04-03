@@ -1,38 +1,37 @@
 package appserver
 
 import (
-	"os"
+	"bytes"
+	"io"
 	"path/filepath"
 	"testing"
-
-	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
-	"github.com/stretchr/testify/require"
 )
 
-func TestResolveAppServerWorkDirRequiresAbsolutePath(t *testing.T) {
-	prevWD, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(t.TempDir()))
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(prevWD))
-	})
-
-	_, err = resolveAppServerWorkDir("workspace")
-	require.ErrorContains(t, err, "workdir must be an absolute path")
+func TestNewCmdDoesNotExposeLegacyWorkDirFlag(t *testing.T) {
+	cmd := NewCmd()
+	if flag := cmd.Flags().Lookup("workdir"); flag != nil {
+		t.Fatalf("workdir flag unexpectedly present")
+	}
 }
 
-func TestResolveAppServerWorkDirRejectsNonDirectory(t *testing.T) {
-	filePath := filepath.Join(t.TempDir(), "workspace.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("not a dir"), 0o644))
-
-	_, err := resolveAppServerWorkDir(filePath)
-	require.ErrorContains(t, err, "workdir is not a directory")
+func TestNewCmdKeepsHiddenStateDirFlag(t *testing.T) {
+	cmd := NewCmd()
+	flag := cmd.Flags().Lookup("state-dir")
+	if flag == nil {
+		t.Fatalf("state-dir flag missing")
+	}
+	if !flag.Hidden {
+		t.Fatalf("state-dir flag should stay hidden")
+	}
 }
 
-func TestResolveAppServerWorkDirNormalizesExistingDirectory(t *testing.T) {
-	workDir := t.TempDir()
+func TestNewCmdRunsV2WithStateDirAndEOF(t *testing.T) {
+	cmd := NewCmd()
+	cmd.SetArgs([]string{"--state-dir", filepath.Join(t.TempDir(), "appserver")})
+	cmd.SetIn(bytes.NewReader(nil))
+	cmd.SetOut(io.Discard)
 
-	got, err := resolveAppServerWorkDir(workDir)
-	require.NoError(t, err)
-	require.Equal(t, taskstore.NormalizeWorkDir(workDir), got)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
 }

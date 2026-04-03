@@ -3,13 +3,10 @@ package appserver
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -19,1277 +16,597 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
-	"github.com/stretchr/testify/require"
 )
 
-type fakeService struct {
-	events chan taskruntime.RunEvent
-	stopCh chan struct{}
+func TestServerRejectsCallsBeforeInitialize(t *testing.T) {
+	server := newTestServer(t)
 
-	listTasksResult taskListFixture
-	loadTaskResult  taskGetFixture
-	inputResult     *taskruntime.InputRequest
-	inputErr        error
-	dispatched      []taskruntime.RunCommand
+	var in bytes.Buffer
+	var out bytes.Buffer
+	writeRequestFrame(t, &in, 1, methodServiceStatus, map[string]any{})
 
-	prepareShutdownCalls int
-	closeCalls           int
-}
+	if err := server.Serve(context.Background(), &in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
 
-type taskListFixture struct {
-	views []taskdomain.TaskView
-	err   error
-}
-
-type taskGetFixture struct {
-	view   taskdomain.TaskView
-	config *taskconfig.Config
-	err    error
-}
-
-func newFakeService() *fakeService {
-	return &fakeService{
-		events: make(chan taskruntime.RunEvent, 8),
-		stopCh: make(chan struct{}, 1),
+	messages := readFramesAsMaps(t, out.Bytes())
+	if len(messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(messages))
+	}
+	if got := nestedFloat(messages[0], "error", "code"); int(got) != int(errorCodeNotInitialized) {
+		t.Fatalf("error code = %v, want %d", got, errorCodeNotInitialized)
 	}
 }
 
-func (f *fakeService) Run(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-f.stopCh:
-		return nil
+func TestServerWorkspaceLifecycle(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+
+	server := newTestServerAtPath(t, stateDir)
+	var firstIn bytes.Buffer
+	var firstOut bytes.Buffer
+	writeRequestFrame(t, &firstIn, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion})
+	writeRequestFrame(t, &firstIn, 2, methodWorkspaceAdd, map[string]any{
+		"path":         workspacePath,
+		"display_name": "cmdr",
+	})
+	writeRequestFrame(t, &firstIn, 3, methodServiceShutdown, map[string]any{})
+
+	if err := server.Serve(context.Background(), &firstIn, &firstOut); err != nil {
+		t.Fatalf("serve add flow: %v", err)
 	}
-}
 
-func (f *fakeService) Events() <-chan taskruntime.RunEvent {
-	return f.events
-}
+	firstMessages := readFramesAsMaps(t, firstOut.Bytes())
+	addResponse := responseByID(t, firstMessages, 2)
+	workspaceID, ok := nestedString(addResponse, "result", "workspace", "workspace_id")
+	if !ok || workspaceID == "" {
+		t.Fatalf("workspace_id missing in add response: %#v", addResponse)
+	}
 
-func (f *fakeService) Dispatch(cmd taskruntime.RunCommand) {
-	f.dispatched = append(f.dispatched, cmd)
-	if cmd.Type == taskruntime.CommandShutdown {
-		f.prepareShutdownCalls++
-		select {
-		case f.stopCh <- struct{}{}:
-		default:
+	server = newTestServerAtPath(t, stateDir)
+	var secondIn bytes.Buffer
+	var secondOut bytes.Buffer
+	writeRequestFrame(t, &secondIn, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion})
+	writeRequestFrame(t, &secondIn, 2, methodServiceStatus, map[string]any{})
+	writeRequestFrame(t, &secondIn, 3, methodWorkspaceUpdate, map[string]any{
+		"workspace_id": workspaceID,
+		"display_name": "cmdr core",
+	})
+	writeRequestFrame(t, &secondIn, 4, methodWorkspaceGet, map[string]any{
+		"workspace_id": workspaceID,
+	})
+	writeRequestFrame(t, &secondIn, 5, methodWorkspaceList, map[string]any{})
+	writeRequestFrame(t, &secondIn, 6, methodWorkspaceRemove, map[string]any{
+		"workspace_id": workspaceID,
+	})
+	writeRequestFrame(t, &secondIn, 7, methodServiceShutdown, map[string]any{})
+
+	if err := server.Serve(context.Background(), &secondIn, &secondOut); err != nil {
+		t.Fatalf("serve lifecycle: %v", err)
+	}
+
+	secondMessages := readFramesAsMaps(t, secondOut.Bytes())
+	statusResponse := responseByID(t, secondMessages, 2)
+	updateResponse := responseByID(t, secondMessages, 3)
+	getResponse := responseByID(t, secondMessages, 4)
+	listResponse := responseByID(t, secondMessages, 5)
+	removeResponse := responseByID(t, secondMessages, 6)
+
+	if got := nestedFloat(statusResponse, "result", "workspace_count"); int(got) != 1 {
+		t.Fatalf("workspace_count = %v, want 1", got)
+	}
+	if got := nestedStringMust(t, updateResponse, "result", "workspace", "display_name"); got != "cmdr core" {
+		t.Fatalf("updated display_name = %q, want %q", got, "cmdr core")
+	}
+	if got := nestedStringMust(t, getResponse, "result", "workspace", "display_name"); got != "cmdr core" {
+		t.Fatalf("get display_name = %q, want %q", got, "cmdr core")
+	}
+	if got := len(nestedSlice(t, listResponse, "result", "workspaces")); got != 1 {
+		t.Fatalf("workspace list count = %d, want 1", got)
+	}
+	if removed, _ := nestedBool(removeResponse, "result", "removed"); !removed {
+		t.Fatalf("removed = false, want true")
+	}
+
+	var sawAddNotification bool
+	var sawUpdateNotification bool
+	var sawRemoveNotification bool
+	for _, message := range append(firstMessages, secondMessages...) {
+		if method, _ := nestedString(message, "method"); method != methodNotification {
+			continue
+		}
+		kind, _ := nestedString(message, "params", "kind")
+		switch kind {
+		case notificationWorkspaceAdded:
+			sawAddNotification = true
+		case notificationWorkspaceUpdated:
+			sawUpdateNotification = true
+		case notificationWorkspaceRemoved:
+			sawRemoveNotification = true
 		}
 	}
-}
-
-func (f *fakeService) ListTaskViews(ctx context.Context, workDir string) ([]taskdomain.TaskView, error) {
-	return f.listTasksResult.views, f.listTasksResult.err
-}
-
-func (f *fakeService) LoadTaskView(ctx context.Context, taskID string) (taskdomain.TaskView, *taskconfig.Config, error) {
-	return f.loadTaskResult.view, f.loadTaskResult.config, f.loadTaskResult.err
-}
-
-func (f *fakeService) BuildInputRequest(ctx context.Context, taskID, nodeRunID string) (*taskruntime.InputRequest, error) {
-	return f.inputResult, f.inputErr
-}
-
-func (f *fakeService) PrepareShutdown(ctx context.Context) error {
-	f.prepareShutdownCalls++
-	return nil
-}
-
-func (f *fakeService) Close() error {
-	f.closeCalls++
-	return nil
-}
-
-func TestServerInitializeAndListTasks(t *testing.T) {
-	service := newFakeService()
-	service.listTasksResult.views = []taskdomain.TaskView{{
-		Task: taskdomain.Task{
-			ID:          "task-1",
-			Description: "Implement app-server",
-			ConfigAlias: "default",
-			ConfigPath:  "/tmp/config.yaml",
-			WorkDir:     "/tmp/project",
-			CreatedAt:   time.Unix(10, 0).UTC(),
-			UpdatedAt:   time.Unix(20, 0).UTC(),
-		},
-		Status: taskdomain.TaskStatusRunning,
-	}}
-
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
-	})
-
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskList, map[string]any{}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-
-	messages := decodeOutputFrames(t, output.Bytes())
-	if len(messages) != 2 {
-		t.Fatalf("frame count = %d, want 2", len(messages))
-	}
-	if got := nestedString(messages[0], "result", "server_name"); got != "muxagent app-server" {
-		t.Fatalf("server_name = %q", got)
-	}
-	if got := nestedString(messages[1], "result", "tasks", "0", "task", "id"); got != "task-1" {
-		t.Fatalf("task id = %q", got)
+	if !sawAddNotification || !sawUpdateNotification || !sawRemoveNotification {
+		t.Fatalf("notifications missing: add=%v update=%v remove=%v", sawAddNotification, sawUpdateNotification, sawRemoveNotification)
 	}
 }
 
-func TestServerReturnsConfigCatalogAndStatus(t *testing.T) {
-	service := newFakeService()
-	catalog := &taskconfig.Catalog{
-		DefaultAlias: "default",
-		Entries: []taskconfig.CatalogEntry{{
-			Alias: "default",
-			Path:  "/configs/default/config.yaml",
-			Config: &taskconfig.Config{
-				Version:     1,
-				Description: "Default flow",
-				Runtime:     appconfig.RuntimeCodex,
-				Topology: taskconfig.Topology{
-					Nodes: []taskconfig.NodeRef{{Name: "plan"}, {Name: "review"}},
-				},
-			},
-			Builtin: true,
-		}},
-	}
-
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return catalog, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{
-				Configs: []taskconfig.RegistryEntry{{Alias: "default", Path: "default"}},
+func TestServerTaskReadFlows(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+	server := newTestServerWithOptions(t, stateDir, testServerOptions{
+		loadCatalog: func() (*taskconfig.Catalog, error) {
+			cfg, err := taskconfig.LoadDefault()
+			if err != nil {
+				return nil, err
+			}
+			return &taskconfig.Catalog{
+				DefaultAlias: "default",
+				Entries: []taskconfig.CatalogEntry{{
+					Alias:     "default",
+					Path:      "/tmp/default/config.yaml",
+					Config:    cfg,
+					Builtin:   true,
+					BuiltinID: "default",
+				}},
 			}, nil
 		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
+		loadRegistry: func() (taskconfig.Registry, error) {
+			return taskconfig.Registry{
+				DefaultAlias: "default",
+				Configs: []taskconfig.RegistryEntry{{
+					Alias: "default",
+					Path:  "default",
+				}},
+			}, nil
+		},
+		loadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
 			return appconfig.TaskLaunchPreferences{UseWorktree: true}
 		},
-		WorktreeAvailable: func(string) bool { return true },
 	})
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
+	}
+	taskID, awaitingRunID := seedAwaitingTask(t, workspacePath)
+	server.markInitialized()
 
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodConfigCatalog, map[string]any{}),
-		rpcRequestPayload(t, 3, methodServiceStatus, map[string]any{}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-
-	messages := decodeOutputFrames(t, output.Bytes())
-	if got := nestedString(messages[1], "result", "entries", "0", "runtime_name"); got != "Codex" {
-		t.Fatalf("runtime_name = %q", got)
-	}
-	if got := nestedBool(messages[2], "result", "default_use_worktree"); !got {
-		t.Fatalf("default_use_worktree = false, want true")
-	}
-	methods := nestedValue(messages[0], "result", "capabilities", "methods")
-	list, ok := methods.([]any)
-	if !ok {
-		t.Fatalf("capabilities.methods = %T, want []any", methods)
-	}
-	if !containsString(list, methodTaskStart) || !containsString(list, methodTaskContinueBlocked) {
-		t.Fatalf("capabilities.methods missing mutating methods: %v", list)
-	}
-}
-
-func TestServerTaskGetIncludesInputRequest(t *testing.T) {
-	service := newFakeService()
-	service.loadTaskResult = taskGetFixture{
-		view: taskdomain.TaskView{
-			Task: taskdomain.Task{
-				ID:          "task-1",
-				ConfigAlias: "default",
-				ConfigPath:  "/tmp/config.yaml",
-			},
-			Status: taskdomain.TaskStatusAwaitingUser,
-			NodeRuns: []taskdomain.NodeRunView{{
-				NodeRun: taskdomain.NodeRun{
-					ID:     "run-1",
-					Status: taskdomain.NodeRunAwaitingUser,
-				},
-			}},
-		},
-		config: &taskconfig.Config{Version: 1, Runtime: appconfig.RuntimeCodex},
-	}
-	service.inputResult = &taskruntime.InputRequest{
-		Kind:      taskruntime.InputKindClarification,
-		TaskID:    "task-1",
-		NodeRunID: "run-1",
-		NodeName:  "review",
-	}
-
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
+	listResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskList,
+		Params: mustRawParams(t, taskListParams{WorkspaceID: workspace.WorkspaceID}),
 	})
-
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskGet, map[string]any{"task_id": "task-1"}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
+	if rpcErr != nil {
+		t.Fatalf("task.list rpc error: %+v", rpcErr)
+	}
+	listResult := listResultAny.(taskListResult)
+	if got := len(listResult.Tasks); got != 1 {
+		t.Fatalf("task.list count = %d, want 1", got)
+	}
+	if got := listResult.Tasks[0].Status; got != string(taskdomain.TaskStatusAwaitingUser) {
+		t.Fatalf("task.list status = %q, want %q", got, taskdomain.TaskStatusAwaitingUser)
 	}
 
-	messages := decodeOutputFrames(t, output.Bytes())
-	if got := nestedString(messages[1], "result", "input_request", "node_run_id"); got != "run-1" {
-		t.Fatalf("input_request.node_run_id = %q", got)
-	}
-}
-
-func TestServerDispatchesMutatingCommands(t *testing.T) {
-	tests := []struct {
-		name         string
-		method       string
-		params       map[string]any
-		wantCommand  taskruntime.RunCommand
-		wantClientID string
-	}{
-		{
-			name:   "task.start",
-			method: methodTaskStart,
-			params: map[string]any{
-				"client_command_id": "cmd-start",
-				"description":       "Implement desktop shell",
-				"config_alias":      "default",
-				"config_path":       "/tmp/default.yaml",
-				"use_worktree":      true,
-			},
-			wantCommand: taskruntime.RunCommand{
-				Type:        taskruntime.CommandStartTask,
-				Description: "Implement desktop shell",
-				ConfigAlias: "default",
-				ConfigPath:  "/tmp/default.yaml",
-				WorkDir:     "/tmp/project",
-				UseWorktree: true,
-			},
-			wantClientID: "cmd-start",
-		},
-		{
-			name:   "task.start_follow_up",
-			method: methodTaskStartFollowUp,
-			params: map[string]any{
-				"client_command_id": "cmd-follow",
-				"parent_task_id":    "task-1",
-				"description":       "Tighten review copy",
-				"config_alias":      "default",
-				"config_path":       "/tmp/default.yaml",
-			},
-			wantCommand: taskruntime.RunCommand{
-				Type:         taskruntime.CommandStartFollowUp,
-				ParentTaskID: "task-1",
-				Description:  "Tighten review copy",
-				ConfigAlias:  "default",
-				ConfigPath:   "/tmp/default.yaml",
-			},
-			wantClientID: "cmd-follow",
-		},
-		{
-			name:   "task.submit_input",
-			method: methodTaskSubmitInput,
-			params: map[string]any{
-				"client_command_id": "cmd-input",
-				"task_id":           "task-1",
-				"node_run_id":       "run-1",
-				"payload":           map[string]any{"approved": true},
-			},
-			wantCommand: taskruntime.RunCommand{
-				Type:      taskruntime.CommandSubmitInput,
-				TaskID:    "task-1",
-				NodeRunID: "run-1",
-				Payload:   map[string]interface{}{"approved": true},
-			},
-			wantClientID: "cmd-input",
-		},
-		{
-			name:   "task.retry_node",
-			method: methodTaskRetryNode,
-			params: map[string]any{
-				"client_command_id": "cmd-retry",
-				"task_id":           "task-1",
-				"node_run_id":       "run-2",
-				"force":             true,
-			},
-			wantCommand: taskruntime.RunCommand{
-				Type:      taskruntime.CommandRetryNode,
-				TaskID:    "task-1",
-				NodeRunID: "run-2",
-				Force:     true,
-			},
-			wantClientID: "cmd-retry",
-		},
-		{
-			name:   "task.continue_blocked",
-			method: methodTaskContinueBlocked,
-			params: map[string]any{
-				"client_command_id": "cmd-continue",
-				"task_id":           "task-1",
-			},
-			wantCommand: taskruntime.RunCommand{
-				Type:   taskruntime.CommandContinueBlocked,
-				TaskID: "task-1",
-			},
-			wantClientID: "cmd-continue",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			service := newFakeService()
-			server := mustNewTestServer(t, Options{
-				Service:       service,
-				WorkDir:       "/tmp/project",
-				ServerVersion: "test",
-				LoadCatalog: func() (*taskconfig.Catalog, error) {
-					return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-				},
-				LoadRegistry: func() (taskconfig.Registry, error) {
-					return taskconfig.Registry{}, nil
-				},
-				LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-					return appconfig.TaskLaunchPreferences{}
-				},
-			})
-
-			input := framesFromJSON(
-				t,
-				rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-				rpcRequestPayload(t, 2, tt.method, tt.params),
-			)
-			var output bytes.Buffer
-			if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-				t.Fatalf("Serve: %v", err)
-			}
-
-			if len(service.dispatched) != 1 {
-				t.Fatalf("dispatched = %d, want 1", len(service.dispatched))
-			}
-			if !reflect.DeepEqual(service.dispatched[0], tt.wantCommand) {
-				t.Fatalf("dispatched = %#v, want %#v", service.dispatched[0], tt.wantCommand)
-			}
-
-			messages := decodeOutputFrames(t, output.Bytes())
-			if got := nestedBool(messages[1], "result", "accepted"); !got {
-				t.Fatalf("accepted = false, want true")
-			}
-			if got := nestedString(messages[1], "result", "client_command_id"); got != tt.wantClientID {
-				t.Fatalf("client_command_id = %q, want %q", got, tt.wantClientID)
-			}
-		})
-	}
-}
-
-func TestServerRejectsInvalidMutatingParams(t *testing.T) {
-	service := newFakeService()
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
+	getResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskGet,
+		Params: mustRawParams(t, taskGetParams{WorkspaceID: workspace.WorkspaceID, TaskID: taskID}),
 	})
+	if rpcErr != nil {
+		t.Fatalf("task.get rpc error: %+v", rpcErr)
+	}
+	getResult := getResultAny.(taskGetResult)
+	if getResult.InputRequest == nil {
+		t.Fatal("task.get input_request = nil, want value")
+	}
+	if got := getResult.InputRequest.NodeRunID; got != awaitingRunID {
+		t.Fatalf("task.get input_request.node_run_id = %q, want %q", got, awaitingRunID)
+	}
 
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskStartFollowUp, map[string]any{
-			"parent_task_id": "task-1",
-			"config_alias":   "default",
+	inputResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskInputRequest,
+		Params: mustRawParams(t, taskInputRequestParams{
+			WorkspaceID: workspace.WorkspaceID,
+			TaskID:      taskID,
+			NodeRunID:   awaitingRunID,
 		}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.input_request rpc error: %+v", rpcErr)
+	}
+	inputResult := inputResultAny.(taskInputRequestResult)
+	if inputResult.InputRequest == nil || inputResult.InputRequest.Kind != string(taskruntime.InputKindHumanNode) {
+		t.Fatalf("task.input_request kind = %#v, want human_node", inputResult.InputRequest)
 	}
 
-	if len(service.dispatched) != 0 {
-		t.Fatalf("dispatched = %d, want 0", len(service.dispatched))
+	artifactResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodArtifactList,
+		Params: mustRawParams(t, artifactListParams{WorkspaceID: workspace.WorkspaceID, TaskID: taskID}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("artifact.list rpc error: %+v", rpcErr)
 	}
-	messages := decodeOutputFrames(t, output.Bytes())
-	if got := nestedString(messages[1], "error", "message"); got != "config_alias and config_path must be provided together" {
-		t.Fatalf("error.message = %q", got)
+	artifactResult := artifactResultAny.(artifactListResult)
+	if got := len(artifactResult.Artifacts); got != 1 {
+		t.Fatalf("artifact.list count = %d, want 1", got)
+	}
+	if got := artifactResult.Artifacts[0].PreviewName; got != "plan.md" {
+		t.Fatalf("artifact preview_name = %q, want plan.md", got)
+	}
+
+	catalogResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigCatalog,
+		Params: mustRawParams(t, map[string]any{}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.catalog rpc error: %+v", rpcErr)
+	}
+	catalogResult := catalogResultAny.(configCatalogResult)
+	if catalogResult.DefaultAlias != "default" {
+		t.Fatalf("default_alias = %q, want default", catalogResult.DefaultAlias)
+	}
+	if !catalogResult.DefaultUseWorktree {
+		t.Fatal("default_use_worktree = false, want true")
 	}
 }
 
-func TestServerArtifactListResolvesRelativeRunArtifacts(t *testing.T) {
-	workDir := t.TempDir()
-	taskID := "1234567890abcdef"
-	artifactPath := filepath.Join(taskstore.ArtifactRunDir(workDir, taskID, 1, "draft_plan"), "plan.md")
-	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(artifactPath, []byte("# plan\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	service := newFakeService()
-	service.loadTaskResult = taskGetFixture{
-		view: taskdomain.TaskView{
-			Task: taskdomain.Task{
-				ID:      taskID,
-				WorkDir: workDir,
-			},
-			Status: taskdomain.TaskStatusDone,
-			NodeRuns: []taskdomain.NodeRunView{{
-				NodeRun: taskdomain.NodeRun{
-					ID:        "run-1",
-					TaskID:    taskID,
-					NodeName:  "draft_plan",
-					Status:    taskdomain.NodeRunDone,
-					StartedAt: time.Unix(10, 0).UTC(),
-				},
-				ArtifactPaths: []string{"plan.md"},
-			}},
-			ArtifactPaths: []string{"plan.md"},
-		},
-	}
-
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       workDir,
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
+func TestServerTaskMutationsRouteByWorkspaceAndCorrelateNotifications(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+	fakeService := newFakeRuntimeService()
+	server := newTestServerWithOptions(t, stateDir, testServerOptions{
+		runtimeFactory: func(workDir string) (runtimeService, error) {
+			if workDir != taskstore.NormalizeWorkDir(workspacePath) {
+				t.Fatalf("runtime factory workDir = %q, want %q", workDir, taskstore.NormalizeWorkDir(workspacePath))
+			}
+			return fakeService, nil
 		},
 	})
+	defer func() { _ = server.runtimes.closeAll() }()
 
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodArtifactList, map[string]any{"task_id": taskID}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
 	}
+	server.markInitialized()
 
-	messages := decodeOutputFrames(t, output.Bytes())
-	if got := nestedString(messages[1], "result", "artifacts", "0", "resolved_path"); got != artifactPath {
-		t.Fatalf("resolved_path = %q, want %q", got, artifactPath)
-	}
-	if got := nestedString(messages[1], "result", "artifacts", "0", "source_label"); got != "draft_plan (#1)" {
-		t.Fatalf("source_label = %q", got)
-	}
-	if got := nestedString(messages[1], "result", "artifacts", "0", "display_path"); got != ".muxagent/tasks/12345678/artifacts/01-draft_plan/plan.md" {
-		t.Fatalf("display_path = %q", got)
-	}
-}
-
-func TestServerArtifactListRejectsPathsOutsideWorkspace(t *testing.T) {
-	workDir := t.TempDir()
-	outsidePath := filepath.Join(t.TempDir(), "secrets.txt")
-	require.NoError(t, os.WriteFile(outsidePath, []byte("secret"), 0o644))
-
-	service := newFakeService()
-	service.loadTaskResult = taskGetFixture{
-		view: taskdomain.TaskView{
-			Task: taskdomain.Task{
-				ID:      "task-1",
-				WorkDir: workDir,
-			},
-			Status: taskdomain.TaskStatusDone,
-			NodeRuns: []taskdomain.NodeRunView{{
-				NodeRun: taskdomain.NodeRun{
-					ID:        "run-1",
-					TaskID:    "task-1",
-					NodeName:  "draft_plan",
-					Status:    taskdomain.NodeRunDone,
-					StartedAt: time.Unix(10, 0).UTC(),
-				},
-				ArtifactPaths: []string{outsidePath, "../../../../../../escape.md"},
-			}},
-		},
-	}
-
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       workDir,
-		ServerVersion: "test",
+	var notifications []notification
+	server.setNotificationSink(func(n notification) {
+		notifications = append(notifications, n)
 	})
+	defer server.setNotificationSink(nil)
 
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodArtifactList, map[string]any{"task_id": "task-1"}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-
-	messages := decodeOutputFrames(t, output.Bytes())
-	artifacts, _ := nestedValue(messages[1], "result", "artifacts").([]any)
-	if len(artifacts) != 0 {
-		t.Fatalf("artifact count = %d, want 0", len(artifacts))
-	}
-}
-
-func TestServerArtifactListIncludesInheritedWorkspaceArtifacts(t *testing.T) {
-	workDir := t.TempDir()
-	parentArtifact := filepath.Join(workDir, ".muxagent", "tasks", "parent-task", "artifacts", "01-draft_plan", "plan.md")
-	require.NoError(t, os.MkdirAll(filepath.Dir(parentArtifact), 0o755))
-	require.NoError(t, os.WriteFile(parentArtifact, []byte("# inherited\n"), 0o644))
-
-	service := newFakeService()
-	service.loadTaskResult = taskGetFixture{
-		view: taskdomain.TaskView{
-			Task: taskdomain.Task{
-				ID:      "child-task",
-				WorkDir: workDir,
-			},
-			Status: taskdomain.TaskStatusAwaitingUser,
-			NodeRuns: []taskdomain.NodeRunView{{
-				NodeRun: taskdomain.NodeRun{
-					ID:        "await-run",
-					TaskID:    "child-task",
-					NodeName:  "approval",
-					Status:    taskdomain.NodeRunAwaitingUser,
-					StartedAt: time.Unix(10, 0).UTC(),
-				},
-			}},
-		},
-	}
-	service.inputResult = &taskruntime.InputRequest{
-		TaskID:        "child-task",
-		NodeRunID:     "await-run",
-		NodeName:      "approval",
-		ArtifactPaths: []string{parentArtifact},
-	}
-
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       workDir,
-		ServerVersion: "test",
-	})
-
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodArtifactList, map[string]any{"task_id": "child-task"}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-
-	messages := decodeOutputFrames(t, output.Bytes())
-	if got := nestedString(messages[1], "result", "artifacts", "0", "resolved_path"); got != parentArtifact {
-		t.Fatalf("resolved_path = %q, want %q", got, parentArtifact)
-	}
-}
-
-func TestServerServiceShutdownQueuesRuntimeCommand(t *testing.T) {
-	service := newFakeService()
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
-	})
-
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodServiceShutdown, map[string]any{}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-	if service.prepareShutdownCalls != 1 {
-		t.Fatalf("prepareShutdownCalls = %d, want 1", service.prepareShutdownCalls)
-	}
-	if len(service.dispatched) != 1 || service.dispatched[0].Type != taskruntime.CommandShutdown {
-		t.Fatalf("dispatched = %#v, want queued task.shutdown command", service.dispatched)
-	}
-}
-
-func TestServerTaskInputRequestMapsLookupFailuresToInvalidParams(t *testing.T) {
-	service := newFakeService()
-	service.inputErr = fmt.Errorf("%w: node run %q is not awaiting user input", taskruntime.ErrNodeRunNotAwaitingUser, "run-1")
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-	})
-
-	input := framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskInputRequest, map[string]any{"task_id": "task-1", "node_run_id": "run-1"}),
-	)
-	var output bytes.Buffer
-	if err := server.Serve(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-
-	messages := decodeOutputFrames(t, output.Bytes())
-	got, _ := nestedValue(messages[1], "error", "code").(float64)
-	if got != float64(errorCodeInvalidParams) {
-		t.Fatalf("error.code = %v, want %d", got, errorCodeInvalidParams)
-	}
-}
-
-func TestRuntimeLookupRPCErrorMapsSQLNoRowsToInvalidParams(t *testing.T) {
-	rpcErr := runtimeLookupRPCError(sql.ErrNoRows)
-	if rpcErr.Code != errorCodeInvalidParams {
-		t.Fatalf("rpcErr.Code = %d, want %d", rpcErr.Code, errorCodeInvalidParams)
-	}
-}
-
-func TestServerCorrelatesClientCommandIDOnCausalNotification(t *testing.T) {
-	tests := []struct {
-		name           string
-		method         string
-		params         map[string]any
-		event          taskruntime.RunEvent
-		wantClientID   string
-		wantEventType  string
-		wantEventTask  string
-		wantEventRunID string
-	}{
-		{
-			name:   "task.start uses task.created",
-			method: methodTaskStart,
-			params: map[string]any{
-				"client_command_id": "cmd-start",
-				"description":       "Implement desktop shell",
-				"config_alias":      "default",
-				"config_path":       "/tmp/default.yaml",
-			},
-			event: taskruntime.RunEvent{
-				Type:   taskruntime.EventTaskCreated,
-				TaskID: "task-1",
-			},
-			wantClientID:  "cmd-start",
-			wantEventType: string(taskruntime.EventTaskCreated),
-			wantEventTask: "task-1",
-		},
-		{
-			name:   "task.submit_input uses node scoped event",
-			method: methodTaskSubmitInput,
-			params: map[string]any{
-				"client_command_id": "cmd-input",
-				"task_id":           "task-1",
-				"node_run_id":       "run-1",
-				"payload":           map[string]any{"approved": true},
-			},
-			event: taskruntime.RunEvent{
-				Type:      taskruntime.EventNodeCompleted,
-				TaskID:    "task-1",
-				NodeRunID: "run-1",
-			},
-			wantClientID:   "cmd-input",
-			wantEventType:  string(taskruntime.EventNodeCompleted),
-			wantEventTask:  "task-1",
-			wantEventRunID: "run-1",
-		},
-		{
-			name:   "task.continue_blocked accepts human restart",
-			method: methodTaskContinueBlocked,
-			params: map[string]any{
-				"client_command_id": "cmd-continue",
-				"task_id":           "task-1",
-			},
-			event: taskruntime.RunEvent{
-				Type:      taskruntime.EventInputRequested,
-				TaskID:    "task-1",
-				NodeRunID: "run-2",
-			},
-			wantClientID:   "cmd-continue",
-			wantEventType:  string(taskruntime.EventInputRequested),
-			wantEventTask:  "task-1",
-			wantEventRunID: "run-2",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			service := newFakeService()
-			server := mustNewTestServer(t, Options{
-				Service:       service,
-				WorkDir:       "/tmp/project",
-				ServerVersion: "test",
-				LoadCatalog: func() (*taskconfig.Catalog, error) {
-					return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-				},
-				LoadRegistry: func() (taskconfig.Registry, error) {
-					return taskconfig.Registry{}, nil
-				},
-				LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-					return appconfig.TaskLaunchPreferences{}
-				},
-			})
-
-			outputFrames, inputWriter, cleanup := startLiveServer(t, server)
-			defer cleanup()
-
-			if _, err := inputWriter.Write(framesFromJSON(
-				t,
-				rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-				rpcRequestPayload(t, 2, tt.method, tt.params),
-			)); err != nil {
-				t.Fatalf("write requests: %v", err)
-			}
-
-			readFrameMapFromReader(t, outputFrames)
-			ackMsg := readFrameMapFromReader(t, outputFrames)
-			if got := nestedString(ackMsg, "result", "client_command_id"); got != tt.wantClientID {
-				t.Fatalf("ack client_command_id = %q, want %q", got, tt.wantClientID)
-			}
-
-			service.events <- tt.event
-			eventMsg := readFrameMapFromReader(t, outputFrames)
-			if got := stringValue(eventMsg["method"]); got != tt.wantEventType {
-				t.Fatalf("method = %q, want %q", got, tt.wantEventType)
-			}
-			if got := nestedString(eventMsg, "params", "client_command_id"); got != tt.wantClientID {
-				t.Fatalf("notification client_command_id = %q, want %q", got, tt.wantClientID)
-			}
-			if got := nestedString(eventMsg, "params", "event", "task_id"); got != tt.wantEventTask {
-				t.Fatalf("event task_id = %q, want %q", got, tt.wantEventTask)
-			}
-			if tt.wantEventRunID != "" {
-				if got := nestedString(eventMsg, "params", "event", "node_run_id"); got != tt.wantEventRunID {
-					t.Fatalf("event node_run_id = %q, want %q", got, tt.wantEventRunID)
-				}
-			}
-		})
-	}
-}
-
-func TestServerCorrelatesClientCommandIDOnDispatchCommandError(t *testing.T) {
-	service := newFakeService()
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
-	})
-
-	outputFrames, inputWriter, cleanup := startLiveServer(t, server)
-	defer cleanup()
-
-	if _, err := inputWriter.Write(framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskRetryNode, map[string]any{
-			"client_command_id": "cmd-retry",
-			"task_id":           "task-1",
-			"node_run_id":       "run-1",
+	startResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskStart,
+		Params: mustRawParams(t, taskStartParams{
+			WorkspaceID:     workspace.WorkspaceID,
+			ClientCommandID: "cmd-1",
+			Description:     "Ship it",
+			ConfigAlias:     "default",
+			ConfigPath:      "/tmp/default/config.yaml",
+			UseWorktree:     true,
 		}),
-	)); err != nil {
-		t.Fatalf("write requests: %v", err)
-	}
-
-	readFrameMapFromReader(t, outputFrames)
-	readFrameMapFromReader(t, outputFrames)
-
-	service.events <- taskruntime.RunEvent{
-		Type:   taskruntime.EventCommandError,
-		TaskID: "task-1",
-		Error:  &taskruntime.RunError{Message: "retry unavailable"},
-	}
-
-	eventMsg := readFrameMapFromReader(t, outputFrames)
-	if got := stringValue(eventMsg["method"]); got != string(taskruntime.EventCommandError) {
-		t.Fatalf("method = %q", got)
-	}
-	if got := nestedString(eventMsg, "params", "client_command_id"); got != "cmd-retry" {
-		t.Fatalf("notification client_command_id = %q, want %q", got, "cmd-retry")
-	}
-}
-
-func TestServerIgnoresNodeExecutionCommandErrorForCorrelation(t *testing.T) {
-	service := newFakeService()
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
 	})
-
-	outputFrames, inputWriter, cleanup := startLiveServer(t, server)
-	defer cleanup()
-
-	if _, err := inputWriter.Write(framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskStart, map[string]any{
-			"client_command_id": "cmd-start",
-			"description":       "Implement desktop shell",
-			"config_alias":      "default",
-			"config_path":       "/tmp/default.yaml",
-		}),
-	)); err != nil {
-		t.Fatalf("write requests: %v", err)
+	if rpcErr != nil {
+		t.Fatalf("task.start rpc error: %+v", rpcErr)
+	}
+	startResult := startResultAny.(commandAcceptedResult)
+	if !startResult.Accepted || startResult.ClientCommandID != "cmd-1" {
+		t.Fatalf("task.start accepted result = %#v", startResult)
 	}
 
-	readFrameMapFromReader(t, outputFrames)
-	readFrameMapFromReader(t, outputFrames)
-
-	service.events <- taskruntime.RunEvent{
-		Type:      taskruntime.EventCommandError,
-		TaskID:    "task-9",
-		NodeRunID: "run-9",
-		NodeName:  "implement",
-		Error:     &taskruntime.RunError{Message: "executor failed"},
+	dispatches := fakeService.Dispatched()
+	if len(dispatches) != 1 {
+		t.Fatalf("dispatch count = %d, want 1", len(dispatches))
 	}
-	firstEvent := readFrameMapFromReader(t, outputFrames)
-	if got := nestedString(firstEvent, "params", "client_command_id"); got != "" {
-		t.Fatalf("runtime command error client_command_id = %q, want empty", got)
+	if got := dispatches[0].WorkDir; got != taskstore.NormalizeWorkDir(workspacePath) {
+		t.Fatalf("dispatch work_dir = %q, want %q", got, taskstore.NormalizeWorkDir(workspacePath))
 	}
 
-	service.events <- taskruntime.RunEvent{
+	server.handleRuntimeEvent(workspace.WorkspaceID, taskruntime.RunEvent{
 		Type:   taskruntime.EventTaskCreated,
-		TaskID: "task-1",
-	}
-	secondEvent := readFrameMapFromReader(t, outputFrames)
-	if got := nestedString(secondEvent, "params", "client_command_id"); got != "cmd-start" {
-		t.Fatalf("task.created client_command_id = %q, want %q", got, "cmd-start")
-	}
-}
-
-func TestServerForwardsRunEventNotifications(t *testing.T) {
-	service := newFakeService()
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
+		TaskID: "task-123",
 	})
-
-	inputReader, inputWriter := io.Pipe()
-	outputReader, outputWriter := io.Pipe()
-
-	var (
-		serveErr error
-		wg       sync.WaitGroup
-	)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		serveErr = server.Serve(context.Background(), inputReader, outputWriter)
-	}()
-
-	if _, err := inputWriter.Write(framesFromJSON(t, rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}))); err != nil {
-		t.Fatalf("write initialize: %v", err)
+	if len(notifications) != 1 {
+		t.Fatalf("notification count = %d, want 1", len(notifications))
+	}
+	params := notifications[0].Params.(notificationParams)
+	if params.Kind != string(taskruntime.EventTaskCreated) {
+		t.Fatalf("notification kind = %q, want %q", params.Kind, taskruntime.EventTaskCreated)
+	}
+	if params.WorkspaceID != workspace.WorkspaceID {
+		t.Fatalf("notification workspace_id = %q, want %q", params.WorkspaceID, workspace.WorkspaceID)
+	}
+	payload := params.Payload.(taskNotificationPayload)
+	if payload.ClientCommandID != "cmd-1" {
+		t.Fatalf("notification client_command_id = %q, want cmd-1", payload.ClientCommandID)
 	}
 
-	outputFrames := newFrameReader(outputReader)
-	initFrame, err := outputFrames.readFrame()
-	if err != nil {
-		t.Fatalf("read initialize response: %v", err)
-	}
-	initMsg := decodeFrameMap(t, initFrame)
-	if got := nestedString(initMsg, "result", "server_name"); got != "muxagent app-server" {
-		t.Fatalf("server_name = %q", got)
-	}
-
-	service.events <- taskruntime.RunEvent{
-		Type:     taskruntime.EventTaskCreated,
-		TaskID:   "task-1",
-		NodeName: "plan",
-	}
-	eventFrame, err := outputFrames.readFrame()
-	if err != nil {
-		t.Fatalf("read event notification: %v", err)
-	}
-	eventMsg := decodeFrameMap(t, eventFrame)
-	if got := stringValue(eventMsg["method"]); got != string(taskruntime.EventTaskCreated) {
-		t.Fatalf("method = %q", got)
-	}
-	if got := nestedString(eventMsg, "params", "event", "task_id"); got != "task-1" {
-		t.Fatalf("task_id = %q", got)
-	}
-	if got := nestedString(eventMsg, "params", "client_command_id"); got != "" {
-		t.Fatalf("client_command_id = %q, want empty", got)
-	}
-
-	_ = inputWriter.Close()
-	_ = outputReader.Close()
-	wg.Wait()
-	if serveErr != nil {
-		t.Fatalf("Serve: %v", serveErr)
-	}
-}
-
-func TestServerAttachesClientCommandIDToFirstCausalNotification(t *testing.T) {
-	service := newFakeService()
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
-	})
-
-	inputReader, inputWriter := io.Pipe()
-	outputReader, outputWriter := io.Pipe()
-
-	var (
-		serveErr error
-		wg       sync.WaitGroup
-	)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		serveErr = server.Serve(context.Background(), inputReader, outputWriter)
-	}()
-
-	if _, err := inputWriter.Write(framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskStart, map[string]any{
-			"client_command_id": "cmd-start",
-			"description":       "Start task",
-			"config_alias":      "default",
-			"config_path":       "/tmp/default.yaml",
+	submitResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskSubmitInput,
+		Params: mustRawParams(t, taskSubmitInputParams{
+			WorkspaceID:     workspace.WorkspaceID,
+			ClientCommandID: "cmd-2",
+			TaskID:          "task-123",
+			NodeRunID:       "run-1",
+			Payload:         map[string]interface{}{"approved": true},
 		}),
-	)); err != nil {
-		t.Fatalf("write requests: %v", err)
-	}
-
-	outputFrames := newFrameReader(outputReader)
-	if _, err := outputFrames.readFrame(); err != nil {
-		t.Fatalf("read initialize response: %v", err)
-	}
-	startFrame, err := outputFrames.readFrame()
-	if err != nil {
-		t.Fatalf("read start response: %v", err)
-	}
-	startMsg := decodeFrameMap(t, startFrame)
-	if got := nestedString(startMsg, "result", "client_command_id"); got != "cmd-start" {
-		t.Fatalf("start client_command_id = %q", got)
-	}
-
-	service.events <- taskruntime.RunEvent{
-		Type:   taskruntime.EventTaskCreated,
-		TaskID: "task-1",
-	}
-	eventFrame, err := outputFrames.readFrame()
-	if err != nil {
-		t.Fatalf("read event notification: %v", err)
-	}
-	eventMsg := decodeFrameMap(t, eventFrame)
-	if got := nestedString(eventMsg, "params", "client_command_id"); got != "cmd-start" {
-		t.Fatalf("params.client_command_id = %q, want %q", got, "cmd-start")
-	}
-
-	_ = inputWriter.Close()
-	_ = outputReader.Close()
-	wg.Wait()
-	if serveErr != nil {
-		t.Fatalf("Serve: %v", serveErr)
-	}
-}
-
-func TestServerAttachesClientCommandIDToCommandErrorNotification(t *testing.T) {
-	service := newFakeService()
-	server := mustNewTestServer(t, Options{
-		Service:       service,
-		WorkDir:       "/tmp/project",
-		ServerVersion: "test",
-		LoadCatalog: func() (*taskconfig.Catalog, error) {
-			return &taskconfig.Catalog{DefaultAlias: "default"}, nil
-		},
-		LoadRegistry: func() (taskconfig.Registry, error) {
-			return taskconfig.Registry{}, nil
-		},
-		LoadTaskLaunchPreferences: func() appconfig.TaskLaunchPreferences {
-			return appconfig.TaskLaunchPreferences{}
-		},
 	})
-
-	inputReader, inputWriter := io.Pipe()
-	outputReader, outputWriter := io.Pipe()
-
-	var (
-		serveErr error
-		wg       sync.WaitGroup
-	)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		serveErr = server.Serve(context.Background(), inputReader, outputWriter)
-	}()
-
-	if _, err := inputWriter.Write(framesFromJSON(
-		t,
-		rpcRequestPayload(t, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion}),
-		rpcRequestPayload(t, 2, methodTaskSubmitInput, map[string]any{
-			"client_command_id": "cmd-input",
-			"task_id":           "task-1",
-			"node_run_id":       "run-1",
-			"payload":           map[string]any{"approved": true},
-		}),
-	)); err != nil {
-		t.Fatalf("write requests: %v", err)
+	if rpcErr != nil {
+		t.Fatalf("task.submit_input rpc error: %+v", rpcErr)
 	}
-
-	outputFrames := newFrameReader(outputReader)
-	if _, err := outputFrames.readFrame(); err != nil {
-		t.Fatalf("read initialize response: %v", err)
+	submitResult := submitResultAny.(commandAcceptedResult)
+	if !submitResult.Accepted {
+		t.Fatalf("task.submit_input accepted = false")
 	}
-	if _, err := outputFrames.readFrame(); err != nil {
-		t.Fatalf("read submit response: %v", err)
+	dispatches = fakeService.Dispatched()
+	if got := len(dispatches); got != 2 {
+		t.Fatalf("dispatch count after submit = %d, want 2", got)
 	}
-
-	service.events <- taskruntime.RunEvent{
-		Type:   taskruntime.EventCommandError,
-		TaskID: "task-1",
-		Error:  &taskruntime.RunError{Message: "boom"},
-	}
-	eventFrame, err := outputFrames.readFrame()
-	if err != nil {
-		t.Fatalf("read event notification: %v", err)
-	}
-	eventMsg := decodeFrameMap(t, eventFrame)
-	if got := nestedString(eventMsg, "params", "client_command_id"); got != "cmd-input" {
-		t.Fatalf("params.client_command_id = %q, want %q", got, "cmd-input")
-	}
-
-	_ = inputWriter.Close()
-	_ = outputReader.Close()
-	wg.Wait()
-	if serveErr != nil {
-		t.Fatalf("Serve: %v", serveErr)
+	if dispatches[1].Type != taskruntime.CommandSubmitInput {
+		t.Fatalf("second dispatch type = %q, want %q", dispatches[1].Type, taskruntime.CommandSubmitInput)
 	}
 }
 
-func mustNewTestServer(t *testing.T, opts Options) *Server {
+func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	server, err := New(opts)
+	return newTestServerAtPath(t, filepath.Join(t.TempDir(), "appserver"))
+}
+
+func newTestServerAtPath(t *testing.T, stateDir string) *Server {
+	t.Helper()
+	return newTestServerWithOptions(t, stateDir, testServerOptions{})
+}
+
+type testServerOptions struct {
+	runtimeFactory            runtimeServiceFactory
+	loadCatalog               func() (*taskconfig.Catalog, error)
+	loadRegistry              func() (taskconfig.Registry, error)
+	loadTaskLaunchPreferences func() appconfig.TaskLaunchPreferences
+}
+
+func newTestServerWithOptions(t *testing.T, stateDir string, opts testServerOptions) *Server {
+	t.Helper()
+	server, err := New(Options{
+		StateDir:                  stateDir,
+		ServerVersion:             "test",
+		LoadConfig:                func() (appconfig.Config, error) { return appconfig.Config{}, nil },
+		LoadCatalog:               opts.loadCatalog,
+		LoadRegistry:              opts.loadRegistry,
+		LoadTaskLaunchPreferences: opts.loadTaskLaunchPreferences,
+		RuntimeFactory:            opts.runtimeFactory,
+		WorktreeAvailable:         func(string) bool { return true },
+	})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("new server: %v", err)
 	}
 	return server
 }
 
-func rpcRequestPayload(t *testing.T, id int, method string, params map[string]any) []byte {
+func writeRequestFrame(t *testing.T, dst *bytes.Buffer, id int, method string, params map[string]any) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{
+	writer := newFrameWriter(dst)
+	if err := writer.writeJSON(map[string]any{
 		"jsonrpc": jsonRPCVersion,
 		"id":      id,
 		"method":  method,
 		"params":  params,
-	})
-	if err != nil {
-		t.Fatalf("Marshal request: %v", err)
+	}); err != nil {
+		t.Fatalf("write frame: %v", err)
 	}
-	return payload
 }
 
-func framesFromJSON(t *testing.T, payloads ...[]byte) []byte {
-	t.Helper()
-	var out bytes.Buffer
-	writer := newFrameWriter(&out)
-	for _, payload := range payloads {
-		if err := writer.writeFrame(payload); err != nil {
-			t.Fatalf("writeFrame: %v", err)
-		}
-	}
-	return out.Bytes()
-}
-
-func decodeOutputFrames(t *testing.T, payload []byte) []map[string]any {
+func readFramesAsMaps(t *testing.T, payload []byte) []map[string]any {
 	t.Helper()
 	reader := newFrameReader(bytes.NewReader(payload))
 	var messages []map[string]any
 	for {
 		frame, err := reader.readFrame()
-		if err == io.EOF {
-			return messages
-		}
 		if err != nil {
-			t.Fatalf("readFrame: %v", err)
-		}
-		messages = append(messages, decodeFrameMap(t, frame))
-	}
-}
-
-func decodeFrameMap(t *testing.T, frame []byte) map[string]any {
-	t.Helper()
-	var decoded map[string]any
-	if err := json.Unmarshal(frame, &decoded); err != nil {
-		t.Fatalf("Unmarshal frame: %v", err)
-	}
-	return decoded
-}
-
-func readFrameMapFromReader(t *testing.T, reader *frameReader) map[string]any {
-	t.Helper()
-	frame, err := reader.readFrame()
-	if err != nil {
-		t.Fatalf("readFrame: %v", err)
-	}
-	return decodeFrameMap(t, frame)
-}
-
-func startLiveServer(t *testing.T, server *Server) (*frameReader, *io.PipeWriter, func()) {
-	t.Helper()
-
-	inputReader, inputWriter := io.Pipe()
-	outputReader, outputWriter := io.Pipe()
-
-	var (
-		serveErr error
-		wg       sync.WaitGroup
-	)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		serveErr = server.Serve(context.Background(), inputReader, outputWriter)
-	}()
-
-	cleanup := func() {
-		_ = inputWriter.Close()
-		_ = outputReader.Close()
-		wg.Wait()
-		if serveErr != nil {
-			t.Fatalf("Serve: %v", serveErr)
-		}
-	}
-
-	return newFrameReader(outputReader), inputWriter, cleanup
-}
-
-func nestedString(root map[string]any, path ...string) string {
-	value := nestedValue(root, path...)
-	return stringValue(value)
-}
-
-func nestedBool(root map[string]any, path ...string) bool {
-	value := nestedValue(root, path...)
-	flag, _ := value.(bool)
-	return flag
-}
-
-func nestedValue(root map[string]any, path ...string) any {
-	current := any(root)
-	for _, part := range path {
-		switch typed := current.(type) {
-		case map[string]any:
-			current = typed[part]
-		case []any:
-			index := 0
-			fmtSscanf(part, &index)
-			if index < 0 || index >= len(typed) {
-				return nil
+			if err == io.EOF {
+				break
 			}
-			current = typed[index]
-		default:
-			return nil
+			t.Fatalf("read frame: %v", err)
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(frame, &msg); err != nil {
+			t.Fatalf("unmarshal frame: %v", err)
+		}
+		messages = append(messages, msg)
+	}
+	return messages
+}
+
+func responseByID(t *testing.T, messages []map[string]any, id int) map[string]any {
+	t.Helper()
+	for _, message := range messages {
+		rawID, ok := message["id"]
+		if !ok {
+			continue
+		}
+		number, ok := rawID.(float64)
+		if !ok {
+			continue
+		}
+		if int(number) == id {
+			return message
 		}
 	}
-	return current
+	t.Fatalf("missing response id %d", id)
+	return nil
 }
 
-func fmtSscanf(input string, target *int) {
-	var parsed int
-	_, _ = fmt.Sscanf(input, "%d", &parsed)
-	*target = parsed
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func containsString(values []any, want string) bool {
-	for _, value := range values {
-		if stringValue(value) == want {
-			return true
-		}
+func nestedString(m map[string]any, path ...string) (string, bool) {
+	value, ok := nestedValue(m, path...)
+	if !ok {
+		return "", false
 	}
-	return false
+	str, ok := value.(string)
+	return str, ok
+}
+
+func nestedStringMust(t *testing.T, m map[string]any, path ...string) string {
+	t.Helper()
+	value, ok := nestedString(m, path...)
+	if !ok {
+		t.Fatalf("missing string at path %v in %#v", path, m)
+	}
+	return value
+}
+
+func nestedBool(m map[string]any, path ...string) (bool, bool) {
+	value, ok := nestedValue(m, path...)
+	if !ok {
+		return false, false
+	}
+	boolean, ok := value.(bool)
+	return boolean, ok
+}
+
+func nestedFloat(m map[string]any, path ...string) float64 {
+	value, ok := nestedValue(m, path...)
+	if !ok {
+		return 0
+	}
+	number, _ := value.(float64)
+	return number
+}
+
+func nestedSlice(t *testing.T, m map[string]any, path ...string) []any {
+	t.Helper()
+	value, ok := nestedValue(m, path...)
+	if !ok {
+		t.Fatalf("missing slice at path %v in %#v", path, m)
+	}
+	items, ok := value.([]any)
+	if !ok {
+		t.Fatalf("value at path %v is %T, want []any", path, value)
+	}
+	return items
+}
+
+func nestedValue(m map[string]any, path ...string) (any, bool) {
+	var current any = m
+	for _, segment := range path {
+		nextMap, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		value, ok := nextMap[segment]
+		if !ok {
+			return nil, false
+		}
+		current = value
+	}
+	return current, true
+}
+
+func mustRawParams(t *testing.T, params any) json.RawMessage {
+	t.Helper()
+	payload, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	return payload
+}
+
+func seedAwaitingTask(t *testing.T, workDir string) (taskID string, awaitingRunID string) {
+	t.Helper()
+	store, err := taskstore.Open(workDir)
+	if err != nil {
+		t.Fatalf("open task store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	taskID = "task-awaiting"
+	configPath, err := taskconfig.DefaultConfigPath()
+	if err != nil {
+		t.Fatalf("default config path: %v", err)
+	}
+	materialized, err := taskconfig.Materialize(workDir, taskID, configPath)
+	if err != nil {
+		t.Fatalf("materialize config: %v", err)
+	}
+
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	completedAt := now.Add(30 * time.Second)
+	task := taskdomain.Task{
+		ID:           taskID,
+		Description:  "Review desktop task startup",
+		ConfigAlias:  "default",
+		ConfigPath:   materialized.ConfigPath,
+		WorkDir:      taskstore.NormalizeWorkDir(workDir),
+		ExecutionDir: taskstore.NormalizeWorkDir(workDir),
+		CreatedAt:    now,
+		UpdatedAt:    now.Add(2 * time.Minute),
+	}
+	entryRun := taskdomain.NodeRun{
+		ID:          "run-draft",
+		TaskID:      taskID,
+		NodeName:    "draft_plan",
+		Status:      taskdomain.NodeRunDone,
+		Result:      map[string]interface{}{"file_paths": []string{"plan.md"}},
+		StartedAt:   now,
+		CompletedAt: &completedAt,
+	}
+	if err := store.CreateTaskWithEntryRun(context.Background(), task, entryRun); err != nil {
+		t.Fatalf("create task with entry run: %v", err)
+	}
+
+	awaitingRunID = "run-approve"
+	awaitingRun := taskdomain.NodeRun{
+		ID:        awaitingRunID,
+		TaskID:    taskID,
+		NodeName:  "approve_plan",
+		Status:    taskdomain.NodeRunAwaitingUser,
+		StartedAt: now.Add(time.Minute),
+	}
+	if err := store.SaveNodeRun(context.Background(), awaitingRun); err != nil {
+		t.Fatalf("save awaiting node run: %v", err)
+	}
+
+	artifactPath := filepath.Join(taskstore.ArtifactRunDir(workDir, taskID, 1, "draft_plan"), "plan.md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("# plan\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	return taskID, awaitingRunID
+}
+
+type fakeRuntimeService struct {
+	mu         sync.Mutex
+	events     chan taskruntime.RunEvent
+	dispatches []taskruntime.RunCommand
+}
+
+func newFakeRuntimeService() *fakeRuntimeService {
+	return &fakeRuntimeService{
+		events: make(chan taskruntime.RunEvent, 16),
+	}
+}
+
+func (f *fakeRuntimeService) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (f *fakeRuntimeService) Events() <-chan taskruntime.RunEvent {
+	return f.events
+}
+
+func (f *fakeRuntimeService) Dispatch(cmd taskruntime.RunCommand) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dispatches = append(f.dispatches, cmd)
+}
+
+func (f *fakeRuntimeService) Close() error {
+	return nil
+}
+
+func (f *fakeRuntimeService) Dispatched() []taskruntime.RunCommand {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]taskruntime.RunCommand, len(f.dispatches))
+	copy(out, f.dispatches)
+	return out
 }
