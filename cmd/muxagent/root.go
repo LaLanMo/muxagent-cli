@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/appserver"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/auth"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/config"
 	"github.com/LaLanMo/muxagent-cli/cmd/muxagent/daemon"
@@ -150,6 +151,7 @@ func newRootCmd(opts rootOptions) *cobra.Command {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
 	rootCmd.AddCommand(
+		appserver.NewCmd(),
 		auth.NewCmd(),
 		config.NewCmd(),
 		daemon.NewCmd(),

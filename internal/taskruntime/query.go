@@ -2,12 +2,18 @@ package taskruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
+)
+
+var (
+	ErrNodeRunTaskMismatch    = errors.New("node run does not belong to task")
+	ErrNodeRunNotAwaitingUser = errors.New("node run is not awaiting user input")
 )
 
 func (s *Service) ListTaskViews(ctx context.Context, workDir string) ([]taskdomain.TaskView, error) {
@@ -61,7 +67,10 @@ func (s *Service) BuildInputRequest(ctx context.Context, taskID, nodeRunID strin
 		return nil, err
 	}
 	if run.TaskID != taskID {
-		return nil, fmt.Errorf("node run %q does not belong to task %q", nodeRunID, taskID)
+		return nil, fmt.Errorf("%w: node run %q does not belong to task %q", ErrNodeRunTaskMismatch, nodeRunID, taskID)
+	}
+	if run.Status != taskdomain.NodeRunAwaitingUser {
+		return nil, fmt.Errorf("%w: node run %q is not awaiting user input", ErrNodeRunNotAwaitingUser, nodeRunID)
 	}
 	runs, err := s.store.ListNodeRunsByTask(ctx, taskID)
 	if err != nil {

@@ -146,7 +146,7 @@ func resolveArtifactPaths(task taskdomain.Task, runs []taskdomain.NodeRun) []str
 		if err != nil {
 			continue
 		}
-		baseDir := filepath.Dir(artifactDir)
+		baseDir := artifactDir
 		for _, rawPath := range taskdomain.ArtifactPaths(run.Result) {
 			path := strings.TrimSpace(rawPath)
 			if path == "" {
