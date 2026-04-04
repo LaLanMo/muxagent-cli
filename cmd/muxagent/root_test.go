@@ -332,6 +332,7 @@ func TestLoadTaskConfigCatalogAllowsBrokenRegistryConfigAtStartup(t *testing.T) 
 }
 
 func TestRootSkipsStartupUpdateWhenNotInteractive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -359,6 +360,7 @@ func TestRootSkipsStartupUpdateWhenNotInteractive(t *testing.T) {
 }
 
 func TestRootSkipsStartupUpdateForDevBuild(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	checkCalled := false
 	cmd := newRootCmd(rootOptions{
 		isInteractive: func(cmd *cobra.Command) bool { return true },
@@ -377,6 +379,7 @@ func TestRootSkipsStartupUpdateForDevBuild(t *testing.T) {
 }
 
 func TestRootSkipsStartupUpdateWithinCadence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -406,6 +409,7 @@ func TestRootSkipsStartupUpdateWithinCadence(t *testing.T) {
 }
 
 func TestRootSkipsStartupUpdateWithinFailureBackoff(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -435,6 +439,7 @@ func TestRootSkipsStartupUpdateWithinFailureBackoff(t *testing.T) {
 }
 
 func TestRootWarnsOnStartupUpdateCheckFailureButStillLaunches(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -470,6 +475,7 @@ func TestRootWarnsOnStartupUpdateCheckFailureButStillLaunches(t *testing.T) {
 }
 
 func TestRootLaterPersistsStartupUpdateState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -504,6 +510,7 @@ func TestRootLaterPersistsStartupUpdateState(t *testing.T) {
 }
 
 func TestRootSkipVersionPersistsStartupUpdateState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -537,6 +544,7 @@ func TestRootSkipVersionPersistsStartupUpdateState(t *testing.T) {
 }
 
 func TestRootWarnsWhenStartupUpdateInstallFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -575,6 +583,7 @@ func TestRootWarnsWhenStartupUpdateInstallFails(t *testing.T) {
 }
 
 func TestRootStartupResumeSuccessPersistsCheckedState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {
@@ -611,6 +620,7 @@ func TestRootStartupResumeSuccessPersistsCheckedState(t *testing.T) {
 }
 
 func TestRootWarnsWhenStartupUpdateStateSaveFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalVersion := cliversion.Version
 	cliversion.Version = "v1.0.0"
 	t.Cleanup(func() {

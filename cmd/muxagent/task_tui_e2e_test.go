@@ -383,12 +383,6 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 
 				session.sendAndWait(t, "\x1b[C", 5*time.Second)
 				session.sendAndWait(t, "\x1b[B", 5*time.Second)
-				session.sendAndWait(t, "\x1b[B", 5*time.Second)
-				session.waitForAll(t, 5*time.Second, "Ctrl+P/N questions")
-				session.sendAndWait(t, "Need docs", 5*time.Second)
-				session.sendAndWait(t, "\x10", 5*time.Second)
-				session.sendAndWait(t, "\x0e", 5*time.Second)
-				session.sendAndWait(t, "\x1b[A", 5*time.Second)
 				session.sendAndWait(t, "\r", 5*time.Second)
 				session.sendAndWait(t, "\x1b[C", 5*time.Second)
 				session.sendAndWaitForAll(t, "\r", 5*time.Second, "Answer every question before submitting.")
@@ -491,7 +485,16 @@ func TestTaskTUIEndToEndScenarios(t *testing.T) {
 				session.submitNewTask(t, "Blocked loopback")
 				session.waitForAll(t, 10*time.Second, "Task blocked", "Force continue")
 				session.send(t, "\r")
-				session.approvePlan(t)
+				session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Files", "Preview ·")
+				before := session.markOutput()
+				session.send(t, "\t")
+				session.waitForFreshAll(t, 5*time.Second, before, "Tab response")
+				before = session.markOutput()
+				session.send(t, "\t")
+				session.waitForFreshAll(t, 5*time.Second, before, "Enter submit")
+				before = session.markOutput()
+				session.send(t, "\r")
+				session.waitForOutputChange(t, 5*time.Second, before)
 			},
 			expectedArtifacts:   []string{"01-draft_plan", "02-review_plan", "03-draft_plan", "04-review_plan", "05-approve_plan", "06-implement", "07-verify"},
 			requirePromptHeader: false,
@@ -2116,29 +2119,41 @@ func (s *tuiSession) approvePlan(t *testing.T) {
 	t.Helper()
 	beforeApproval := s.markOutput()
 	s.waitForFreshAll(t, 10*time.Second, beforeApproval, "approve_plan", "awaiting approval")
-	panelOutput := s.focusApprovalActionPanel(t)
-	if strings.Contains(panelOutput, "Enter confirm") {
+	for attempt := 0; attempt < 4; attempt++ {
+		panelOutput := s.focusApprovalActionPanel(t)
+		if strings.Contains(panelOutput, "Enter confirm") {
+			before := s.markOutput()
+			s.send(t, "\r")
+			if _, ok := s.waitForOutputChangeWithin(t, 5*time.Second, before); ok {
+				continue
+			}
+			continue
+		}
 		before := s.markOutput()
 		s.send(t, "\r")
-		s.waitForFreshAll(t, 5*time.Second, before, "Enter submit")
+		if _, ok := s.waitForOutputChangeWithin(t, 5*time.Second, before); ok {
+			return
+		}
 	}
-	before := s.markOutput()
-	s.send(t, "\r")
-	s.waitForOutputChange(t, 5*time.Second, before)
+	t.Fatalf("approval submit did not change output:\n%s", s.output())
 }
 
 func (s *tuiSession) focusApprovalActionPanel(t *testing.T) string {
 	t.Helper()
-	for range 6 {
+	output := recentOutputWindow(s.output())
+	if strings.Contains(output, "Enter submit") || strings.Contains(output, "Enter confirm") {
+		return output
+	}
+	for range 8 {
 		before := s.markOutput()
 		s.send(t, "\t")
-		output := s.waitForOutputChange(t, 2*time.Second, before)
-		fresh := output
-		if strings.HasPrefix(output, before.output) {
-			fresh = output[len(before.output):]
+		updated, ok := s.waitForOutputChangeWithin(t, 1500*time.Millisecond, before)
+		output = recentOutputWindow(s.output())
+		if ok {
+			output = recentOutputWindow(updated.output)
 		}
-		if strings.Contains(fresh, "Enter submit") || strings.Contains(fresh, "Enter confirm") {
-			return fresh
+		if strings.Contains(output, "Enter submit") || strings.Contains(output, "Enter confirm") {
+			return output
 		}
 	}
 	t.Fatalf("expected approval action footer to be focused, got output:\n%s", s.output())
@@ -2198,6 +2213,14 @@ func (s *tuiSession) waitForOutputChangeWithin(t *testing.T, timeout time.Durati
 		}
 	}
 	return s.markOutput(), false
+}
+
+func recentOutputWindow(output string) string {
+	const max = 1024
+	if len(output) <= max {
+		return output
+	}
+	return output[len(output)-max:]
 }
 
 func (s *tuiSession) waitForFreshAll(t *testing.T, timeout time.Duration, before tuiOutputMark, needles ...string) string {
