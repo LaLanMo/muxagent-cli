@@ -8,6 +8,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor/claudeexec"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor/codexexec"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor/opencodehttp"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
 
@@ -43,7 +44,7 @@ type workspaceActor struct {
 func defaultRuntimeServiceFactory(workDir string) (runtimeService, error) {
 	return taskruntime.NewService(
 		workDir,
-		taskexecutor.NewRouter(codexexec.New(""), claudeexec.New("")),
+		taskexecutor.NewRouter(codexexec.New(""), claudeexec.New(""), opencodehttp.New("")),
 	)
 }
 

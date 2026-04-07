@@ -68,6 +68,7 @@ type MessagePart struct {
 	Role      MessageRole
 	Type      MessagePartType
 	Text      string
+	Append    bool
 }
 
 type ToolDiff struct {
@@ -289,8 +290,15 @@ func MergeStreamEvent(existing, next StreamEvent) StreamEvent {
 			if next.Message.Type != "" {
 				merged.Message.Type = next.Message.Type
 			}
+			if next.Message.Append {
+				merged.Message.Append = true
+			}
 			if next.Message.Text != "" {
-				merged.Message.Text = next.Message.Text
+				if next.Message.Append {
+					merged.Message.Text += next.Message.Text
+				} else {
+					merged.Message.Text = next.Message.Text
+				}
 			}
 		}
 	}

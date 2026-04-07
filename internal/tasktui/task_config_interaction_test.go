@@ -32,6 +32,13 @@ func TestTaskConfigScreenRuntimeToggleViaKeyFlow(t *testing.T) {
 	assert.Equal(t, "default", selected.Alias)
 	assert.Equal(t, "Claude Code", selected.Runtime)
 	assert.Equal(t, `config "default" runtime is now Claude Code`, model.taskConfigs.statusText)
+	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab runtime OpenCode")
+
+	model, _ = pressTaskConfigKey(t, model, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	selected, ok = model.selectedManagedTaskConfig()
+	require.True(t, ok)
+	assert.Equal(t, "OpenCode", selected.Runtime)
+	assert.Equal(t, `config "default" runtime is now OpenCode`, model.taskConfigs.statusText)
 	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab runtime Codex")
 
 	model, _ = pressTaskConfigKey(t, model, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})

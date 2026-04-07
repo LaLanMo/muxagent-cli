@@ -80,8 +80,12 @@ func (s *Service) Close() error {
 	s.runEventSeqs = map[string]uint64{}
 	s.mu.Unlock()
 	s.nodeWG.Wait()
+	executorErr := taskexecutor.Close(s.executor)
 	storeErr := s.store.Close()
 	lockErr := s.lock.Release()
+	if executorErr != nil {
+		return executorErr
+	}
 	if storeErr != nil {
 		return storeErr
 	}

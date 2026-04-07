@@ -199,14 +199,18 @@ func (m *Model) closeTaskConfigForm() {
 }
 
 func toggleTaskConfigRuntimeTarget(summary taskConfigSummary) (appconfig.RuntimeID, bool) {
-	switch summary.RuntimeID {
-	case appconfig.RuntimeCodex:
-		return appconfig.RuntimeClaudeCode, true
-	case appconfig.RuntimeClaudeCode:
-		return appconfig.RuntimeCodex, true
-	default:
-		return "", false
+	runtimes := []appconfig.RuntimeID{
+		appconfig.RuntimeCodex,
+		appconfig.RuntimeClaudeCode,
+		appconfig.RuntimeOpenCode,
 	}
+	for idx, runtimeID := range runtimes {
+		if summary.RuntimeID != runtimeID {
+			continue
+		}
+		return runtimes[(idx+1)%len(runtimes)], true
+	}
+	return "", false
 }
 
 func (m *Model) toggleSelectedTaskConfigRuntime() tea.Cmd {

@@ -50,7 +50,7 @@ type managedRuntime struct {
 func New(cfg config.Config) *Manager {
 	runtimes := make(map[config.RuntimeID]*managedRuntime, len(cfg.Runtimes))
 	for id, settings := range cfg.Runtimes {
-		if !config.IsSupportedRuntime(id) {
+		if !supportsManagedRuntime(id) {
 			continue
 		}
 		runtimes[id] = &managedRuntime{
@@ -953,6 +953,8 @@ func runtimeLabel(id config.RuntimeID) string {
 		return "Claude Code"
 	case config.RuntimeCodex:
 		return "Codex"
+	case config.RuntimeOpenCode:
+		return "OpenCode"
 	default:
 		return string(id)
 	}
@@ -1030,6 +1032,15 @@ func runtimeConfigOptions(id config.RuntimeID) []acpprotocol.SessionConfigOption
 		}
 	default:
 		return nil
+	}
+}
+
+func supportsManagedRuntime(id config.RuntimeID) bool {
+	switch id {
+	case config.RuntimeClaudeCode, config.RuntimeCodex:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -38,6 +38,14 @@ func TestDefault_ContainsBuiltInRuntimes(t *testing.T) {
 	if codex.Command != "" {
 		t.Errorf("codex command = %q, want empty", codex.Command)
 	}
+
+	opencode, ok := cfg.Runtimes[RuntimeOpenCode]
+	if !ok {
+		t.Fatal("default config missing opencode runtime")
+	}
+	if opencode.Command != "" {
+		t.Errorf("opencode command = %q, want empty", opencode.Command)
+	}
 }
 
 func TestDetectPreferredRuntime(t *testing.T) {
@@ -128,15 +136,16 @@ func TestConfiguredRuntimeIDs_Sorted(t *testing.T) {
 		Runtimes: map[RuntimeID]RuntimeSettings{
 			RuntimeCodex:      {},
 			RuntimeClaudeCode: {},
+			RuntimeOpenCode:   {},
 		},
 	}
 
 	ids := cfg.ConfiguredRuntimeIDs()
-	if len(ids) != 2 {
-		t.Fatalf("len(ids) = %d, want 2", len(ids))
+	if len(ids) != 3 {
+		t.Fatalf("len(ids) = %d, want 3", len(ids))
 	}
-	if ids[0] != RuntimeClaudeCode || ids[1] != RuntimeCodex {
-		t.Fatalf("ids = %v, want [claude-code codex]", ids)
+	if ids[0] != RuntimeClaudeCode || ids[1] != RuntimeCodex || ids[2] != RuntimeOpenCode {
+		t.Fatalf("ids = %v, want [claude-code codex opencode]", ids)
 	}
 }
 
@@ -156,6 +165,9 @@ func TestMergeConfig_NilOverlayRuntimesPreservesBase(t *testing.T) {
 	}
 	if _, ok := merged.Runtimes[RuntimeCodex]; !ok {
 		t.Fatal("codex runtime missing after nil overlay")
+	}
+	if _, ok := merged.Runtimes[RuntimeOpenCode]; !ok {
+		t.Fatal("opencode runtime missing after nil overlay")
 	}
 	if merged.RelayURL != overlay.RelayURL {
 		t.Fatalf("RelayURL = %q, want overlay value", merged.RelayURL)

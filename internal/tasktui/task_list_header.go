@@ -186,6 +186,8 @@ func runtimeDisplayLabel(id appconfig.RuntimeID) string {
 		return "Claude Code"
 	case appconfig.RuntimeCodex:
 		return "Codex"
+	case appconfig.RuntimeOpenCode:
+		return "OpenCode"
 	default:
 		return string(id)
 	}

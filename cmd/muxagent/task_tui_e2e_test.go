@@ -884,7 +884,7 @@ func TestTaskTUIConfigScreenCanToggleRuntimeAndPersistAcrossRestart(t *testing.T
 	restarted.waitForAll(t, 10*time.Second, "new task", "task configs")
 	restarted.send(t, "\x1b[B")
 	restarted.send(t, "\r")
-	restarted.waitForAll(t, 10*time.Second, "Task Configs", "default", "Claude Code", "Shift+Tab runtime Codex")
+	restarted.waitForAll(t, 10*time.Second, "Task Configs", "default", "Claude Code", "Shift+Tab runtime OpenCode")
 	restarted.forceClose()
 }
 

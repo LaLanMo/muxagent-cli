@@ -22,6 +22,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor/claudeexec"
 	codextaskexecutor "github.com/LaLanMo/muxagent-cli/internal/taskexecutor/codex"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor/opencodehttp"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/LaLanMo/muxagent-cli/internal/tasktui"
@@ -69,7 +70,7 @@ func NewRootCmd() *cobra.Command {
 			}
 			service, err := taskruntime.NewService(
 				workDir,
-				taskexecutor.NewRouter(codextaskexecutor.New(""), claudeexec.New("")),
+				taskexecutor.NewRouter(codextaskexecutor.New(""), claudeexec.New(""), opencodehttp.New("")),
 			)
 			if err != nil {
 				return err

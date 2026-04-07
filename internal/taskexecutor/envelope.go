@@ -83,6 +83,7 @@ func AppendOutputContract(req Request) string {
 	builder.WriteString(req.Prompt)
 	builder.WriteString("\n\nOutput contract:\n")
 	builder.WriteString("- Return exactly one JSON object matching the provided schema.\n")
+	builder.WriteString("- Do not include keys that are not declared in the schema.\n")
 	if !ClarificationConfigured(req) {
 		builder.WriteString("- Clarification is disabled for this node. You must return {\"kind\":\"result\",\"result\":<payload matching the node result schema>}.\n")
 		builder.WriteString("- Do not return any clarification payload.\n")
@@ -99,6 +100,35 @@ func AppendOutputContract(req Request) string {
 		builder.WriteString("- You must return {\"kind\":\"result\",\"result\":<payload matching the node result schema>,\"clarification\":null}.\n")
 	}
 	builder.WriteString("- Do not return bare result fields or bare questions at the top level.\n")
+	return builder.String()
+}
+
+func BuildSchemaRepairPrompt(req Request, validationErr error, invalidOutput []byte, artifactPaths []string) string {
+	var builder strings.Builder
+	builder.WriteString("Your previous structured output did not match the required schema.\n\n")
+	builder.WriteString("Validation error:\n")
+	builder.WriteString("- ")
+	builder.WriteString(strings.TrimSpace(validationErr.Error()))
+	builder.WriteString("\n\n")
+	builder.WriteString("Previous structured output:\n")
+	builder.WriteString("```json\n")
+	builder.Write(invalidOutput)
+	builder.WriteString("\n```\n\n")
+	if len(artifactPaths) > 0 {
+		builder.WriteString("Known artifact files already present under ")
+		builder.WriteString(req.ArtifactDir)
+		builder.WriteString(":\n")
+		for _, path := range artifactPaths {
+			builder.WriteString("- ")
+			builder.WriteString(path)
+			builder.WriteString("\n")
+		}
+		builder.WriteString("\n")
+	}
+	builder.WriteString("Return exactly one corrected JSON object matching the same schema.\n")
+	builder.WriteString("Do not explain.\n")
+	builder.WriteString("Do not include keys that are not declared in the schema.\n")
+	builder.WriteString("If the schema requires `file_paths`, list every artifact path as an absolute path.\n")
 	return builder.String()
 }
 

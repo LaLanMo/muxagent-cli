@@ -14,7 +14,7 @@ func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create default config",
-		Long:  "Create a default config file. By default creates ~/.muxagent/config.json. Use --project to create ./.muxagent/config.json instead. The generated config includes claude-code and codex runtime entries.",
+		Long:  "Create a default config file. By default creates ~/.muxagent/config.json. Use --project to create ./.muxagent/config.json instead. The generated config includes claude-code, codex, and opencode runtime entries.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var targetPath string
 			var err error

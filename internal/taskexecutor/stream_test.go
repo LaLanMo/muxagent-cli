@@ -6,6 +6,35 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestMergeStreamEventAppendsIncrementalMessageText(t *testing.T) {
+	existing := StreamEvent{
+		Kind: StreamEventKindMessage,
+		Message: &MessagePart{
+			MessageID: "msg-1",
+			PartID:    "part-1",
+			Role:      MessageRoleAssistant,
+			Type:      MessagePartTypeReasoning,
+			Text:      "Inspect",
+		},
+	}
+	next := StreamEvent{
+		Kind: StreamEventKindMessage,
+		Message: &MessagePart{
+			MessageID: "msg-1",
+			PartID:    "part-1",
+			Role:      MessageRoleAssistant,
+			Type:      MessagePartTypeReasoning,
+			Text:      " repo",
+			Append:    true,
+		},
+	}
+
+	merged := MergeStreamEvent(existing, next)
+
+	assert.Equal(t, "Inspect repo", merged.Message.Text)
+	assert.True(t, merged.Message.Append)
+}
+
 func TestMergeStreamEventPreservesSpecificToolKindAndMeaningfulName(t *testing.T) {
 	existing := StreamEvent{
 		Kind: StreamEventKindTool,

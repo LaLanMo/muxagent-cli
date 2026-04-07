@@ -72,13 +72,29 @@ func TestTaskConfigScreenRuntimeTogglePersistsSelectionAndUpdatesSummary(t *test
 	selected, ok = model.selectedManagedTaskConfig()
 	require.True(t, ok)
 	assert.Equal(t, "Claude Code", selected.Runtime)
-	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab runtime Codex")
+	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab runtime OpenCode")
 
 	entry, ok := model.configCatalog.Entry(taskconfig.DefaultAlias)
 	require.True(t, ok)
 	cfg, err := entry.LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "claude-code", string(cfg.Runtime))
+
+	cmd = model.toggleSelectedTaskConfigRuntime()
+	require.NotNil(t, cmd)
+	model = runCmdUpdateModel(t, model, cmd)
+
+	selected, ok = model.selectedManagedTaskConfig()
+	require.True(t, ok)
+	assert.Equal(t, "OpenCode", selected.Runtime)
+	assert.Equal(t, `config "default" runtime is now OpenCode`, model.taskConfigs.statusText)
+	assert.Contains(t, strippedView(model.View().Content), "Shift+Tab runtime Codex")
+
+	entry, ok = model.configCatalog.Entry(taskconfig.DefaultAlias)
+	require.True(t, ok)
+	cfg, err = entry.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "opencode", string(cfg.Runtime))
 }
 
 func TestTaskConfigScreenUserConfigLifecycleWithoutCloneFlow(t *testing.T) {
