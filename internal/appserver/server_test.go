@@ -424,6 +424,42 @@ func TestServeConnEOFDoesNotCloseRuntime(t *testing.T) {
 	}
 }
 
+func TestLateNotificationSinkAfterSessionCloseDoesNotPanic(t *testing.T) {
+	server := newTestServer(t)
+	sessionCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := &connectionSession{
+		id:       "session-a",
+		outgoing: make(chan any, 8),
+		ctx:      sessionCtx,
+		cancel:   cancel,
+	}
+
+	_, _, _, rpcErr := server.handleSessionRequest(context.Background(), session, request{
+		Method: methodInitialize,
+		Params: mustRawParams(t, initializeParams{ProtocolVersion: protocolVersion}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("initialize rpc error: %+v", rpcErr)
+	}
+
+	server.mu.Lock()
+	sink := server.notificationSink
+	server.mu.Unlock()
+	if sink == nil {
+		t.Fatal("notification sink = nil, want attached sink")
+	}
+
+	server.detachClientSession(session.id)
+	session.closeOutgoing()
+
+	sink(notification{
+		JSONRPC: jsonRPCVersion,
+		Method:  methodNotification,
+		Params:  notificationParams{Kind: string(taskruntime.EventNodeStarted)},
+	})
+}
+
 func TestInitializeRejectsSecondInteractiveClientButAllowsPassiveProbe(t *testing.T) {
 	server := newTestServer(t)
 	sessionA := &connectionSession{id: "session-a", outgoing: make(chan any, 8)}
@@ -456,6 +492,95 @@ func TestInitializeRejectsSecondInteractiveClientButAllowsPassiveProbe(t *testin
 	}
 	if probe.attached {
 		t.Fatal("passive probe attached interactive session")
+	}
+}
+
+func TestReconnectReplaysBackloggedNotificationWithClientCommandID(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+	fakeService := newFakeRuntimeService()
+	server := newTestServerWithOptions(t, stateDir, testServerOptions{
+		runtimeFactory: func(workDir string) (runtimeService, error) {
+			return fakeService, nil
+		},
+	})
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
+	}
+
+	sessionA := &connectionSession{id: "session-a", outgoing: make(chan any, 8)}
+	_, _, _, rpcErr := server.handleSessionRequest(context.Background(), sessionA, request{
+		Method: methodInitialize,
+		Params: mustRawParams(t, initializeParams{ProtocolVersion: protocolVersion}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("initialize sessionA rpc error: %+v", rpcErr)
+	}
+
+	retryResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskRetryNode,
+		Params: mustRawParams(t, taskRetryNodeParams{
+			WorkspaceID:     workspace.WorkspaceID,
+			ClientCommandID: "cmd-retry",
+			TaskID:          "task-123",
+			NodeRunID:       "run-old",
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.retry_node rpc error: %+v", rpcErr)
+	}
+	retryResult := retryResultAny.(commandAcceptedResult)
+	if !retryResult.Accepted {
+		t.Fatal("task.retry_node accepted = false")
+	}
+
+	server.detachClientSession(sessionA.id)
+	sessionA.closeOutgoing()
+
+	server.handleRuntimeEvent(workspace.WorkspaceID, taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeStarted,
+		TaskID:    "task-123",
+		NodeRunID: "run-new",
+		NodeName:  "upsert_plan",
+	})
+
+	sessionB := &connectionSession{id: "session-b", outgoing: make(chan any, 8)}
+	_, notifications, _, rpcErr := server.handleSessionRequest(context.Background(), sessionB, request{
+		Method: methodInitialize,
+		Params: mustRawParams(t, initializeParams{ProtocolVersion: protocolVersion}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("initialize sessionB rpc error: %+v", rpcErr)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("backlog notification count = %d, want 1", len(notifications))
+	}
+	payload := notifications[0].Params.(notificationParams).Payload.(taskNotificationPayload)
+	if payload.ClientCommandID != "cmd-retry" {
+		t.Fatalf("backlog client_command_id = %q, want cmd-retry", payload.ClientCommandID)
+	}
+}
+
+func TestServiceShutdownReturnsAckAndRequestsGracefulShutdown(t *testing.T) {
+	server := newTestServer(t)
+
+	var in bytes.Buffer
+	out := &shutdownAwareBuffer{t: t, server: server}
+	writeRequestFrame(t, &in, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion})
+	writeRequestFrame(t, &in, 2, methodServiceShutdown, map[string]any{})
+
+	if err := server.ServeConn(context.Background(), &in, out, ConnectionOptions{}); err != nil {
+		t.Fatalf("serve conn: %v", err)
+	}
+	if !server.GracefulShutdownRequested() {
+		t.Fatal("graceful shutdown = false, want true")
+	}
+
+	messages := readFramesAsMaps(t, out.Bytes())
+	shutdownResponse := responseByID(t, messages, 2)
+	if accepted, _ := nestedBool(shutdownResponse, "result", "accepted"); !accepted {
+		t.Fatalf("service.shutdown accepted = %#v, want true", shutdownResponse)
 	}
 }
 
@@ -1148,4 +1273,18 @@ func (f *fakeRuntimeService) PrepareShutdownCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.prepareCalls
+}
+
+type shutdownAwareBuffer struct {
+	t      *testing.T
+	server *Server
+	bytes.Buffer
+}
+
+func (b *shutdownAwareBuffer) Write(p []byte) (int, error) {
+	b.t.Helper()
+	if b.server != nil && b.server.GracefulShutdownRequested() {
+		b.t.Fatal("graceful shutdown requested before shutdown response finished writing")
+	}
+	return b.Buffer.Write(p)
 }

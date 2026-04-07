@@ -50,15 +50,16 @@ type Server struct {
 	registry                  *workspaceRegistry
 	runtimes                  *runtimeManager
 
-	mu               sync.Mutex
-	connectedClients int
-	activeSessionID  string
-	pendingCommands  []pendingClientCommand
-	notificationSink func(notification)
-	liveOutputCache  map[string]map[string]liveOutputSnapshot
-	shutdownOnce     sync.Once
-	shutdownCh       chan struct{}
-	gracefulStop     bool
+	mu                  sync.Mutex
+	connectedClients    int
+	activeSessionID     string
+	pendingCommands     []pendingClientCommand
+	notificationSink    func(notification)
+	liveOutputCache     map[string]map[string]liveOutputSnapshot
+	notificationBacklog []notification
+	shutdownOnce        sync.Once
+	shutdownCh          chan struct{}
+	gracefulStop        bool
 }
 
 type liveOutputSnapshot struct {
@@ -78,6 +79,11 @@ type connectionSession struct {
 	passive     bool
 	options     ConnectionOptions
 	outgoing    chan<- any
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
+	sendWG      sync.WaitGroup
+	closed      bool
 }
 
 type stopMode int
@@ -85,7 +91,10 @@ type stopMode int
 const (
 	stopModeContinue stopMode = iota
 	stopModeDrainAndExit
+	stopModeDrainAndShutdown
 )
+
+const maxNotificationBacklog = 128
 
 func New(opts Options) (*Server, error) {
 	if opts.LoadConfig == nil {
@@ -199,11 +208,15 @@ func (s *Server) ServeConn(ctx context.Context, stdin io.Reader, stdout io.Write
 	outgoing := make(chan any, 256)
 	writeErrCh := make(chan error, 1)
 	writerDone := make(chan struct{})
+	sessionCtx, sessionCancel := context.WithCancel(ctx)
 	session := &connectionSession{
 		id:       uuid.NewString(),
 		options:  options,
 		outgoing: outgoing,
+		ctx:      sessionCtx,
+		cancel:   sessionCancel,
 	}
+	requestShutdownOnExit := false
 
 	go func() {
 		defer close(writerDone)
@@ -222,8 +235,11 @@ func (s *Server) ServeConn(ctx context.Context, stdin io.Reader, stdout io.Write
 		if session.attached {
 			s.detachClientSession(session.id)
 		}
-		close(outgoing)
+		session.closeOutgoing()
 		<-writerDone
+		if requestShutdownOnExit {
+			s.requestGracefulShutdown()
+		}
 		select {
 		case writeErr := <-writeErrCh:
 			if err == nil && writeErr != nil {
@@ -255,6 +271,10 @@ func (s *Server) ServeConn(ctx context.Context, stdin io.Reader, stdout io.Write
 			return handleErr
 		}
 		if stopAfter == stopModeDrainAndExit {
+			return nil
+		}
+		if stopAfter == stopModeDrainAndShutdown {
+			requestShutdownOnExit = true
 			return nil
 		}
 	}
@@ -337,18 +357,16 @@ func (s *Server) handleSessionRequest(ctx context.Context, session *connectionSe
 		if session != nil && session.options.RequireAuth && strings.TrimSpace(params.AuthToken) != strings.TrimSpace(session.options.AuthToken) {
 			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeUnauthorized, Message: "unauthorized"}
 		}
+		var notifications []notification
 		if session != nil {
 			session.passive = params.Passive
 			if !session.passive {
-				if err := s.attachClientSession(session.id, func(n notification) {
-					select {
-					case session.outgoing <- n:
-					case <-ctx.Done():
-					}
-				}); err != nil {
+				backlog, err := s.attachClientSession(session.id, session.enqueueNotification)
+				if err != nil {
 					return nil, nil, stopModeContinue, &rpcError{Code: errorCodeBusy, Message: err.Error()}
 				}
 				session.attached = true
+				notifications = backlog
 			}
 			session.initialized = true
 		}
@@ -391,7 +409,7 @@ func (s *Server) handleSessionRequest(ctx context.Context, session *connectionSe
 				},
 				Notifications: []string{methodNotification},
 			},
-		}, nil, stopModeContinue, nil
+		}, notifications, stopModeContinue, nil
 
 	case methodServiceStatus:
 		return serviceStatusResult{
@@ -405,8 +423,7 @@ func (s *Server) handleSessionRequest(ctx context.Context, session *connectionSe
 		}, nil, stopModeContinue, nil
 
 	case methodServiceShutdown:
-		s.requestGracefulShutdown()
-		return serviceShutdownResult{Accepted: true}, nil, stopModeDrainAndExit, nil
+		return serviceShutdownResult{Accepted: true}, nil, stopModeDrainAndShutdown, nil
 
 	case methodWorkspaceList:
 		return workspaceListResult{Workspaces: s.workspaceDTOs(s.registry.List())}, nil, stopModeContinue, nil
@@ -1124,10 +1141,13 @@ func (s *Server) newNotification(kind, workspaceID string, payload any) notifica
 func (s *Server) emitNotification(n notification) {
 	s.mu.Lock()
 	sink := s.notificationSink
-	s.mu.Unlock()
-	if sink != nil {
-		sink(n)
+	if sink == nil {
+		s.notificationBacklog = appendNotificationBacklog(s.notificationBacklog, n)
+		s.mu.Unlock()
+		return
 	}
+	s.mu.Unlock()
+	sink(n)
 }
 
 func (s *Server) setNotificationSink(sink func(notification)) {
@@ -1138,17 +1158,18 @@ func (s *Server) setNotificationSink(sink func(notification)) {
 
 func (s *Server) markInitialized() {}
 
-func (s *Server) attachClientSession(sessionID string, sink func(notification)) error {
+func (s *Server) attachClientSession(sessionID string, sink func(notification)) ([]notification, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.activeSessionID != "" && s.activeSessionID != sessionID {
-		return errors.New("another app-server client is already connected")
+		return nil, errors.New("another app-server client is already connected")
 	}
 	s.activeSessionID = sessionID
 	s.connectedClients = 1
 	s.notificationSink = sink
-	s.pendingCommands = nil
-	return nil
+	backlog := append([]notification(nil), s.notificationBacklog...)
+	s.notificationBacklog = nil
+	return backlog, nil
 }
 
 func (s *Server) detachClientSession(sessionID string) {
@@ -1160,7 +1181,6 @@ func (s *Server) detachClientSession(sessionID string) {
 	s.activeSessionID = ""
 	s.connectedClients = 0
 	s.notificationSink = nil
-	s.pendingCommands = nil
 }
 
 func (s *Server) requestGracefulShutdown() {
@@ -1187,6 +1207,65 @@ func (s *Server) connectedClientCount() int {
 func enqueueJSON(outgoing chan<- any, payload any) error {
 	outgoing <- payload
 	return nil
+}
+
+func appendNotificationBacklog(backlog []notification, n notification) []notification {
+	backlog = append(backlog, n)
+	if len(backlog) <= maxNotificationBacklog {
+		return backlog
+	}
+	return append([]notification(nil), backlog[len(backlog)-maxNotificationBacklog:]...)
+}
+
+func (s *connectionSession) enqueueNotification(n notification) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.sendWG.Add(1)
+	outgoing := s.outgoing
+	ctx := s.ctx
+	s.mu.Unlock()
+
+	defer s.sendWG.Done()
+	if outgoing == nil {
+		return
+	}
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done()
+	}
+	select {
+	case outgoing <- n:
+	case <-done:
+	}
+}
+
+func (s *connectionSession) closeOutgoing() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	cancel := s.cancel
+	outgoing := s.outgoing
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	s.sendWG.Wait()
+	if outgoing != nil {
+		close(outgoing)
+	}
 }
 
 func workspaceMissingRPCError(workspaceID string) *rpcError {

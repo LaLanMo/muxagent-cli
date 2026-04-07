@@ -25,6 +25,8 @@ type ensureResult struct {
 	InstanceID string `json:"instance_id"`
 }
 
+const daemonProbeTimeout = 750 * time.Millisecond
+
 func newEnsureCmd(stateDir *string) *cobra.Command {
 	return &cobra.Command{
 		Use:    "ensure",
@@ -46,7 +48,9 @@ func newEnsureCmd(stateDir *string) *cobra.Command {
 			}
 			defer func() { _ = lock.Release() }()
 
-			if endpoint, err := loadLiveEndpoint(resolvedStateDir); err == nil {
+			if endpoint, reuse, err := resolveLiveEndpoint(resolvedStateDir, probeDaemonEndpoint, isPIDAlive); err != nil {
+				return fmt.Errorf("existing app-server daemon unavailable: %w", err)
+			} else if reuse {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(ensureResult{
 					Address:    endpoint.Address,
 					Token:      mustToken(endpoint),
@@ -112,8 +116,8 @@ func waitForAppServerReady(stateDir string, expectedPID int, timeout time.Durati
 		if !isPIDAlive(expectedPID) {
 			return internalappserver.DaemonEndpoint{}, fmt.Errorf("app-server daemon process %d exited during startup", expectedPID)
 		}
-		endpoint, err := loadLiveEndpoint(stateDir)
-		if err == nil && endpoint.PID == expectedPID {
+		endpoint, reuse, err := resolveLiveEndpoint(stateDir, probeDaemonEndpoint, isPIDAlive)
+		if err == nil && reuse && endpoint.PID == expectedPID {
 			return endpoint, nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -121,20 +125,42 @@ func waitForAppServerReady(stateDir string, expectedPID int, timeout time.Durati
 	return internalappserver.DaemonEndpoint{}, errors.New("timeout waiting for app-server daemon readiness")
 }
 
-func loadLiveEndpoint(stateDir string) (internalappserver.DaemonEndpoint, error) {
+func resolveLiveEndpoint(
+	stateDir string,
+	probe func(internalappserver.DaemonEndpoint) error,
+	pidAlive func(int) bool,
+) (internalappserver.DaemonEndpoint, bool, error) {
 	endpoint, err := internalappserver.LoadDaemonEndpoint(stateDir)
 	if err != nil {
-		return internalappserver.DaemonEndpoint{}, err
+		if errors.Is(err, os.ErrNotExist) {
+			return internalappserver.DaemonEndpoint{}, false, nil
+		}
+		return internalappserver.DaemonEndpoint{}, false, err
 	}
+	if probe == nil {
+		probe = probeDaemonEndpoint
+	}
+	if pidAlive == nil {
+		pidAlive = isPIDAlive
+	}
+	if err := probe(endpoint); err != nil {
+		if endpoint.PID > 0 && pidAlive(endpoint.PID) {
+			return internalappserver.DaemonEndpoint{}, false, err
+		}
+		if clearErr := internalappserver.ClearDaemonEndpoint(stateDir, endpoint.InstanceID); clearErr != nil {
+			return internalappserver.DaemonEndpoint{}, false, clearErr
+		}
+		return internalappserver.DaemonEndpoint{}, false, nil
+	}
+	return endpoint, true, nil
+}
+
+func probeDaemonEndpoint(endpoint internalappserver.DaemonEndpoint) error {
 	token, err := endpoint.GetToken()
 	if err != nil {
-		return internalappserver.DaemonEndpoint{}, err
+		return err
 	}
-	if err := probeEndpoint(endpoint.Address, token, endpoint.InstanceID); err != nil {
-		_ = internalappserver.ClearDaemonEndpoint(stateDir, "")
-		return internalappserver.DaemonEndpoint{}, err
-	}
-	return endpoint, nil
+	return probeEndpoint(endpoint.Address, token, endpoint.InstanceID)
 }
 
 func mustToken(endpoint internalappserver.DaemonEndpoint) string {
@@ -146,11 +172,14 @@ func mustToken(endpoint internalappserver.DaemonEndpoint) string {
 }
 
 func probeEndpoint(address, token, expectedInstanceID string) error {
-	conn, err := net.DialTimeout("tcp", address, 500*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", address, daemonProbeTimeout)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(daemonProbeTimeout)); err != nil {
+		return err
+	}
 
 	reader := newCommandFrameReader(conn)
 	if err := writeCommandFrame(conn, map[string]any{
