@@ -64,6 +64,8 @@ const (
 	errorCodeConfigConflict       errorCode = -32009
 	errorCodeWorkspaceMissing     errorCode = -32010
 	errorCodeWorkspaceUnreachable errorCode = -32011
+	errorCodeUnauthorized         errorCode = -32012
+	errorCodeBusy                 errorCode = -32013
 )
 
 type request struct {
@@ -111,12 +113,15 @@ type initializeParams struct {
 	ClientName      string `json:"client_name,omitempty"`
 	ClientVersion   string `json:"client_version,omitempty"`
 	ProtocolVersion int    `json:"protocol_version"`
+	AuthToken       string `json:"auth_token,omitempty"`
+	Passive         bool   `json:"passive,omitempty"`
 }
 
 type initializeResult struct {
 	ProtocolVersion int                   `json:"protocol_version"`
 	ServerName      string                `json:"server_name"`
 	ServerVersion   string                `json:"server_version"`
+	InstanceID      string                `json:"instance_id,omitempty"`
 	Capabilities    serverCapabilitiesDTO `json:"capabilities"`
 }
 
@@ -129,6 +134,7 @@ type serviceStatusResult struct {
 	StateDir         string `json:"state_dir"`
 	ServerVersion    string `json:"server_version"`
 	ProtocolVersion  int    `json:"protocol_version"`
+	InstanceID       string `json:"instance_id,omitempty"`
 	WorkspaceCount   int    `json:"workspace_count"`
 	RuntimeCount     int    `json:"runtime_count"`
 	ConnectedClients int    `json:"connected_clients"`
@@ -274,9 +280,11 @@ type taskListResult struct {
 }
 
 type taskGetResult struct {
-	Task         taskViewDTO      `json:"task"`
-	Config       *configViewDTO   `json:"config,omitempty"`
-	InputRequest *inputRequestDTO `json:"input_request,omitempty"`
+	Task            taskViewDTO      `json:"task"`
+	Config          *configViewDTO   `json:"config,omitempty"`
+	InputRequest    *inputRequestDTO `json:"input_request,omitempty"`
+	LiveOutput      []string         `json:"live_output,omitempty"`
+	LiveOutputRunID string           `json:"live_output_run_id,omitempty"`
 }
 
 type taskInputRequestResult struct {

@@ -15,6 +15,7 @@ import (
 	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 )
@@ -201,6 +202,48 @@ func TestServerTaskReadFlows(t *testing.T) {
 		t.Fatalf("task.get input_request.node_run_id = %q, want %q", got, awaitingRunID)
 	}
 
+	server.handleRuntimeEvent(workspace.WorkspaceID, taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeStarted,
+		TaskID:    taskID,
+		NodeRunID: awaitingRunID,
+		NodeName:  "approve_plan",
+	})
+	server.handleRuntimeEvent(workspace.WorkspaceID, taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    taskID,
+		NodeRunID: awaitingRunID,
+		NodeName:  "approve_plan",
+		Progress: &taskruntime.ProgressInfo{
+			Message: "approval pending",
+			Events: []taskexecutor.StreamEvent{
+				{
+					Kind: taskexecutor.StreamEventKindTool,
+					Tool: &taskexecutor.ToolCall{
+						Name:         "Read",
+						Kind:         taskexecutor.ToolKindRead,
+						Status:       taskexecutor.ToolStatusCompleted,
+						InputSummary: "/tmp/plan.md",
+					},
+				},
+			},
+		},
+	})
+
+	getResultAny, _, _, rpcErr = server.handleRequest(context.Background(), request{
+		Method: methodTaskGet,
+		Params: mustRawParams(t, taskGetParams{WorkspaceID: workspace.WorkspaceID, TaskID: taskID}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.get live output rpc error: %+v", rpcErr)
+	}
+	getResult = getResultAny.(taskGetResult)
+	if got := getResult.LiveOutputRunID; got != awaitingRunID {
+		t.Fatalf("task.get live_output_run_id = %q, want %q", got, awaitingRunID)
+	}
+	if got := strings.Join(getResult.LiveOutput, "\n"); !strings.Contains(got, "read: /tmp/plan.md") {
+		t.Fatalf("task.get live_output = %#v, want tool summary", getResult.LiveOutput)
+	}
+
 	inputResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
 		Method: methodTaskInputRequest,
 		Params: mustRawParams(t, taskInputRequestParams{
@@ -343,6 +386,76 @@ func TestServerTaskMutationsRouteByWorkspaceAndCorrelateNotifications(t *testing
 	}
 	if dispatches[1].Type != taskruntime.CommandSubmitInput {
 		t.Fatalf("second dispatch type = %q, want %q", dispatches[1].Type, taskruntime.CommandSubmitInput)
+	}
+}
+
+func TestServeConnEOFDoesNotCloseRuntime(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+	fakeService := newFakeRuntimeService()
+	server := newTestServerWithOptions(t, stateDir, testServerOptions{
+		runtimeFactory: func(workDir string) (runtimeService, error) {
+			return fakeService, nil
+		},
+	})
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
+	}
+
+	err = server.runtimes.dispatch(workspace, taskruntime.RunCommand{Type: taskruntime.CommandStartTask})
+	if err != nil {
+		t.Fatalf("dispatch runtime command: %v", err)
+	}
+
+	var in bytes.Buffer
+	var out bytes.Buffer
+	writeRequestFrame(t, &in, 1, methodInitialize, map[string]any{"protocol_version": protocolVersion})
+
+	if err := server.ServeConn(context.Background(), &in, &out, ConnectionOptions{}); err != nil {
+		t.Fatalf("serve conn: %v", err)
+	}
+
+	if got := fakeService.CloseCalls(); got != 0 {
+		t.Fatalf("close calls = %d, want 0", got)
+	}
+	if got := fakeService.PrepareShutdownCalls(); got != 0 {
+		t.Fatalf("prepare shutdown calls = %d, want 0", got)
+	}
+}
+
+func TestInitializeRejectsSecondInteractiveClientButAllowsPassiveProbe(t *testing.T) {
+	server := newTestServer(t)
+	sessionA := &connectionSession{id: "session-a", outgoing: make(chan any, 8)}
+	sessionB := &connectionSession{id: "session-b", outgoing: make(chan any, 8)}
+	probe := &connectionSession{id: "probe", outgoing: make(chan any, 8)}
+
+	_, _, _, rpcErr := server.handleSessionRequest(context.Background(), sessionA, request{
+		Method: methodInitialize,
+		Params: mustRawParams(t, initializeParams{ProtocolVersion: protocolVersion}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("first initialize rpc error: %+v", rpcErr)
+	}
+	defer server.detachClientSession(sessionA.id)
+
+	_, _, _, rpcErr = server.handleSessionRequest(context.Background(), sessionB, request{
+		Method: methodInitialize,
+		Params: mustRawParams(t, initializeParams{ProtocolVersion: protocolVersion}),
+	})
+	if rpcErr == nil || rpcErr.Code != errorCodeBusy {
+		t.Fatalf("second initialize rpc error = %+v, want busy", rpcErr)
+	}
+
+	_, _, _, rpcErr = server.handleSessionRequest(context.Background(), probe, request{
+		Method: methodInitialize,
+		Params: mustRawParams(t, initializeParams{ProtocolVersion: protocolVersion, Passive: true}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("passive initialize rpc error: %+v", rpcErr)
+	}
+	if probe.attached {
+		t.Fatal("passive probe attached interactive session")
 	}
 }
 
@@ -975,9 +1088,11 @@ func seedAwaitingTask(t *testing.T, workDir string) (taskID string, awaitingRunI
 }
 
 type fakeRuntimeService struct {
-	mu         sync.Mutex
-	events     chan taskruntime.RunEvent
-	dispatches []taskruntime.RunCommand
+	mu           sync.Mutex
+	events       chan taskruntime.RunEvent
+	dispatches   []taskruntime.RunCommand
+	closeCalls   int
+	prepareCalls int
 }
 
 func newFakeRuntimeService() *fakeRuntimeService {
@@ -1001,7 +1116,17 @@ func (f *fakeRuntimeService) Dispatch(cmd taskruntime.RunCommand) {
 	f.dispatches = append(f.dispatches, cmd)
 }
 
+func (f *fakeRuntimeService) PrepareShutdown(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prepareCalls++
+	return nil
+}
+
 func (f *fakeRuntimeService) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalls++
 	return nil
 }
 
@@ -1011,4 +1136,16 @@ func (f *fakeRuntimeService) Dispatched() []taskruntime.RunCommand {
 	out := make([]taskruntime.RunCommand, len(f.dispatches))
 	copy(out, f.dispatches)
 	return out
+}
+
+func (f *fakeRuntimeService) CloseCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closeCalls
+}
+
+func (f *fakeRuntimeService) PrepareShutdownCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.prepareCalls
 }

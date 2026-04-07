@@ -14,16 +14,9 @@ func NewCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "app-server",
-		Short: "Run the local task app-server over stdio",
+		Short: "Run the local task app-server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			server, err := internalappserver.New(internalappserver.Options{
-				StateDir:      stateDir,
-				ServerVersion: cliversion.CLIString(),
-				WorktreeAvailable: func(path string) bool {
-					_, err := worktree.FindRepoRoot(path)
-					return err == nil
-				},
-			})
+			server, err := newServer(stateDir)
 			if err != nil {
 				return err
 			}
@@ -31,8 +24,22 @@ func NewCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&stateDir, "state-dir", "", "State directory for the global app-server")
-	_ = cmd.Flags().MarkHidden("state-dir")
+	cmd.PersistentFlags().StringVar(&stateDir, "state-dir", "", "State directory for the global app-server")
+	_ = cmd.PersistentFlags().MarkHidden("state-dir")
+
+	cmd.AddCommand(newEnsureCmd(&stateDir))
+	cmd.AddCommand(newServeDaemonCmd(&stateDir))
 
 	return cmd
+}
+
+func newServer(stateDir string) (*internalappserver.Server, error) {
+	return internalappserver.New(internalappserver.Options{
+		StateDir:      stateDir,
+		ServerVersion: cliversion.CLIString(),
+		WorktreeAvailable: func(path string) bool {
+			_, err := worktree.FindRepoRoot(path)
+			return err == nil
+		},
+	})
 }

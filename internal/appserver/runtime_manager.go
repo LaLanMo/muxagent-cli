@@ -15,6 +15,7 @@ type runtimeService interface {
 	Run(ctx context.Context) error
 	Events() <-chan taskruntime.RunEvent
 	Dispatch(cmd taskruntime.RunCommand)
+	PrepareShutdown(ctx context.Context) error
 	Close() error
 }
 
@@ -113,6 +114,23 @@ func (m *runtimeManager) closeAll() error {
 	var errs []error
 	for _, actor := range actors {
 		if err := closeWorkspaceActor(actor); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (m *runtimeManager) prepareShutdownAll(ctx context.Context) error {
+	m.mu.Lock()
+	actors := make([]*workspaceActor, 0, len(m.actors))
+	for _, actor := range m.actors {
+		actors = append(actors, actor)
+	}
+	m.mu.Unlock()
+
+	var errs []error
+	for _, actor := range actors {
+		if err := actor.service.PrepareShutdown(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			errs = append(errs, err)
 		}
 	}

@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	lockFileName       = "appserver.lock"
-	workspacesFileName = "workspaces.json"
+	lockFileName        = "appserver.lock"
+	ensureLockFileName  = "appserver.ensure.lock"
+	daemonStateFileName = "appserver-daemon-state.json"
+	logFileName         = "appserver.log"
+	workspacesFileName  = "workspaces.json"
 )
 
 func defaultStateDir() (string, error) {
@@ -51,6 +54,18 @@ func resolveStateDir(override string) (string, error) {
 
 func singletonLockPath(stateDir string) string {
 	return filepath.Join(stateDir, lockFileName)
+}
+
+func ensureLockPath(stateDir string) string {
+	return filepath.Join(stateDir, ensureLockFileName)
+}
+
+func daemonStatePath(stateDir string) string {
+	return filepath.Join(stateDir, daemonStateFileName)
+}
+
+func daemonLogPath(stateDir string) string {
+	return filepath.Join(stateDir, logFileName)
 }
 
 func workspacesFilePath(stateDir string) string {

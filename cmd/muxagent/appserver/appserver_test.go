@@ -16,7 +16,7 @@ func TestNewCmdDoesNotExposeLegacyWorkDirFlag(t *testing.T) {
 
 func TestNewCmdKeepsHiddenStateDirFlag(t *testing.T) {
 	cmd := NewCmd()
-	flag := cmd.Flags().Lookup("state-dir")
+	flag := cmd.PersistentFlags().Lookup("state-dir")
 	if flag == nil {
 		t.Fatalf("state-dir flag missing")
 	}

@@ -25,6 +25,7 @@ import (
 type Options struct {
 	StateDir                  string
 	ServerVersion             string
+	InstanceID                string
 	LoadConfig                func() (appconfig.Config, error)
 	LoadCatalog               func() (*taskconfig.Catalog, error)
 	LoadRegistry              func() (taskconfig.Registry, error)
@@ -37,6 +38,7 @@ type Options struct {
 type Server struct {
 	stateDir                  string
 	serverVersion             string
+	instanceID                string
 	runtimeCount              int
 	loadConfig                func() (appconfig.Config, error)
 	loadCatalog               func() (*taskconfig.Catalog, error)
@@ -49,10 +51,33 @@ type Server struct {
 	runtimes                  *runtimeManager
 
 	mu               sync.Mutex
-	initialized      bool
 	connectedClients int
+	activeSessionID  string
 	pendingCommands  []pendingClientCommand
 	notificationSink func(notification)
+	liveOutputCache  map[string]map[string]liveOutputSnapshot
+	shutdownOnce     sync.Once
+	shutdownCh       chan struct{}
+	gracefulStop     bool
+}
+
+type liveOutputSnapshot struct {
+	NodeRunID string
+	Lines     []string
+}
+
+type ConnectionOptions struct {
+	RequireAuth bool
+	AuthToken   string
+}
+
+type connectionSession struct {
+	id          string
+	initialized bool
+	attached    bool
+	passive     bool
+	options     ConnectionOptions
+	outgoing    chan<- any
 }
 
 type stopMode int
@@ -98,9 +123,15 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("load workspace registry: %w", err)
 	}
 
+	instanceID := strings.TrimSpace(opts.InstanceID)
+	if instanceID == "" {
+		instanceID = uuid.NewString()
+	}
+
 	s := &Server{
 		stateDir:                  stateDir,
 		serverVersion:             opts.ServerVersion,
+		instanceID:                instanceID,
 		runtimeCount:              len(cfg.ConfiguredRuntimeIDs()),
 		loadConfig:                opts.LoadConfig,
 		loadCatalog:               opts.LoadCatalog,
@@ -110,6 +141,8 @@ func New(opts Options) (*Server, error) {
 		now:                       opts.Now,
 		lockPath:                  singletonLockPath(stateDir),
 		registry:                  registry,
+		shutdownCh:                make(chan struct{}),
+		liveOutputCache:           map[string]map[string]liveOutputSnapshot{},
 	}
 	s.runtimes = newRuntimeManager(opts.RuntimeFactory, s.handleRuntimeEvent)
 	return s, nil
@@ -117,6 +150,27 @@ func New(opts Options) (*Server, error) {
 
 func (s *Server) StateDir() string {
 	return s.stateDir
+}
+
+func (s *Server) InstanceID() string {
+	return s.instanceID
+}
+
+func (s *Server) ShutdownRequested() <-chan struct{} {
+	return s.shutdownCh
+}
+
+func (s *Server) GracefulShutdownRequested() bool {
+	return s.gracefulShutdownRequested()
+}
+
+func (s *Server) Shutdown(ctx context.Context, graceful bool) error {
+	if graceful {
+		if err := s.runtimes.prepareShutdownAll(ctx); err != nil {
+			return err
+		}
+	}
+	return s.runtimes.closeAll()
 }
 
 func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) (err error) {
@@ -130,15 +184,26 @@ func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) (
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer func() {
+		if shutdownErr := s.Shutdown(context.Background(), s.gracefulShutdownRequested()); err == nil && shutdownErr != nil {
+			err = shutdownErr
+		}
+	}()
 
-	s.setConnectedClients(1)
-	defer s.setConnectedClients(0)
+	return s.ServeConn(ctx, stdin, stdout, ConnectionOptions{})
+}
 
+func (s *Server) ServeConn(ctx context.Context, stdin io.Reader, stdout io.Writer, options ConnectionOptions) (err error) {
 	reader := newFrameReader(stdin)
 	writer := newFrameWriter(stdout)
 	outgoing := make(chan any, 256)
 	writeErrCh := make(chan error, 1)
 	writerDone := make(chan struct{})
+	session := &connectionSession{
+		id:       uuid.NewString(),
+		options:  options,
+		outgoing: outgoing,
+	}
 
 	go func() {
 		defer close(writerDone)
@@ -153,15 +218,10 @@ func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) (
 		}
 	}()
 
-	s.setNotificationSink(func(n notification) {
-		select {
-		case outgoing <- n:
-		case <-ctx.Done():
-		}
-	})
-	defer s.setNotificationSink(nil)
 	defer func() {
-		_ = s.runtimes.closeAll()
+		if session.attached {
+			s.detachClientSession(session.id)
+		}
 		close(outgoing)
 		<-writerDone
 		select {
@@ -190,7 +250,7 @@ func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) (
 			return readErr
 		}
 
-		stopAfter, handleErr := s.handleFrame(ctx, frame, outgoing)
+		stopAfter, handleErr := s.handleFrame(ctx, session, frame)
 		if handleErr != nil {
 			return handleErr
 		}
@@ -200,17 +260,17 @@ func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) (
 	}
 }
 
-func (s *Server) handleFrame(ctx context.Context, frame []byte, outgoing chan<- any) (stopMode, error) {
+func (s *Server) handleFrame(ctx context.Context, session *connectionSession, frame []byte) (stopMode, error) {
 	var msg incomingMessage
 	if err := json.Unmarshal(frame, &msg); err != nil {
-		return stopModeContinue, enqueueJSON(outgoing, response{
+		return stopModeContinue, enqueueJSON(session.outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      json.RawMessage("null"),
 			Error:   &rpcError{Code: errorCodeParseError, Message: "parse error"},
 		})
 	}
 	if msg.JSONRPC != jsonRPCVersion {
-		return stopModeContinue, enqueueJSON(outgoing, response{
+		return stopModeContinue, enqueueJSON(session.outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      requestIDOrNull(msg.ID),
 			Error:   &rpcError{Code: errorCodeInvalidRequest, Message: "jsonrpc must be 2.0"},
@@ -220,27 +280,27 @@ func (s *Server) handleFrame(ctx context.Context, frame []byte, outgoing chan<- 
 		return stopModeContinue, nil
 	}
 	if !msg.isRequest() {
-		return stopModeContinue, enqueueJSON(outgoing, response{
+		return stopModeContinue, enqueueJSON(session.outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      requestIDOrNull(msg.ID),
 			Error:   &rpcError{Code: errorCodeInvalidRequest, Message: "request must include method and id"},
 		})
 	}
-	if !s.isInitialized() && msg.Method != methodInitialize {
-		return stopModeContinue, enqueueJSON(outgoing, response{
+	if !session.initialized && msg.Method != methodInitialize {
+		return stopModeContinue, enqueueJSON(session.outgoing, response{
 			JSONRPC: jsonRPCVersion,
 			ID:      requestIDOrNull(msg.ID),
 			Error:   &rpcError{Code: errorCodeNotInitialized, Message: "server not initialized"},
 		})
 	}
 
-	result, notifications, stopAfter, rpcErr := s.handleRequest(ctx, request{
+	result, notifications, stopAfter, rpcErr := s.handleSessionRequest(ctx, session, request{
 		JSONRPC: msg.JSONRPC,
 		ID:      msg.ID,
 		Method:  msg.Method,
 		Params:  msg.Params,
 	})
-	if err := enqueueJSON(outgoing, response{
+	if err := enqueueJSON(session.outgoing, response{
 		JSONRPC: jsonRPCVersion,
 		ID:      msg.ID,
 		Result:  result,
@@ -249,7 +309,7 @@ func (s *Server) handleFrame(ctx context.Context, frame []byte, outgoing chan<- 
 		return stopModeContinue, err
 	}
 	for _, outgoingNotification := range notifications {
-		if err := enqueueJSON(outgoing, outgoingNotification); err != nil {
+		if err := enqueueJSON(session.outgoing, outgoingNotification); err != nil {
 			return stopModeContinue, err
 		}
 	}
@@ -257,6 +317,14 @@ func (s *Server) handleFrame(ctx context.Context, frame []byte, outgoing chan<- 
 }
 
 func (s *Server) handleRequest(ctx context.Context, req request) (any, []notification, stopMode, *rpcError) {
+	return s.handleSessionRequest(ctx, nil, req)
+}
+
+func (s *Server) handleSessionRequest(ctx context.Context, session *connectionSession, req request) (any, []notification, stopMode, *rpcError) {
+	if session != nil && session.passive && req.Method != methodInitialize && req.Method != methodServiceStatus {
+		return nil, nil, stopModeContinue, &rpcError{Code: errorCodeBusy, Message: "passive sessions only support service.status"}
+	}
+
 	switch req.Method {
 	case methodInitialize:
 		params, err := decodeParams[initializeParams](req.Params)
@@ -266,11 +334,29 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, []notific
 		if params.ProtocolVersion != protocolVersion {
 			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: fmt.Sprintf("unsupported protocol version %d", params.ProtocolVersion)}
 		}
-		s.markInitialized()
+		if session != nil && session.options.RequireAuth && strings.TrimSpace(params.AuthToken) != strings.TrimSpace(session.options.AuthToken) {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeUnauthorized, Message: "unauthorized"}
+		}
+		if session != nil {
+			session.passive = params.Passive
+			if !session.passive {
+				if err := s.attachClientSession(session.id, func(n notification) {
+					select {
+					case session.outgoing <- n:
+					case <-ctx.Done():
+					}
+				}); err != nil {
+					return nil, nil, stopModeContinue, &rpcError{Code: errorCodeBusy, Message: err.Error()}
+				}
+				session.attached = true
+			}
+			session.initialized = true
+		}
 		return initializeResult{
 			ProtocolVersion: protocolVersion,
 			ServerName:      "muxagent app-server",
 			ServerVersion:   s.serverVersion,
+			InstanceID:      s.instanceID,
 			Capabilities: serverCapabilitiesDTO{
 				Methods: []string{
 					methodInitialize,
@@ -312,12 +398,14 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, []notific
 			StateDir:         s.stateDir,
 			ServerVersion:    s.serverVersion,
 			ProtocolVersion:  protocolVersion,
+			InstanceID:       s.instanceID,
 			WorkspaceCount:   s.registry.Count(),
 			RuntimeCount:     s.runtimeCount,
 			ConnectedClients: s.connectedClientCount(),
 		}, nil, stopModeContinue, nil
 
 	case methodServiceShutdown:
+		s.requestGracefulShutdown()
 		return serviceShutdownResult{Accepted: true}, nil, stopModeDrainAndExit, nil
 
 	case methodWorkspaceList:
@@ -374,6 +462,7 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, []notific
 		if err := s.runtimes.remove(workspaceID); err != nil {
 			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
 		}
+		s.clearLiveOutputCache(workspaceID)
 		return workspaceRemoveResult{Removed: true}, []notification{
 			s.newNotification(notificationWorkspaceRemoved, workspaceID, workspaceRemovedPayload{Removed: true}),
 		}, stopModeContinue, nil
@@ -443,6 +532,10 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, []notific
 		result := taskGetResult{
 			Task:         taskViewToDTO(view),
 			InputRequest: inputRequestToDTO(input),
+		}
+		if runID, lines := s.liveOutputSnapshot(params.WorkspaceID, params.TaskID); runID != "" || len(lines) > 0 {
+			result.LiveOutputRunID = runID
+			result.LiveOutput = lines
 		}
 		if cfg != nil {
 			result.Config = &configViewDTO{
@@ -921,11 +1014,97 @@ func (s *Server) requireWorkspace(workspaceID string) (workspaceRecord, *rpcErro
 }
 
 func (s *Server) handleRuntimeEvent(workspaceID string, event taskruntime.RunEvent) {
+	s.recordLiveOutput(workspaceID, event)
 	payload := taskNotificationPayload{
 		ClientCommandID: s.claimPendingClientCommandID(workspaceID, event),
 		Event:           runEventToDTO(event),
 	}
 	s.emitNotification(s.newNotification(string(event.Type), workspaceID, payload))
+}
+
+func (s *Server) recordLiveOutput(workspaceID string, event taskruntime.RunEvent) {
+	taskID := strings.TrimSpace(event.TaskID)
+	if workspaceID == "" || taskID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceCache := s.liveOutputCache[workspaceID]
+	if workspaceCache == nil {
+		workspaceCache = map[string]liveOutputSnapshot{}
+		s.liveOutputCache[workspaceID] = workspaceCache
+	}
+
+	snapshot := workspaceCache[taskID]
+	switch event.Type {
+	case taskruntime.EventNodeStarted, taskruntime.EventInputRequested:
+		workspaceCache[taskID] = liveOutputSnapshot{NodeRunID: event.NodeRunID}
+		return
+	case taskruntime.EventNodeProgress:
+		if snapshot.NodeRunID != event.NodeRunID {
+			snapshot = liveOutputSnapshot{NodeRunID: event.NodeRunID}
+		}
+		lines := summarizeProgressLines(event.Progress)
+		if len(lines) == 0 {
+			workspaceCache[taskID] = snapshot
+			return
+		}
+		snapshot.Lines = append(snapshot.Lines, lines...)
+		if len(snapshot.Lines) > 120 {
+			snapshot.Lines = append([]string(nil), snapshot.Lines[len(snapshot.Lines)-120:]...)
+		}
+		workspaceCache[taskID] = snapshot
+		return
+	}
+
+	if snapshot.NodeRunID == "" && event.NodeRunID != "" {
+		snapshot.NodeRunID = event.NodeRunID
+		workspaceCache[taskID] = snapshot
+	}
+}
+
+func summarizeProgressLines(progress *taskruntime.ProgressInfo) []string {
+	if progress == nil {
+		return nil
+	}
+	lines := make([]string, 0, len(progress.Events)+1)
+	for _, event := range progress.Events {
+		if summary := strings.TrimSpace(event.Summary()); summary != "" {
+			lines = append(lines, summary)
+			continue
+		}
+		if raw := strings.TrimSpace(event.Raw); raw != "" {
+			lines = append(lines, raw)
+		}
+	}
+	if len(lines) == 0 {
+		if fallback := strings.TrimSpace(progress.Message); fallback != "" {
+			lines = append(lines, fallback)
+		}
+	}
+	return lines
+}
+
+func (s *Server) liveOutputSnapshot(workspaceID, taskID string) (string, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceCache := s.liveOutputCache[workspaceID]
+	if workspaceCache == nil {
+		return "", nil
+	}
+	snapshot := workspaceCache[taskID]
+	if snapshot.NodeRunID == "" && len(snapshot.Lines) == 0 {
+		return "", nil
+	}
+	return snapshot.NodeRunID, append([]string(nil), snapshot.Lines...)
+}
+
+func (s *Server) clearLiveOutputCache(workspaceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.liveOutputCache, workspaceID)
 }
 
 func (s *Server) newNotification(kind, workspaceID string, payload any) notification {
@@ -957,22 +1136,46 @@ func (s *Server) setNotificationSink(sink func(notification)) {
 	s.notificationSink = sink
 }
 
-func (s *Server) markInitialized() {
+func (s *Server) markInitialized() {}
+
+func (s *Server) attachClientSession(sessionID string, sink func(notification)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.initialized = true
+	if s.activeSessionID != "" && s.activeSessionID != sessionID {
+		return errors.New("another app-server client is already connected")
+	}
+	s.activeSessionID = sessionID
+	s.connectedClients = 1
+	s.notificationSink = sink
+	s.pendingCommands = nil
+	return nil
 }
 
-func (s *Server) isInitialized() bool {
+func (s *Server) detachClientSession(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.initialized
+	if s.activeSessionID != sessionID {
+		return
+	}
+	s.activeSessionID = ""
+	s.connectedClients = 0
+	s.notificationSink = nil
+	s.pendingCommands = nil
 }
 
-func (s *Server) setConnectedClients(count int) {
+func (s *Server) requestGracefulShutdown() {
+	s.mu.Lock()
+	s.gracefulStop = true
+	s.mu.Unlock()
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownCh)
+	})
+}
+
+func (s *Server) gracefulShutdownRequested() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.connectedClients = count
+	return s.gracefulStop
 }
 
 func (s *Server) connectedClientCount() int {

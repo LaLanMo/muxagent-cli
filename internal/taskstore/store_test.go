@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,6 +165,20 @@ func TestStoreSchemaDeclaresJSONValidityChecks(t *testing.T) {
 	assert.Contains(t, tableSQL, "json_valid(clarifications_json)")
 	assert.Contains(t, tableSQL, "json_valid(triggered_by_json)")
 	assert.Contains(t, tableSQL, "failure_reason")
+}
+
+func TestOpenAtPathConfiguresSQLitePragmas(t *testing.T) {
+	store, err := OpenAtPath(filepath.Join(t.TempDir(), "tasks.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	var journalMode string
+	require.NoError(t, store.db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode))
+	assert.Equal(t, "wal", strings.ToLower(journalMode))
+
+	var busyTimeout int
+	require.NoError(t, store.db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout))
+	assert.Equal(t, sqliteBusyTimeoutMS, busyTimeout)
 }
 
 func TestEnsureSchemaAddsConfigPathColumnForOlderTasksTables(t *testing.T) {

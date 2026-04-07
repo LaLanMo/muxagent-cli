@@ -33,7 +33,8 @@ var (
 )
 
 const (
-	tasksTableSQL = `CREATE TABLE IF NOT EXISTS tasks (
+	sqliteBusyTimeoutMS = 5000
+	tasksTableSQL       = `CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
 		description TEXT NOT NULL,
 		config_alias TEXT NOT NULL DEFAULT '',
@@ -77,12 +78,27 @@ func Open(workDir string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	return openSQLiteStore(dbPath)
+}
+
+func OpenAtPath(path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return openSQLiteStore(path)
+}
+
+func openSQLiteStore(path string) (*Store, error) {
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if err := configureSQLite(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	store := &Store{db: db}
 	if err := store.EnsureSchema(context.Background()); err != nil {
 		_ = db.Close()
@@ -91,22 +107,23 @@ func Open(workDir string) (*Store, error) {
 	return store, nil
 }
 
-func OpenAtPath(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+func configureSQLite(db *sql.DB) error {
+	if db == nil {
+		return errors.New("sqlite db is nil")
 	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		return nil, err
+	ctx := context.Background()
+	pragmas := []string{
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = NORMAL`,
+		fmt.Sprintf(`PRAGMA busy_timeout = %d`, sqliteBusyTimeoutMS),
+		`PRAGMA foreign_keys = ON`,
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	store := &Store{db: db}
-	if err := store.EnsureSchema(context.Background()); err != nil {
-		_ = db.Close()
-		return nil, err
+	for _, stmt := range pragmas {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
 	}
-	return store, nil
+	return nil
 }
 
 func (s *Store) Close() error {
