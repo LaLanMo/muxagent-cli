@@ -215,6 +215,42 @@ func DeleteConfig(alias string) (*Catalog, error) {
 	return LoadCatalog()
 }
 
+func ResetBuiltinConfig(alias string) (*Catalog, error) {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return nil, errors.New("task config alias is required")
+	}
+
+	reg, err := LoadRegistry()
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := registryEntryByAlias(reg.Configs, alias)
+	if !ok {
+		return nil, fmt.Errorf("task config alias %q does not exist", alias)
+	}
+	if !isBuiltinEntry(entry) {
+		return nil, fmt.Errorf("task config alias %q is not builtin", alias)
+	}
+
+	taskConfigDir, err := TaskConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	cleanBundlePath, _, err := resolveRegistryEntryPath(taskConfigDir, entry.Path)
+	if err != nil {
+		return nil, err
+	}
+	bundleDir := filepath.Join(taskConfigDir, filepath.FromSlash(cleanBundlePath))
+	if err := os.RemoveAll(bundleDir); err != nil {
+		return nil, err
+	}
+	if err := writeBuiltinBundle(taskConfigDir, cleanBundlePath, entry.BuiltinID, true); err != nil {
+		return nil, err
+	}
+	return LoadCatalog()
+}
+
 func BundlePathForConfigPath(configPath string) (string, error) {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {

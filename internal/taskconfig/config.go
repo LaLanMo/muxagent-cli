@@ -68,9 +68,9 @@ type Edge struct {
 }
 
 type EdgeCondition struct {
-	Kind   EdgeConditionKind
-	Field  string      `yaml:"field,omitempty" json:"field,omitempty"`
-	Equals interface{} `yaml:"equals,omitempty" json:"equals,omitempty"`
+	Kind   EdgeConditionKind `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Field  string            `yaml:"field,omitempty" json:"field,omitempty"`
+	Equals interface{}       `yaml:"equals,omitempty" json:"equals,omitempty"`
 }
 
 type EdgeConditionKind string

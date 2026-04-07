@@ -1,5 +1,19 @@
 .idea/
+
+# local binaries
 /muxagent
 cmd/muxagent/muxagent
+/workspaceseed
+
+# local notes
 tasks/
 lessions.md
+design.pen
+
+# machine-generated junk
+.DS_Store
+debug.test*
+
+# local runtime/output
+.muxagent/
+artifacts/

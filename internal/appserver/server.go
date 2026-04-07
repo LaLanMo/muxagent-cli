@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 )
 
 type Options struct {
@@ -36,6 +38,7 @@ type Server struct {
 	stateDir                  string
 	serverVersion             string
 	runtimeCount              int
+	loadConfig                func() (appconfig.Config, error)
 	loadCatalog               func() (*taskconfig.Catalog, error)
 	loadRegistry              func() (taskconfig.Registry, error)
 	loadTaskLaunchPreferences func() appconfig.TaskLaunchPreferences
@@ -99,6 +102,7 @@ func New(opts Options) (*Server, error) {
 		stateDir:                  stateDir,
 		serverVersion:             opts.ServerVersion,
 		runtimeCount:              len(cfg.ConfiguredRuntimeIDs()),
+		loadConfig:                opts.LoadConfig,
 		loadCatalog:               opts.LoadCatalog,
 		loadRegistry:              opts.LoadRegistry,
 		loadTaskLaunchPreferences: opts.LoadTaskLaunchPreferences,
@@ -287,6 +291,17 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, []notific
 					methodTaskContinueBlocked,
 					methodArtifactList,
 					methodConfigCatalog,
+					methodConfigGet,
+					methodConfigClone,
+					methodConfigRename,
+					methodConfigDelete,
+					methodConfigReset,
+					methodConfigSetDefault,
+					methodConfigValidate,
+					methodConfigSave,
+					methodConfigPromptGet,
+					methodConfigPromptSave,
+					methodRuntimeList,
 				},
 				Notifications: []string{methodNotification},
 			},
@@ -626,8 +641,224 @@ func (s *Server) handleRequest(ctx context.Context, req request) (any, []notific
 		if err != nil {
 			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
 		}
+		runtimeCfg, err := s.loadRuntimeConfig()
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
 		prefs := s.loadTaskLaunchPreferences()
-		return buildConfigCatalogResult(catalog, reg, prefs.UseWorktree), nil, stopModeContinue, nil
+		return buildConfigCatalogResult(catalog, reg, runtimeCfg, prefs.UseWorktree), nil, stopModeContinue, nil
+
+	case methodConfigGet:
+		params, err := decodeParams[configGetParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		entry, rpcErr := s.loadConfigDetail(params.Alias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configGetResult{Entry: entry}, nil, stopModeContinue, nil
+
+	case methodConfigClone:
+		params, err := decodeParams[configCloneParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		if strings.TrimSpace(params.NewAlias) == "" {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "new_alias is required"}
+		}
+		lookup, rpcErr := s.configLookup(params.SourceAlias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		if _, err := taskconfig.CloneConfig(params.NewAlias, lookup.entry.Path); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		entry, rpcErr := s.loadConfigDetail(params.NewAlias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configCloneResult{Entry: entry}, nil, stopModeContinue, nil
+
+	case methodConfigRename:
+		params, err := decodeParams[configRenameParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		if _, err := taskconfig.RenameConfigAlias(params.Alias, params.NewAlias); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		entry, rpcErr := s.loadConfigDetail(params.NewAlias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configRenameResult{Entry: entry}, nil, stopModeContinue, nil
+
+	case methodConfigDelete:
+		params, err := decodeParams[configDeleteParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		if _, err := taskconfig.DeleteConfig(params.Alias); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		return configDeleteResult{Removed: true}, nil, stopModeContinue, nil
+
+	case methodConfigReset:
+		params, err := decodeParams[configResetParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		lookup, rpcErr := s.configLookup(params.Alias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		if !lookup.entry.Builtin {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: fmt.Sprintf("task config alias %q is not builtin", lookup.entry.Alias)}
+		}
+		if _, err := taskconfig.ResetBuiltinConfig(lookup.entry.Alias); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		entry, rpcErr := s.loadConfigDetail(lookup.entry.Alias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configResetResult{Entry: entry}, nil, stopModeContinue, nil
+
+	case methodConfigSetDefault:
+		params, err := decodeParams[configSetDefaultParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		if _, err := taskconfig.SetDefaultConfig(params.Alias); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		entry, rpcErr := s.loadConfigDetail(params.Alias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configSetDefaultResult{Entry: entry}, nil, stopModeContinue, nil
+
+	case methodConfigValidate:
+		params, err := decodeParams[configValidateParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		runtimeCfg, err := s.loadRuntimeConfig()
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		normalized, validationErr := validateConfigDraft(runtimeCfg, params.Config)
+		result := configValidateResult{}
+		if normalized != nil {
+			result.Config = normalized
+			result.RuntimeID = normalized.Runtime
+			result.RuntimeName = runtimeDisplayName(normalized.Runtime)
+			result.RuntimeConfigured = runtimeConfigured(runtimeCfg, normalized.Runtime)
+		}
+		if validationErr != nil {
+			result.Valid = false
+			result.Error = validationErr.Error()
+			return result, nil, stopModeContinue, nil
+		}
+		result.Valid = true
+		return result, nil, stopModeContinue, nil
+
+	case methodConfigSave:
+		params, err := decodeParams[configSaveParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		if strings.TrimSpace(params.ExpectedRevision) == "" {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "expected_revision is required"}
+		}
+		lookup, rpcErr := s.configLookup(params.Alias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		currentRevision, err := configRevision(lookup.entry.Path)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		if currentRevision != strings.TrimSpace(params.ExpectedRevision) {
+			return nil, nil, stopModeContinue, configConflictRPCError(lookup.entry.Alias, currentRevision)
+		}
+		runtimeCfg, err := s.loadRuntimeConfig()
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		_, err = validateConfigDraft(runtimeCfg, params.Config)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		payload, err := yaml.Marshal(params.Config)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		if err := os.WriteFile(lookup.entry.Path, payload, 0o644); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		entry, rpcErr := s.loadConfigDetail(lookup.entry.Alias)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configSaveResult{Entry: entry}, nil, stopModeContinue, nil
+
+	case methodConfigPromptGet:
+		params, err := decodeParams[configPromptGetParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		prompt, rpcErr := s.loadConfigPrompt(params.Alias, params.NodeName)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configPromptGetResult{Prompt: prompt}, nil, stopModeContinue, nil
+
+	case methodConfigPromptSave:
+		params, err := decodeParams[configPromptSaveParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		lookup, rpcErr := s.configPromptLookup(params.Alias, params.NodeName)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		expectedRevision := strings.TrimSpace(params.ExpectedRevision)
+		currentRevision, err := promptRevision(lookup.resolvedPath)
+		switch {
+		case err == nil:
+			if currentRevision != expectedRevision {
+				return nil, nil, stopModeContinue, configPromptConflictRPCError(lookup.lookup.entry.Alias, lookup.nodeName, currentRevision)
+			}
+		case errors.Is(err, os.ErrNotExist):
+			if expectedRevision != "" {
+				return nil, nil, stopModeContinue, configPromptConflictRPCError(lookup.lookup.entry.Alias, lookup.nodeName, "")
+			}
+		default:
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		if strings.TrimSpace(params.Content) == "" {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: "content is required"}
+		}
+		if err := os.MkdirAll(filepath.Dir(lookup.resolvedPath), 0o755); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		if err := os.WriteFile(lookup.resolvedPath, []byte(params.Content), 0o644); err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		prompt, rpcErr := s.loadConfigPrompt(lookup.lookup.entry.Alias, lookup.nodeName)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		return configPromptSaveResult{Prompt: prompt}, nil, stopModeContinue, nil
+
+	case methodRuntimeList:
+		runtimeCfg, err := s.loadRuntimeConfig()
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInternalError, Message: err.Error()}
+		}
+		return runtimeListResult{Runtimes: runtimeListDTOs(runtimeCfg)}, nil, stopModeContinue, nil
 
 	default:
 		return nil, nil, stopModeContinue, &rpcError{Code: errorCodeMethodNotFound, Message: fmt.Sprintf("method %q not found", req.Method)}

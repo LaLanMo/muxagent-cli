@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -345,6 +346,397 @@ func TestServerTaskMutationsRouteByWorkspaceAndCorrelateNotifications(t *testing
 	}
 }
 
+func TestServerConfigRuntimeFlows(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	server := newTestServerWithOptions(t, stateDir, testServerOptions{
+		loadConfig: func() (appconfig.Config, error) {
+			return appconfig.Config{
+				Runtimes: map[appconfig.RuntimeID]appconfig.RuntimeSettings{
+					appconfig.RuntimeCodex: {},
+				},
+			}, nil
+		},
+	})
+	server.markInitialized()
+
+	catalogResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigCatalog,
+		Params: mustRawParams(t, map[string]any{}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.catalog rpc error: %+v", rpcErr)
+	}
+	catalogResult := catalogResultAny.(configCatalogResult)
+	if len(catalogResult.Entries) == 0 {
+		t.Fatal("config.catalog entries = 0, want builtins")
+	}
+	defaultAlias := catalogResult.DefaultAlias
+
+	getResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigGet,
+		Params: mustRawParams(t, configGetParams{Alias: defaultAlias}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.get rpc error: %+v", rpcErr)
+	}
+	getResult := getResultAny.(configGetResult)
+	if !getResult.Entry.Builtin {
+		t.Fatal("config.get builtin = false, want true")
+	}
+	if getResult.Entry.Revision == "" {
+		t.Fatal("config.get revision = empty, want value")
+	}
+	if getResult.Entry.Config == nil {
+		t.Fatal("config.get config = nil, want value")
+	}
+
+	cloneResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigClone,
+		Params: mustRawParams(t, configCloneParams{
+			SourceAlias: defaultAlias,
+			NewAlias:    "custom-plan",
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.clone rpc error: %+v", rpcErr)
+	}
+	cloneResult := cloneResultAny.(configCloneResult)
+	if cloneResult.Entry.Builtin {
+		t.Fatal("cloned config builtin = true, want false")
+	}
+	if cloneResult.Entry.Config == nil {
+		t.Fatal("cloned config payload = nil")
+	}
+	initialRevision := cloneResult.Entry.Revision
+
+	validDraft := *cloneResult.Entry.Config
+	validDraft.Description = "Custom plan"
+	validateResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigValidate,
+		Params: mustRawParams(t, configValidateParams{Config: &validDraft}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.validate rpc error: %+v", rpcErr)
+	}
+	validateResult := validateResultAny.(configValidateResult)
+	if !validateResult.Valid {
+		t.Fatalf("config.validate valid = false, want true (error=%q)", validateResult.Error)
+	}
+	if validateResult.RuntimeID != appconfig.RuntimeCodex {
+		t.Fatalf("validated runtime = %q, want %q", validateResult.RuntimeID, appconfig.RuntimeCodex)
+	}
+	if !validateResult.RuntimeConfigured {
+		t.Fatal("validated runtime_configured = false, want true")
+	}
+
+	invalidDraft := validDraft
+	invalidDraft.Runtime = appconfig.RuntimeClaudeCode
+	invalidResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigValidate,
+		Params: mustRawParams(t, configValidateParams{Config: &invalidDraft}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("invalid config.validate rpc error: %+v", rpcErr)
+	}
+	invalidResult := invalidResultAny.(configValidateResult)
+	if invalidResult.Valid {
+		t.Fatal("invalid config.validate valid = true, want false")
+	}
+	if !strings.Contains(invalidResult.Error, `runtime "claude-code" is not configured`) {
+		t.Fatalf("invalid config.validate error = %q, want runtime-not-configured", invalidResult.Error)
+	}
+
+	saveResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigSave,
+		Params: mustRawParams(t, configSaveParams{
+			Alias:            cloneResult.Entry.Alias,
+			ExpectedRevision: initialRevision,
+			Config:           &validDraft,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.save rpc error: %+v", rpcErr)
+	}
+	saveResult := saveResultAny.(configSaveResult)
+	if saveResult.Entry.Description != "Custom plan" {
+		t.Fatalf("saved description = %q, want %q", saveResult.Entry.Description, "Custom plan")
+	}
+	if saveResult.Entry.Revision == "" || saveResult.Entry.Revision == initialRevision {
+		t.Fatalf("saved revision = %q, want new revision after save", saveResult.Entry.Revision)
+	}
+
+	_, _, _, rpcErr = server.handleRequest(context.Background(), request{
+		Method: methodConfigSave,
+		Params: mustRawParams(t, configSaveParams{
+			Alias:            cloneResult.Entry.Alias,
+			ExpectedRevision: initialRevision,
+			Config:           &validDraft,
+		}),
+	})
+	if rpcErr == nil || rpcErr.Code != errorCodeConfigConflict {
+		t.Fatalf("stale config.save rpc error = %+v, want config conflict", rpcErr)
+	}
+
+	builtinDraft := *getResult.Entry.Config
+	builtinDraft.Description = "Builtin default edited"
+	builtinSaveAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigSave,
+		Params: mustRawParams(t, configSaveParams{
+			Alias:            defaultAlias,
+			ExpectedRevision: getResult.Entry.Revision,
+			Config:           &builtinDraft,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("builtin config.save rpc error: %+v", rpcErr)
+	}
+	builtinSave := builtinSaveAny.(configSaveResult)
+	if builtinSave.Entry.Description != "Builtin default edited" {
+		t.Fatalf("builtin config.save description = %q, want updated value", builtinSave.Entry.Description)
+	}
+
+	resetAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigReset,
+		Params: mustRawParams(t, configResetParams{Alias: defaultAlias}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.reset rpc error: %+v", rpcErr)
+	}
+	resetResult := resetAny.(configResetResult)
+	if resetResult.Entry.Description != getResult.Entry.Description {
+		t.Fatalf("config.reset description = %q, want %q", resetResult.Entry.Description, getResult.Entry.Description)
+	}
+
+	renameResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigRename,
+		Params: mustRawParams(t, configRenameParams{
+			Alias:    cloneResult.Entry.Alias,
+			NewAlias: "custom-plan-2",
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.rename rpc error: %+v", rpcErr)
+	}
+	renameResult := renameResultAny.(configRenameResult)
+	if renameResult.Entry.Alias != "custom-plan-2" {
+		t.Fatalf("renamed alias = %q, want %q", renameResult.Entry.Alias, "custom-plan-2")
+	}
+
+	setDefaultResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigSetDefault,
+		Params: mustRawParams(t, configSetDefaultParams{Alias: renameResult.Entry.Alias}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.set_default rpc error: %+v", rpcErr)
+	}
+	setDefaultResult := setDefaultResultAny.(configSetDefaultResult)
+	if !setDefaultResult.Entry.IsDefault {
+		t.Fatal("config.set_default is_default = false, want true")
+	}
+
+	runtimeListAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodRuntimeList,
+		Params: mustRawParams(t, map[string]any{}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("runtime.list rpc error: %+v", rpcErr)
+	}
+	runtimeList := runtimeListAny.(runtimeListResult)
+	if got := len(runtimeList.Runtimes); got != 1 {
+		t.Fatalf("runtime.list count = %d, want 1", got)
+	}
+	if runtimeList.Runtimes[0].RuntimeID != appconfig.RuntimeCodex {
+		t.Fatalf("runtime.list[0] = %q, want %q", runtimeList.Runtimes[0].RuntimeID, appconfig.RuntimeCodex)
+	}
+
+	deleteResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigDelete,
+		Params: mustRawParams(t, configDeleteParams{Alias: renameResult.Entry.Alias}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.delete rpc error: %+v", rpcErr)
+	}
+	deleteResult := deleteResultAny.(configDeleteResult)
+	if !deleteResult.Removed {
+		t.Fatal("config.delete removed = false, want true")
+	}
+
+	catalogAfterDeleteAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigCatalog,
+		Params: mustRawParams(t, map[string]any{}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.catalog after delete rpc error: %+v", rpcErr)
+	}
+	catalogAfterDelete := catalogAfterDeleteAny.(configCatalogResult)
+	if catalogAfterDelete.DefaultAlias != taskconfig.DefaultAlias {
+		t.Fatalf("default alias after delete = %q, want %q", catalogAfterDelete.DefaultAlias, taskconfig.DefaultAlias)
+	}
+}
+
+func TestServerConfigPromptFlows(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	server := newTestServerWithOptions(t, stateDir, testServerOptions{
+		loadConfig: func() (appconfig.Config, error) {
+			return appconfig.Config{
+				Runtimes: map[appconfig.RuntimeID]appconfig.RuntimeSettings{
+					appconfig.RuntimeCodex: {},
+				},
+			}, nil
+		},
+	})
+	server.markInitialized()
+
+	catalog, err := taskconfig.LoadCatalog()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	defaultAlias := catalog.DefaultAlias
+
+	getBuiltinAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptGet,
+		Params: mustRawParams(t, configPromptGetParams{
+			Alias:    defaultAlias,
+			NodeName: "draft_plan",
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("builtin config.prompt.get rpc error: %+v", rpcErr)
+	}
+	getBuiltin := getBuiltinAny.(configPromptGetResult)
+	if !getBuiltin.Prompt.Builtin || getBuiltin.Prompt.ReadOnly {
+		t.Fatalf("builtin prompt flags = builtin:%v readonly:%v, want true/false", getBuiltin.Prompt.Builtin, getBuiltin.Prompt.ReadOnly)
+	}
+	if getBuiltin.Prompt.Path == "" || getBuiltin.Prompt.Content == "" || getBuiltin.Prompt.Revision == "" {
+		t.Fatalf("builtin prompt payload incomplete: %#v", getBuiltin.Prompt)
+	}
+
+	builtinUpdatedContent := getBuiltin.Prompt.Content + "\n\nTighten verification."
+	builtinSaveAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptSave,
+		Params: mustRawParams(t, configPromptSaveParams{
+			Alias:            defaultAlias,
+			NodeName:         "draft_plan",
+			ExpectedRevision: getBuiltin.Prompt.Revision,
+			Content:          builtinUpdatedContent,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("builtin config.prompt.save rpc error: %+v", rpcErr)
+	}
+	builtinSave := builtinSaveAny.(configPromptSaveResult)
+	if builtinSave.Prompt.Content != builtinUpdatedContent {
+		t.Fatalf("builtin prompt save content mismatch")
+	}
+
+	_, _, _, rpcErr = server.handleRequest(context.Background(), request{
+		Method: methodConfigReset,
+		Params: mustRawParams(t, configResetParams{Alias: defaultAlias}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("builtin prompt config.reset rpc error: %+v", rpcErr)
+	}
+	resetPromptAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptGet,
+		Params: mustRawParams(t, configPromptGetParams{
+			Alias:    defaultAlias,
+			NodeName: "draft_plan",
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("builtin prompt reload after reset rpc error: %+v", rpcErr)
+	}
+	resetPrompt := resetPromptAny.(configPromptGetResult)
+	if resetPrompt.Prompt.Content != getBuiltin.Prompt.Content {
+		t.Fatalf("builtin prompt after reset = %q, want original content", resetPrompt.Prompt.Content)
+	}
+
+	cloneAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigClone,
+		Params: mustRawParams(t, configCloneParams{
+			SourceAlias: defaultAlias,
+			NewAlias:    "prompt-copy",
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("config.clone rpc error: %+v", rpcErr)
+	}
+	cloneResult := cloneAny.(configCloneResult)
+
+	getCustomAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptGet,
+		Params: mustRawParams(t, configPromptGetParams{
+			Alias:    cloneResult.Entry.Alias,
+			NodeName: "draft_plan",
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("custom config.prompt.get rpc error: %+v", rpcErr)
+	}
+	getCustom := getCustomAny.(configPromptGetResult)
+	if getCustom.Prompt.ReadOnly {
+		t.Fatal("custom prompt readonly = true, want false")
+	}
+
+	updatedContent := getCustom.Prompt.Content + "\n\nAdd stronger implementation guardrails."
+	savePromptAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptSave,
+		Params: mustRawParams(t, configPromptSaveParams{
+			Alias:            cloneResult.Entry.Alias,
+			NodeName:         "draft_plan",
+			ExpectedRevision: getCustom.Prompt.Revision,
+			Content:          updatedContent,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("custom config.prompt.save rpc error: %+v", rpcErr)
+	}
+	savePrompt := savePromptAny.(configPromptSaveResult)
+	if savePrompt.Prompt.Content != updatedContent {
+		t.Fatalf("saved prompt content mismatch")
+	}
+	if savePrompt.Prompt.Revision == "" || savePrompt.Prompt.Revision == getCustom.Prompt.Revision {
+		t.Fatalf("saved prompt revision = %q, want new revision", savePrompt.Prompt.Revision)
+	}
+
+	_, _, _, rpcErr = server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptSave,
+		Params: mustRawParams(t, configPromptSaveParams{
+			Alias:            cloneResult.Entry.Alias,
+			NodeName:         "draft_plan",
+			ExpectedRevision: getCustom.Prompt.Revision,
+			Content:          updatedContent,
+		}),
+	})
+	if rpcErr == nil || rpcErr.Code != errorCodeConfigConflict {
+		t.Fatalf("stale config.prompt.save rpc error = %+v, want config conflict", rpcErr)
+	}
+
+	_, _, _, rpcErr = server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptGet,
+		Params: mustRawParams(t, configPromptGetParams{
+			Alias:    cloneResult.Entry.Alias,
+			NodeName: "approve_plan",
+		}),
+	})
+	if rpcErr == nil || rpcErr.Code != errorCodeInvalidParams {
+		t.Fatalf("human node config.prompt.get rpc error = %+v, want invalid params", rpcErr)
+	}
+
+	_, _, _, rpcErr = server.handleRequest(context.Background(), request{
+		Method: methodConfigPromptGet,
+		Params: mustRawParams(t, configPromptGetParams{
+			Alias:    cloneResult.Entry.Alias,
+			NodeName: "done",
+		}),
+	})
+	if rpcErr == nil || rpcErr.Code != errorCodeInvalidParams {
+		t.Fatalf("terminal node config.prompt.get rpc error = %+v, want invalid params", rpcErr)
+	}
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	return newTestServerAtPath(t, filepath.Join(t.TempDir(), "appserver"))
@@ -357,6 +749,7 @@ func newTestServerAtPath(t *testing.T, stateDir string) *Server {
 
 type testServerOptions struct {
 	runtimeFactory            runtimeServiceFactory
+	loadConfig                func() (appconfig.Config, error)
 	loadCatalog               func() (*taskconfig.Catalog, error)
 	loadRegistry              func() (taskconfig.Registry, error)
 	loadTaskLaunchPreferences func() appconfig.TaskLaunchPreferences
@@ -367,7 +760,7 @@ func newTestServerWithOptions(t *testing.T, stateDir string, opts testServerOpti
 	server, err := New(Options{
 		StateDir:                  stateDir,
 		ServerVersion:             "test",
-		LoadConfig:                func() (appconfig.Config, error) { return appconfig.Config{}, nil },
+		LoadConfig:                coalesceLoadConfig(opts.loadConfig),
 		LoadCatalog:               opts.loadCatalog,
 		LoadRegistry:              opts.loadRegistry,
 		LoadTaskLaunchPreferences: opts.loadTaskLaunchPreferences,
@@ -378,6 +771,15 @@ func newTestServerWithOptions(t *testing.T, stateDir string, opts testServerOpti
 		t.Fatalf("new server: %v", err)
 	}
 	return server
+}
+
+func coalesceLoadConfig(fn func() (appconfig.Config, error)) func() (appconfig.Config, error) {
+	if fn != nil {
+		return fn
+	}
+	return func() (appconfig.Config, error) {
+		return appconfig.Default(), nil
+	}
 }
 
 func writeRequestFrame(t *testing.T, dst *bytes.Buffer, id int, method string, params map[string]any) {

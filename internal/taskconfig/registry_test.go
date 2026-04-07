@@ -61,6 +61,19 @@ func TestLoadCatalogSeedsBuiltinModesAndRegistryMetadata(t *testing.T) {
 	assert.Equal(t, "builtin/yolo", yoloEntry.Path)
 }
 
+func TestTaskConfigPathsHonorInjectedRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(taskConfigRootEnv, root)
+
+	taskConfigDir, err := TaskConfigDir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(root, "taskconfigs"), taskConfigDir)
+
+	registryPath, err := RegistryPath()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(root, "taskconfig.json"), registryPath)
+}
+
 func TestLoadCatalogKeepsBuiltinsFirstAndAllowsBrokenUserBundles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

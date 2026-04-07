@@ -3,6 +3,9 @@ package appserver
 import (
 	"encoding/json"
 	"time"
+
+	appconfig "github.com/LaLanMo/muxagent-cli/internal/config"
+	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 )
 
 const (
@@ -30,6 +33,17 @@ const (
 	methodTaskContinueBlocked = "task.continue_blocked"
 	methodArtifactList        = "artifact.list"
 	methodConfigCatalog       = "config.catalog"
+	methodConfigGet           = "config.get"
+	methodConfigClone         = "config.clone"
+	methodConfigRename        = "config.rename"
+	methodConfigDelete        = "config.delete"
+	methodConfigReset         = "config.reset"
+	methodConfigSetDefault    = "config.set_default"
+	methodConfigValidate      = "config.validate"
+	methodConfigSave          = "config.save"
+	methodConfigPromptGet     = "config.prompt.get"
+	methodConfigPromptSave    = "config.prompt.save"
+	methodRuntimeList         = "runtime.list"
 )
 
 const (
@@ -47,6 +61,7 @@ const (
 	errorCodeInvalidParams        errorCode = -32602
 	errorCodeInternalError        errorCode = -32603
 	errorCodeNotInitialized       errorCode = -32000
+	errorCodeConfigConflict       errorCode = -32009
 	errorCodeWorkspaceMissing     errorCode = -32010
 	errorCodeWorkspaceUnreachable errorCode = -32011
 )
@@ -272,6 +287,103 @@ type configCatalogResult struct {
 	DefaultAlias       string                  `json:"default_alias"`
 	DefaultUseWorktree bool                    `json:"default_use_worktree"`
 	Entries            []configCatalogEntryDTO `json:"entries"`
+}
+
+type configGetParams struct {
+	Alias string `json:"alias"`
+}
+
+type configGetResult struct {
+	Entry configDetailDTO `json:"entry"`
+}
+
+type configCloneParams struct {
+	SourceAlias string `json:"source_alias"`
+	NewAlias    string `json:"new_alias"`
+}
+
+type configCloneResult struct {
+	Entry configDetailDTO `json:"entry"`
+}
+
+type configRenameParams struct {
+	Alias    string `json:"alias"`
+	NewAlias string `json:"new_alias"`
+}
+
+type configRenameResult struct {
+	Entry configDetailDTO `json:"entry"`
+}
+
+type configDeleteParams struct {
+	Alias string `json:"alias"`
+}
+
+type configDeleteResult struct {
+	Removed bool `json:"removed"`
+}
+
+type configResetParams struct {
+	Alias string `json:"alias"`
+}
+
+type configResetResult struct {
+	Entry configDetailDTO `json:"entry"`
+}
+
+type configSetDefaultParams struct {
+	Alias string `json:"alias"`
+}
+
+type configSetDefaultResult struct {
+	Entry configDetailDTO `json:"entry"`
+}
+
+type configValidateParams struct {
+	Config *taskconfig.Config `json:"config"`
+}
+
+type configValidateResult struct {
+	Valid             bool                `json:"valid"`
+	Config            *taskconfig.Config  `json:"config,omitempty"`
+	RuntimeID         appconfig.RuntimeID `json:"runtime_id,omitempty"`
+	RuntimeName       string              `json:"runtime_name,omitempty"`
+	RuntimeConfigured bool                `json:"runtime_configured"`
+	Error             string              `json:"error,omitempty"`
+}
+
+type configSaveParams struct {
+	Alias            string             `json:"alias"`
+	ExpectedRevision string             `json:"expected_revision"`
+	Config           *taskconfig.Config `json:"config"`
+}
+
+type configSaveResult struct {
+	Entry configDetailDTO `json:"entry"`
+}
+
+type configPromptGetParams struct {
+	Alias    string `json:"alias"`
+	NodeName string `json:"node_name"`
+}
+
+type configPromptGetResult struct {
+	Prompt configPromptDTO `json:"prompt"`
+}
+
+type configPromptSaveParams struct {
+	Alias            string `json:"alias"`
+	NodeName         string `json:"node_name"`
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+	Content          string `json:"content"`
+}
+
+type configPromptSaveResult struct {
+	Prompt configPromptDTO `json:"prompt"`
+}
+
+type runtimeListResult struct {
+	Runtimes []runtimeEntryDTO `json:"runtimes"`
 }
 
 type artifactListResult struct {

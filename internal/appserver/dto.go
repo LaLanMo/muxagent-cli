@@ -167,18 +167,60 @@ type runEventDTO struct {
 }
 
 type configCatalogEntryDTO struct {
-	Alias       string              `json:"alias"`
-	BundlePath  string              `json:"bundle_path,omitempty"`
-	ConfigPath  string              `json:"config_path"`
-	IsDefault   bool                `json:"is_default"`
-	RuntimeID   appconfig.RuntimeID `json:"runtime_id,omitempty"`
-	RuntimeName string              `json:"runtime_name,omitempty"`
-	NodeNames   []string            `json:"node_names,omitempty"`
-	LoadError   string              `json:"load_error,omitempty"`
-	BuiltinID   string              `json:"builtin_id,omitempty"`
-	Builtin     bool                `json:"builtin"`
-	Description string              `json:"description,omitempty"`
-	Launchable  bool                `json:"launchable"`
+	Alias             string              `json:"alias"`
+	BundlePath        string              `json:"bundle_path,omitempty"`
+	ConfigPath        string              `json:"config_path"`
+	IsDefault         bool                `json:"is_default"`
+	RuntimeID         appconfig.RuntimeID `json:"runtime_id,omitempty"`
+	RuntimeName       string              `json:"runtime_name,omitempty"`
+	RuntimeExplicit   bool                `json:"runtime_explicit"`
+	RuntimeConfigured bool                `json:"runtime_configured"`
+	NodeNames         []string            `json:"node_names,omitempty"`
+	LoadError         string              `json:"load_error,omitempty"`
+	BuiltinID         string              `json:"builtin_id,omitempty"`
+	Builtin           bool                `json:"builtin"`
+	Description       string              `json:"description,omitempty"`
+	Launchable        bool                `json:"launchable"`
+}
+
+type configDetailDTO struct {
+	Alias             string              `json:"alias"`
+	BundlePath        string              `json:"bundle_path,omitempty"`
+	ConfigPath        string              `json:"config_path"`
+	IsDefault         bool                `json:"is_default"`
+	BuiltinID         string              `json:"builtin_id,omitempty"`
+	Builtin           bool                `json:"builtin"`
+	Revision          string              `json:"revision,omitempty"`
+	RuntimeID         appconfig.RuntimeID `json:"runtime_id,omitempty"`
+	RuntimeName       string              `json:"runtime_name,omitempty"`
+	RuntimeExplicit   bool                `json:"runtime_explicit"`
+	RuntimeConfigured bool                `json:"runtime_configured"`
+	Description       string              `json:"description,omitempty"`
+	NodeNames         []string            `json:"node_names,omitempty"`
+	LoadError         string              `json:"load_error,omitempty"`
+	Launchable        bool                `json:"launchable"`
+	Config            *taskconfig.Config  `json:"config,omitempty"`
+}
+
+type runtimeEntryDTO struct {
+	RuntimeID   appconfig.RuntimeID `json:"runtime_id"`
+	RuntimeName string              `json:"runtime_name"`
+	Command     string              `json:"command,omitempty"`
+	Args        []string            `json:"args,omitempty"`
+	CWD         string              `json:"cwd,omitempty"`
+	EnvKeys     []string            `json:"env_keys,omitempty"`
+}
+
+type configPromptDTO struct {
+	Alias        string `json:"alias"`
+	NodeName     string `json:"node_name"`
+	NodeType     string `json:"node_type"`
+	Path         string `json:"path"`
+	ResolvedPath string `json:"resolved_path"`
+	Content      string `json:"content"`
+	Revision     string `json:"revision,omitempty"`
+	ReadOnly     bool   `json:"readonly"`
+	Builtin      bool   `json:"builtin"`
 }
 
 type artifactRefDTO struct {
@@ -398,7 +440,7 @@ func streamEventToDTO(event taskexecutor.StreamEvent) streamEventDTO {
 	return dto
 }
 
-func buildConfigCatalogResult(catalog *taskconfig.Catalog, reg taskconfig.Registry, defaultUseWorktree bool) configCatalogResult {
+func buildConfigCatalogResult(catalog *taskconfig.Catalog, reg taskconfig.Registry, runtimeCfg appconfig.Config, defaultUseWorktree bool) configCatalogResult {
 	if catalog == nil {
 		return configCatalogResult{DefaultUseWorktree: defaultUseWorktree}
 	}
@@ -417,6 +459,14 @@ func buildConfigCatalogResult(catalog *taskconfig.Catalog, reg taskconfig.Regist
 				break
 			}
 		}
+		if dto.BundlePath == "" {
+			if bundlePath, err := taskconfig.BundlePathForConfigPath(entry.Path); err == nil {
+				dto.BundlePath = bundlePath
+			}
+		}
+		if explicit, err := configRuntimeExplicit(entry.Path); err == nil {
+			dto.RuntimeExplicit = explicit
+		}
 		cfg, err := entry.LoadConfig()
 		if err != nil {
 			dto.LoadError = err.Error()
@@ -424,11 +474,12 @@ func buildConfigCatalogResult(catalog *taskconfig.Catalog, reg taskconfig.Regist
 		} else {
 			dto.RuntimeID = cfg.Runtime
 			dto.RuntimeName = runtimeDisplayName(cfg.Runtime)
+			dto.RuntimeConfigured = runtimeConfigured(runtimeCfg, cfg.Runtime)
 			dto.Description = cfg.Description
 			for _, node := range cfg.Topology.Nodes {
 				dto.NodeNames = append(dto.NodeNames, node.Name)
 			}
-			dto.Launchable = true
+			dto.Launchable = dto.RuntimeConfigured
 		}
 		entries = append(entries, dto)
 	}

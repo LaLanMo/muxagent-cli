@@ -15,6 +15,7 @@ import (
 const builtinDefaultAlias = "default"
 const managedConfigFile = "config.yaml"
 const managedDefaultBundleDir = builtinDefaultAlias
+const taskConfigRootEnv = "MUXAGENT_TASKCONFIG_ROOT"
 
 const DefaultAlias = builtinDefaultAlias
 
@@ -43,19 +44,37 @@ type CatalogEntry struct {
 }
 
 func TaskConfigDir() (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := taskConfigRootDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".muxagent", "taskconfigs"), nil
+	return filepath.Join(root, "taskconfigs"), nil
 }
 
 func RegistryPath() (string, error) {
+	root, err := taskConfigRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "taskconfig.json"), nil
+}
+
+func taskConfigRootDir() (string, error) {
+	if override := strings.TrimSpace(os.Getenv(taskConfigRootEnv)); override != "" {
+		if filepath.IsAbs(override) {
+			return filepath.Clean(override), nil
+		}
+		abs, err := filepath.Abs(override)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Clean(abs), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".muxagent", "taskconfig.json"), nil
+	return filepath.Join(home, ".muxagent"), nil
 }
 
 func DefaultConfigPath() (string, error) {
@@ -455,7 +474,11 @@ func ensureBuiltinDefaults() (Registry, error) {
 }
 
 func syncBuiltinBundle(taskConfigDir, builtinID string) error {
-	bundleDir := filepath.Join(taskConfigDir, filepath.FromSlash(builtinBundlePath(builtinID)))
+	return writeBuiltinBundle(taskConfigDir, builtinBundlePath(builtinID), builtinID, false)
+}
+
+func writeBuiltinBundle(taskConfigDir, bundlePath, builtinID string, overwrite bool) error {
+	bundleDir := filepath.Join(taskConfigDir, filepath.FromSlash(bundlePath))
 	assetFiles, err := builtinAssetFiles(builtinID)
 	if err != nil {
 		return err
@@ -468,6 +491,16 @@ func syncBuiltinBundle(taskConfigDir, builtinID string) error {
 		destPath := filepath.Join(bundleDir, filepath.FromSlash(destRelPath))
 		if destRelPath == managedConfigFile {
 			assetPath = builtinConfigAsset(builtinID)
+		}
+		if overwrite {
+			data, err := defaultsFS.ReadFile(assetPath)
+			if err != nil {
+				return err
+			}
+			if err := writeManagedAssetFile(destPath, data); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := ensureManagedAssetFile(destPath, assetPath); err != nil {
 			return err
