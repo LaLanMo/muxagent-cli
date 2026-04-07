@@ -46,7 +46,7 @@ func (m *taskReadModel) ListTaskViews(ctx context.Context) ([]taskdomain.TaskVie
 	for _, task := range tasks {
 		view, _, err := m.LoadTaskView(ctx, task.ID)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		views = append(views, view)
 	}
