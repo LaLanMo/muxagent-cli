@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
+	"github.com/LaLanMo/muxagent-cli/internal/taskhistory"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 )
@@ -101,6 +101,42 @@ func (m *taskReadModel) BuildInputRequest(ctx context.Context, taskID, nodeRunID
 		return nil, err
 	}
 	return m.buildInputRequest(ctx, task, cfg, runs, run)
+}
+
+func (m *taskReadModel) LoadRunHistory(ctx context.Context, taskID, nodeRunID string) (taskdomain.NodeRun, taskhistory.ReadResult, error) {
+	task, err := m.store.GetTask(ctx, taskID)
+	if err != nil {
+		return taskdomain.NodeRun{}, taskhistory.ReadResult{}, err
+	}
+	run, err := m.store.GetNodeRun(ctx, nodeRunID)
+	if err != nil {
+		return taskdomain.NodeRun{}, taskhistory.ReadResult{}, err
+	}
+	if run.TaskID != taskID {
+		return taskdomain.NodeRun{}, taskhistory.ReadResult{}, fmt.Errorf("%w: node run %q does not belong to task %q", taskruntime.ErrNodeRunTaskMismatch, nodeRunID, taskID)
+	}
+	history, err := taskhistory.Load(task, nil, run)
+	if err != nil {
+		if taskhistory.IsMissing(err) || errors.Is(err, os.ErrNotExist) {
+			return run, taskhistory.ReadResult{}, nil
+		}
+		return taskdomain.NodeRun{}, taskhistory.ReadResult{}, err
+	}
+	if history.Provenance != "none" || strings.TrimSpace(run.SessionID) == "" {
+		return run, history, nil
+	}
+	cfg, err := taskconfig.Load(taskstore.ConfigPath(task.WorkDir, task.ID))
+	if err != nil {
+		return run, history, nil
+	}
+	history, err = taskhistory.Load(task, cfg, run)
+	if err != nil {
+		if taskhistory.IsMissing(err) || errors.Is(err, os.ErrNotExist) {
+			return run, taskhistory.ReadResult{}, nil
+		}
+		return taskdomain.NodeRun{}, taskhistory.ReadResult{}, err
+	}
+	return run, history, nil
 }
 
 func (m *taskReadModel) loadTaskLineage(ctx context.Context, view *taskdomain.TaskView) error {
@@ -217,18 +253,12 @@ func resolveArtifactPaths(task taskdomain.Task, runs []taskdomain.NodeRun) []str
 		if run.Status != taskdomain.NodeRunDone {
 			continue
 		}
-		artifactDir := artifactBaseDirForRun(task, runs, run)
-		if artifactDir == "" {
-			continue
-		}
 		for _, rawPath := range taskdomain.ArtifactPaths(run.Result) {
 			path := strings.TrimSpace(rawPath)
 			if path == "" {
 				continue
 			}
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(artifactDir, path)
-			}
+			path = taskstore.ResolveRunPath(task.WorkDir, task.ID, run.ID, path)
 			resolved = append(resolved, path)
 		}
 	}
@@ -252,20 +282,6 @@ func mergeArtifactPaths(current, inherited []string) []string {
 		}
 	}
 	return merged
-}
-
-func artifactBaseDirForRun(task taskdomain.Task, runs []taskdomain.NodeRun, current taskdomain.NodeRun) string {
-	index := -1
-	for i, run := range runs {
-		if run.ID == current.ID {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
-		return ""
-	}
-	return taskstore.ArtifactRunDir(task.WorkDir, task.ID, index+1, current.NodeName)
 }
 
 func latestAwaitingRunID(view taskdomain.TaskView) string {

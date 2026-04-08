@@ -35,12 +35,12 @@ func buildTaskArtifactRefs(view taskdomain.TaskView, input *taskruntime.InputReq
 	runLabels := map[string]string{}
 	workspaceRoot := taskstore.NormalizeWorkDir(view.Task.WorkDir)
 
-	for i, run := range view.NodeRuns {
+	for _, run := range view.NodeRuns {
 		runOrdinals[run.NodeName]++
 		sourceLabel := fmt.Sprintf("%s (#%d)", run.NodeName, runOrdinals[run.NodeName])
 		runLabels[run.ID] = sourceLabel
 		for _, rawPath := range run.ArtifactPaths {
-			ref, ok := artifactRefForRun(view.Task, i+1, run, rawPath, sourceLabel)
+			ref, ok := artifactRefForRun(view.Task, run, rawPath, sourceLabel)
 			if !ok {
 				continue
 			}
@@ -112,7 +112,7 @@ func buildTaskArtifactRefs(view taskdomain.TaskView, input *taskruntime.InputReq
 	return refs
 }
 
-func artifactRefForRun(task taskdomain.Task, sequence int, run taskdomain.NodeRunView, rawPath, sourceLabel string) (artifactRefDTO, bool) {
+func artifactRefForRun(task taskdomain.Task, run taskdomain.NodeRunView, rawPath, sourceLabel string) (artifactRefDTO, bool) {
 	rawPath = strings.TrimSpace(rawPath)
 	if rawPath == "" {
 		return artifactRefDTO{}, false
@@ -120,7 +120,7 @@ func artifactRefForRun(task taskdomain.Task, sequence int, run taskdomain.NodeRu
 
 	resolvedPath := rawPath
 	if !filepath.IsAbs(resolvedPath) {
-		resolvedPath = filepath.Join(taskstore.ArtifactRunDir(task.WorkDir, task.ID, sequence, run.NodeName), rawPath)
+		resolvedPath = taskstore.ResolveRunPath(task.WorkDir, task.ID, run.ID, rawPath)
 	}
 	resolvedPath = filepath.Clean(resolvedPath)
 	if !artifactPathWithinWorkspace(resolvedPath, task.WorkDir) {
@@ -183,13 +183,17 @@ func artifactDisplayPath(path, workDir string) string {
 	}
 	displayPath = filepath.ToSlash(displayPath)
 	parts := strings.Split(displayPath, "/")
-	if len(parts) >= 6 && parts[0] == ".muxagent" && parts[1] == "tasks" && parts[3] == "artifacts" {
+	if len(parts) >= 6 && parts[0] == ".muxagent" && parts[1] == "tasks" && parts[3] == "runs" {
 		taskID := parts[2]
+		runID := parts[4]
 		if len(taskID) > 8 {
 			taskID = taskID[:8]
 		}
-		prefix := []string{".muxagent", "tasks", taskID, "artifacts"}
-		return strings.Join(append(prefix, parts[4:]...), "/")
+		if len(runID) > 8 {
+			runID = runID[:8]
+		}
+		prefix := []string{".muxagent", "tasks", taskID, "runs", runID}
+		return strings.Join(append(prefix, parts[5:]...), "/")
 	}
 	return displayPath
 }

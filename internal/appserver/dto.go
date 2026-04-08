@@ -8,6 +8,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
+	"github.com/LaLanMo/muxagent-cli/internal/taskhistory"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 )
 
@@ -86,68 +87,63 @@ type inputRequestDTO struct {
 	ArtifactPaths []string                           `json:"artifact_paths,omitempty"`
 }
 
-type messagePartDTO struct {
-	MessageID string `json:"message_id"`
-	PartID    string `json:"part_id"`
-	Role      string `json:"role"`
-	Type      string `json:"type"`
-	Text      string `json:"text"`
-}
-
-type toolDiffDTO struct {
+type sessionHistoryToolDiffDTO struct {
 	Path    string  `json:"path"`
 	OldText *string `json:"old_text,omitempty"`
 	NewText string  `json:"new_text"`
 }
 
-type toolCallDTO struct {
-	CallID        string        `json:"call_id"`
-	ParentCallID  string        `json:"parent_call_id,omitempty"`
-	Name          string        `json:"name"`
-	Kind          string        `json:"kind"`
-	Title         string        `json:"title,omitempty"`
-	Status        string        `json:"status"`
-	InputSummary  string        `json:"input_summary,omitempty"`
-	OutputText    string        `json:"output_text,omitempty"`
-	ErrorText     string        `json:"error_text,omitempty"`
-	Paths         []string      `json:"paths,omitempty"`
-	Diffs         []toolDiffDTO `json:"diffs,omitempty"`
-	RawInputJSON  string        `json:"raw_input_json,omitempty"`
-	RawOutputJSON string        `json:"raw_output_json,omitempty"`
-}
-
-type planStepDTO struct {
+type sessionHistoryPlanStepDTO struct {
 	Text   string `json:"text"`
 	Status string `json:"status"`
 }
 
-type planSnapshotDTO struct {
-	PlanID string        `json:"plan_id"`
-	Steps  []planStepDTO `json:"steps,omitempty"`
-}
+type sessionHistoryEventDTO struct {
+	EventID          string     `json:"event_id,omitempty"`
+	Seq              uint64     `json:"seq,omitempty"`
+	EmittedAt        *time.Time `json:"emitted_at,omitempty"`
+	RecordedAt       *time.Time `json:"recorded_at,omitempty"`
+	SessionID        string     `json:"session_id,omitempty"`
+	ProviderRecordID string     `json:"provider_record_id,omitempty"`
+	ProviderSubindex int        `json:"provider_subindex,omitempty"`
+	Provenance       string     `json:"provenance,omitempty"`
+	Kind             string     `json:"kind"`
+	Raw              string     `json:"raw,omitempty"`
 
-type usageSnapshotDTO struct {
-	InputTokens       int64 `json:"input_tokens"`
-	CachedInputTokens int64 `json:"cached_input_tokens"`
-	OutputTokens      int64 `json:"output_tokens"`
-	TotalTokens       int64 `json:"total_tokens"`
-	DurationMS        int64 `json:"duration_ms"`
-}
+	MessageID string `json:"message_id,omitempty"`
+	PartID    string `json:"part_id,omitempty"`
+	Role      string `json:"role,omitempty"`
+	PartType  string `json:"part_type,omitempty"`
+	Text      string `json:"text,omitempty"`
 
-type streamEventDTO struct {
-	Kind      string            `json:"kind"`
-	SessionID string            `json:"session_id,omitempty"`
-	Raw       string            `json:"raw,omitempty"`
-	Message   *messagePartDTO   `json:"message,omitempty"`
-	Tool      *toolCallDTO      `json:"tool,omitempty"`
-	Plan      *planSnapshotDTO  `json:"plan,omitempty"`
-	Usage     *usageSnapshotDTO `json:"usage,omitempty"`
+	CallID        string                      `json:"call_id,omitempty"`
+	ParentCallID  string                      `json:"parent_call_id,omitempty"`
+	Name          string                      `json:"name,omitempty"`
+	ToolKind      string                      `json:"tool_kind,omitempty"`
+	Title         string                      `json:"title,omitempty"`
+	Status        string                      `json:"status,omitempty"`
+	InputSummary  string                      `json:"input_summary,omitempty"`
+	OutputText    string                      `json:"output_text,omitempty"`
+	ErrorText     string                      `json:"error_text,omitempty"`
+	Paths         []string                    `json:"paths,omitempty"`
+	Diffs         []sessionHistoryToolDiffDTO `json:"diffs,omitempty"`
+	RawInputJSON  string                      `json:"raw_input_json,omitempty"`
+	RawOutputJSON string                      `json:"raw_output_json,omitempty"`
+
+	PlanID string                      `json:"plan_id,omitempty"`
+	Steps  []sessionHistoryPlanStepDTO `json:"steps,omitempty"`
+
+	InputTokens       int64 `json:"input_tokens,omitempty"`
+	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
+	OutputTokens      int64 `json:"output_tokens,omitempty"`
+	TotalTokens       int64 `json:"total_tokens,omitempty"`
+	DurationMS        int64 `json:"duration_ms,omitempty"`
 }
 
 type progressInfoDTO struct {
-	Message   string           `json:"message,omitempty"`
-	SessionID string           `json:"session_id,omitempty"`
-	Events    []streamEventDTO `json:"events,omitempty"`
+	Message   string                   `json:"message,omitempty"`
+	SessionID string                   `json:"session_id,omitempty"`
+	Events    []sessionHistoryEventDTO `json:"events,omitempty"`
 }
 
 type runErrorDTO struct {
@@ -367,7 +363,7 @@ func runEventToDTO(event taskruntime.RunEvent) runEventDTO {
 }
 
 func progressInfoToDTO(progress taskruntime.ProgressInfo) progressInfoDTO {
-	events := make([]streamEventDTO, 0, len(progress.Events))
+	events := make([]sessionHistoryEventDTO, 0, len(progress.Events))
 	for _, event := range progress.Events {
 		events = append(events, streamEventToDTO(event))
 	}
@@ -378,64 +374,135 @@ func progressInfoToDTO(progress taskruntime.ProgressInfo) progressInfoDTO {
 	}
 }
 
-func streamEventToDTO(event taskexecutor.StreamEvent) streamEventDTO {
-	dto := streamEventDTO{
-		Kind:      string(event.Kind),
-		SessionID: event.SessionID,
-		Raw:       event.Raw,
+func streamEventToDTO(event taskexecutor.StreamEvent) sessionHistoryEventDTO {
+	dto := sessionHistoryEventDTO{
+		EventID:          event.EventID,
+		Seq:              event.Seq,
+		SessionID:        event.SessionID,
+		ProviderRecordID: event.ProviderRecordID,
+		ProviderSubindex: event.ProviderSubindex,
+		Provenance:       string(event.Provenance),
+		Kind:             string(event.Kind),
+		Raw:              event.Raw,
+	}
+	if !event.EmittedAt.IsZero() {
+		emittedAt := event.EmittedAt.UTC()
+		dto.EmittedAt = &emittedAt
 	}
 	if event.Message != nil {
-		dto.Message = &messagePartDTO{
-			MessageID: event.Message.MessageID,
-			PartID:    event.Message.PartID,
-			Role:      string(event.Message.Role),
-			Type:      string(event.Message.Type),
-			Text:      event.Message.Text,
-		}
+		dto.MessageID = event.Message.MessageID
+		dto.PartID = event.Message.PartID
+		dto.Role = string(event.Message.Role)
+		dto.PartType = string(event.Message.Type)
+		dto.Text = event.Message.Text
 	}
 	if event.Tool != nil {
-		diffs := make([]toolDiffDTO, 0, len(event.Tool.Diffs))
+		diffs := make([]sessionHistoryToolDiffDTO, 0, len(event.Tool.Diffs))
 		for _, diff := range event.Tool.Diffs {
-			diffs = append(diffs, toolDiffDTO{
+			diffs = append(diffs, sessionHistoryToolDiffDTO{
 				Path:    diff.Path,
 				OldText: diff.OldText,
 				NewText: diff.NewText,
 			})
 		}
-		dto.Tool = &toolCallDTO{
-			CallID:        event.Tool.CallID,
-			ParentCallID:  event.Tool.ParentCallID,
-			Name:          event.Tool.Name,
-			Kind:          string(event.Tool.Kind),
-			Title:         event.Tool.Title,
-			Status:        string(event.Tool.Status),
-			InputSummary:  event.Tool.InputSummary,
-			OutputText:    event.Tool.OutputText,
-			ErrorText:     event.Tool.ErrorText,
-			Paths:         append([]string(nil), event.Tool.Paths...),
-			Diffs:         diffs,
-			RawInputJSON:  event.Tool.RawInputJSON,
-			RawOutputJSON: event.Tool.RawOutputJSON,
-		}
+		dto.CallID = event.Tool.CallID
+		dto.ParentCallID = event.Tool.ParentCallID
+		dto.Name = event.Tool.Name
+		dto.ToolKind = string(event.Tool.Kind)
+		dto.Title = event.Tool.Title
+		dto.Status = string(event.Tool.Status)
+		dto.InputSummary = event.Tool.InputSummary
+		dto.OutputText = event.Tool.OutputText
+		dto.ErrorText = event.Tool.ErrorText
+		dto.Paths = append([]string(nil), event.Tool.Paths...)
+		dto.Diffs = diffs
+		dto.RawInputJSON = event.Tool.RawInputJSON
+		dto.RawOutputJSON = event.Tool.RawOutputJSON
 	}
 	if event.Plan != nil {
-		steps := make([]planStepDTO, 0, len(event.Plan.Steps))
+		steps := make([]sessionHistoryPlanStepDTO, 0, len(event.Plan.Steps))
 		for _, step := range event.Plan.Steps {
-			steps = append(steps, planStepDTO{Text: step.Text, Status: step.Status})
+			steps = append(steps, sessionHistoryPlanStepDTO{Text: step.Text, Status: step.Status})
 		}
-		dto.Plan = &planSnapshotDTO{
-			PlanID: event.Plan.PlanID,
-			Steps:  steps,
-		}
+		dto.PlanID = event.Plan.PlanID
+		dto.Steps = steps
 	}
 	if event.Usage != nil {
-		dto.Usage = &usageSnapshotDTO{
-			InputTokens:       event.Usage.InputTokens,
-			CachedInputTokens: event.Usage.CachedInputTokens,
-			OutputTokens:      event.Usage.OutputTokens,
-			TotalTokens:       event.Usage.TotalTokens,
-			DurationMS:        event.Usage.DurationMS,
+		dto.InputTokens = event.Usage.InputTokens
+		dto.CachedInputTokens = event.Usage.CachedInputTokens
+		dto.OutputTokens = event.Usage.OutputTokens
+		dto.TotalTokens = event.Usage.TotalTokens
+		dto.DurationMS = event.Usage.DurationMS
+	}
+	return dto
+}
+
+func historyStreamEventToDTO(event taskhistory.EventRecord) sessionHistoryEventDTO {
+	dto := sessionHistoryEventDTO{
+		EventID:          event.EventID,
+		Seq:              event.Seq,
+		SessionID:        event.SessionID,
+		ProviderRecordID: event.ProviderRecordID,
+		ProviderSubindex: event.ProviderSubindex,
+		Provenance:       event.Provenance,
+		Kind:             event.Kind,
+		Raw:              event.Raw,
+	}
+	if !event.EmittedAt.IsZero() {
+		emittedAt := event.EmittedAt.UTC()
+		dto.EmittedAt = &emittedAt
+	}
+	if !event.RecordedAt.IsZero() {
+		recordedAt := event.RecordedAt.UTC()
+		dto.RecordedAt = &recordedAt
+	}
+	if event.Message != nil {
+		dto.MessageID = event.Message.MessageID
+		dto.PartID = event.Message.PartID
+		dto.Role = event.Message.Role
+		dto.PartType = event.Message.Type
+		dto.Text = event.Message.Text
+	}
+	if event.Tool != nil {
+		diffs := make([]sessionHistoryToolDiffDTO, 0, len(event.Tool.Diffs))
+		for _, diff := range event.Tool.Diffs {
+			diffs = append(diffs, sessionHistoryToolDiffDTO{
+				Path:    diff.Path,
+				OldText: diff.OldText,
+				NewText: diff.NewText,
+			})
 		}
+		dto.CallID = event.Tool.CallID
+		dto.ParentCallID = event.Tool.ParentCallID
+		dto.Name = event.Tool.Name
+		dto.ToolKind = event.Tool.Kind
+		dto.Title = event.Tool.Title
+		dto.Status = event.Tool.Status
+		dto.InputSummary = event.Tool.InputSummary
+		dto.OutputText = event.Tool.OutputText
+		dto.ErrorText = event.Tool.ErrorText
+		dto.Paths = append([]string(nil), event.Tool.Paths...)
+		dto.Diffs = diffs
+		dto.RawInputJSON = event.Tool.RawInputJSON
+		dto.RawOutputJSON = event.Tool.RawOutputJSON
+	}
+	if event.Plan != nil {
+		steps := make([]sessionHistoryPlanStepDTO, 0, len(event.Plan.Steps))
+		for _, step := range event.Plan.Steps {
+			steps = append(steps, sessionHistoryPlanStepDTO{
+				Text:   step.Text,
+				Status: step.Status,
+			})
+		}
+		dto.PlanID = event.Plan.PlanID
+		dto.Steps = steps
+	}
+	if event.Usage != nil {
+		dto.InputTokens = event.Usage.InputTokens
+		dto.CachedInputTokens = event.Usage.CachedInputTokens
+		dto.OutputTokens = event.Usage.OutputTokens
+		dto.TotalTokens = event.Usage.TotalTokens
+		dto.DurationMS = event.Usage.DurationMS
 	}
 	return dto
 }

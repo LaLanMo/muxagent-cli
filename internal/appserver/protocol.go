@@ -25,6 +25,7 @@ const (
 	methodWorkspaceGet        = "workspace.get"
 	methodTaskList            = "task.list"
 	methodTaskGet             = "task.get"
+	methodTaskRunHistory      = "task.run_history"
 	methodTaskInputRequest    = "task.input_request"
 	methodTaskStart           = "task.start"
 	methodTaskStartFollowUp   = "task.start_follow_up"
@@ -206,6 +207,12 @@ type taskInputRequestParams struct {
 	NodeRunID   string `json:"node_run_id"`
 }
 
+type taskRunHistoryParams struct {
+	WorkspaceID string `json:"workspace_id"`
+	TaskID      string `json:"task_id"`
+	NodeRunID   string `json:"node_run_id"`
+}
+
 type taskStartParams struct {
 	WorkspaceID     string `json:"workspace_id"`
 	ClientCommandID string `json:"client_command_id,omitempty"`
@@ -280,15 +287,25 @@ type taskListResult struct {
 }
 
 type taskGetResult struct {
-	Task            taskViewDTO      `json:"task"`
-	Config          *configViewDTO   `json:"config,omitempty"`
-	InputRequest    *inputRequestDTO `json:"input_request,omitempty"`
-	LiveOutput      []string         `json:"live_output,omitempty"`
-	LiveOutputRunID string           `json:"live_output_run_id,omitempty"`
+	Task            taskViewDTO              `json:"task"`
+	Config          *configViewDTO           `json:"config,omitempty"`
+	InputRequest    *inputRequestDTO         `json:"input_request,omitempty"`
+	LiveEvents      []sessionHistoryEventDTO `json:"live_events,omitempty"`
+	LiveOutputRunID string                   `json:"live_output_run_id,omitempty"`
 }
 
 type taskInputRequestResult struct {
 	InputRequest *inputRequestDTO `json:"input_request,omitempty"`
+}
+
+type taskRunHistoryResult struct {
+	TaskID       string                   `json:"task_id"`
+	NodeRunID    string                   `json:"node_run_id"`
+	SessionID    string                   `json:"session_id,omitempty"`
+	Provenance   string                   `json:"provenance"`
+	Completeness string                   `json:"completeness"`
+	LastSeq      uint64                   `json:"last_seq,omitempty"`
+	Events       []sessionHistoryEventDTO `json:"events,omitempty"`
 }
 
 type configCatalogResult struct {

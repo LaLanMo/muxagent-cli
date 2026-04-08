@@ -736,8 +736,27 @@ func SchemaPath(workDir, taskID, nodeName string) string {
 	return filepath.Join(TaskDir(workDir, taskID), "schemas", nodeName+".json")
 }
 
-func ArtifactRunDir(workDir, taskID string, sequence int, nodeName string) string {
-	return filepath.Join(TaskDir(workDir, taskID), "artifacts", fmt.Sprintf("%02d-%s", sequence, nodeName))
+func RunDir(workDir, taskID, nodeRunID string) string {
+	return filepath.Join(TaskDir(workDir, taskID), "runs", nodeRunID)
+}
+
+func RunHistoryPath(workDir, taskID, nodeRunID string) string {
+	return filepath.Join(RunDir(workDir, taskID, nodeRunID), "history.jsonl")
+}
+
+func RunManifestPath(workDir, taskID, nodeRunID string) string {
+	return filepath.Join(RunDir(workDir, taskID, nodeRunID), "manifest.json")
+}
+
+func ResolveRunPath(workDir, taskID, nodeRunID, rawPath string) string {
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath == "" {
+		return ""
+	}
+	if filepath.IsAbs(rawPath) {
+		return filepath.Clean(rawPath)
+	}
+	return filepath.Clean(filepath.Join(RunDir(workDir, taskID, nodeRunID), rawPath))
 }
 
 func NormalizeWorkDir(workDir string) string {

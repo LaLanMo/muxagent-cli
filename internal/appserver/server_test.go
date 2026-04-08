@@ -16,6 +16,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
+	"github.com/LaLanMo/muxagent-cli/internal/taskhistory"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 )
@@ -240,8 +241,91 @@ func TestServerTaskReadFlows(t *testing.T) {
 	if got := getResult.LiveOutputRunID; got != awaitingRunID {
 		t.Fatalf("task.get live_output_run_id = %q, want %q", got, awaitingRunID)
 	}
-	if got := strings.Join(getResult.LiveOutput, "\n"); !strings.Contains(got, "read: /tmp/plan.md") {
-		t.Fatalf("task.get live_output = %#v, want tool summary", getResult.LiveOutput)
+	if got := len(getResult.LiveEvents); got != 1 {
+		t.Fatalf("task.get live_events length = %d, want 1", got)
+	}
+	if got := getResult.LiveEvents[0].Kind; got != string(taskexecutor.StreamEventKindTool) {
+		t.Fatalf("task.get live_events[0].kind = %q, want %q", got, taskexecutor.StreamEventKindTool)
+	}
+	if got := getResult.LiveEvents[0].InputSummary; got != "/tmp/plan.md" {
+		t.Fatalf("task.get live_events[0].input_summary = %q, want %q", got, "/tmp/plan.md")
+	}
+
+	err = taskhistory.Append(workspacePath, taskID, awaitingRunID, taskexecutor.Progress{
+		SessionID: "session-123",
+		Events: []taskexecutor.StreamEvent{
+			{
+				EventID:    "evt-read",
+				Seq:        1,
+				EmittedAt:  time.Date(2026, 4, 3, 12, 1, 0, 0, time.UTC),
+				SessionID:  "session-123",
+				Kind:       taskexecutor.StreamEventKindTool,
+				Provenance: taskexecutor.StreamEventProvenanceExecutorPersisted,
+				Tool: &taskexecutor.ToolCall{
+					Name:         "Read",
+					Kind:         taskexecutor.ToolKindRead,
+					Status:       taskexecutor.ToolStatusCompleted,
+					InputSummary: "plan.md",
+				},
+			},
+		},
+	}, time.Date(2026, 4, 3, 12, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("append history: %v", err)
+	}
+	err = taskhistory.Append(workspacePath, taskID, awaitingRunID, taskexecutor.Progress{
+		SessionID: "session-123",
+		Events: []taskexecutor.StreamEvent{
+			{
+				EventID:    "evt-approval",
+				Seq:        2,
+				EmittedAt:  time.Date(2026, 4, 3, 12, 1, 15, 0, time.UTC),
+				SessionID:  "session-123",
+				Kind:       taskexecutor.StreamEventKindMessage,
+				Provenance: taskexecutor.StreamEventProvenanceExecutorPersisted,
+				Message: &taskexecutor.MessagePart{
+					MessageID: "msg-approval",
+					PartID:    "part-approval",
+					Role:      taskexecutor.MessageRoleAssistant,
+					Type:      taskexecutor.MessagePartTypeText,
+					Text:      "approval pending",
+				},
+			},
+		},
+	}, time.Date(2026, 4, 3, 12, 1, 15, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("append message history: %v", err)
+	}
+
+	historyResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskRunHistory,
+		Params: mustRawParams(t, taskRunHistoryParams{
+			WorkspaceID: workspace.WorkspaceID,
+			TaskID:      taskID,
+			NodeRunID:   awaitingRunID,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.run_history rpc error: %+v", rpcErr)
+	}
+	historyResult := historyResultAny.(taskRunHistoryResult)
+	if got := historyResult.Provenance; got != "executor_persisted" {
+		t.Fatalf("task.run_history provenance = %q, want executor_persisted", got)
+	}
+	if got := historyResult.Completeness; got != "complete" {
+		t.Fatalf("task.run_history completeness = %q, want complete", got)
+	}
+	if got := historyResult.SessionID; got != "session-123" {
+		t.Fatalf("task.run_history session_id = %q, want session-123", got)
+	}
+	if got := len(historyResult.Events); got != 2 {
+		t.Fatalf("task.run_history event count = %d, want 2", got)
+	}
+	if got := historyResult.Events[0].Name; got != "Read" {
+		t.Fatalf("task.run_history first tool name = %q, want Read", got)
+	}
+	if got := historyResult.Events[1].Text; got != "approval pending" {
+		t.Fatalf("task.run_history second message = %q, want approval pending", got)
 	}
 
 	inputResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
@@ -288,6 +372,307 @@ func TestServerTaskReadFlows(t *testing.T) {
 	}
 	if !catalogResult.DefaultUseWorktree {
 		t.Fatal("default_use_worktree = false, want true")
+	}
+}
+
+func TestServerTaskRunHistoryFallsBackToProviderTranscript(t *testing.T) {
+	workspacePath := t.TempDir()
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+
+	server := newTestServer(t)
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
+	}
+	server.markInitialized()
+
+	store, err := taskstore.Open(workspacePath)
+	if err != nil {
+		t.Fatalf("open task store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	taskID := "task-provider-history"
+	configPath, err := taskconfig.DefaultConfigPath()
+	if err != nil {
+		t.Fatalf("default config path: %v", err)
+	}
+	materialized, err := taskconfig.Materialize(workspacePath, taskID, configPath)
+	if err != nil {
+		t.Fatalf("materialize config: %v", err)
+	}
+	configBytes, err := os.ReadFile(materialized.ConfigPath)
+	if err != nil {
+		t.Fatalf("read materialized config: %v", err)
+	}
+	configText := strings.Replace(string(configBytes), "runtime: claude-code", "runtime: codex", 1)
+	configText = strings.Replace(configText, "runtime: default", "runtime: codex", 1)
+	if err := os.WriteFile(materialized.ConfigPath, []byte(configText), 0o644); err != nil {
+		t.Fatalf("force codex runtime: %v", err)
+	}
+
+	now := time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
+	task := taskdomain.Task{
+		ID:           taskID,
+		Description:  "provider history",
+		ConfigAlias:  "default",
+		ConfigPath:   materialized.ConfigPath,
+		WorkDir:      taskstore.NormalizeWorkDir(workspacePath),
+		ExecutionDir: taskstore.NormalizeWorkDir(workspacePath),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := store.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	run := taskdomain.NodeRun{
+		ID:        "run-provider-history",
+		TaskID:    taskID,
+		NodeName:  "draft_plan",
+		Status:    taskdomain.NodeRunRunning,
+		SessionID: "019d-provider-history",
+		StartedAt: now,
+	}
+	if err := store.SaveNodeRun(context.Background(), run); err != nil {
+		t.Fatalf("save run: %v", err)
+	}
+
+	transcriptPath := filepath.Join(codexHome, "sessions", "2026", "04", "08", "rollout-2026-04-08T10-00-00-019d-provider-history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir transcript dir: %v", err)
+	}
+	content := "" +
+		"{\"timestamp\":\"2026-04-08T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"019d-provider-history\",\"cwd\":\"" + task.ExecutionDir + "\"}}\n" +
+		"{\"timestamp\":\"2026-04-08T10:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\"}}\n" +
+		"{\"timestamp\":\"2026-04-08T10:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}\n" +
+		"{\"timestamp\":\"2026-04-08T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	historyResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskRunHistory,
+		Params: mustRawParams(t, taskRunHistoryParams{
+			WorkspaceID: workspace.WorkspaceID,
+			TaskID:      taskID,
+			NodeRunID:   run.ID,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.run_history rpc error: %+v", rpcErr)
+	}
+	historyResult := historyResultAny.(taskRunHistoryResult)
+	if got := historyResult.Provenance; got != "provider_backfilled" {
+		t.Fatalf("task.run_history provenance = %q, want provider_backfilled", got)
+	}
+	if got := historyResult.Completeness; got != "complete" {
+		t.Fatalf("task.run_history completeness = %q, want complete", got)
+	}
+	if got := len(historyResult.Events); got != 2 {
+		t.Fatalf("task.run_history event count = %d, want 2", got)
+	}
+	if got := historyResult.Events[0].Name; got != "exec_command" {
+		t.Fatalf("task.run_history first tool name = %q, want exec_command", got)
+	}
+	if got := historyResult.Events[1].Text; got != "done" {
+		t.Fatalf("task.run_history assistant text = %q, want done", got)
+	}
+}
+
+func TestServerTaskRunHistoryIgnoresPartialTrailingChunk(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+	server := newTestServerAtPath(t, stateDir)
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
+	}
+	taskID, nodeRunID := seedAwaitingTask(t, workspacePath)
+	server.markInitialized()
+
+	recordedAt := time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
+	if err := taskhistory.Append(workspacePath, taskID, nodeRunID, taskexecutor.Progress{
+		SessionID: "session-123",
+		Events: []taskexecutor.StreamEvent{
+			{
+				EventID:    "evt-first",
+				Seq:        1,
+				EmittedAt:  recordedAt,
+				SessionID:  "session-123",
+				Kind:       taskexecutor.StreamEventKindMessage,
+				Provenance: taskexecutor.StreamEventProvenanceExecutorPersisted,
+				Message: &taskexecutor.MessagePart{
+					MessageID: "msg-first",
+					PartID:    "part-first",
+					Role:      taskexecutor.MessageRoleAssistant,
+					Type:      taskexecutor.MessagePartTypeText,
+					Text:      "first chunk",
+				},
+			},
+		},
+	}, recordedAt); err != nil {
+		t.Fatalf("append first event: %v", err)
+	}
+	path := taskstore.RunHistoryPath(workspacePath, taskID, nodeRunID)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("open history file: %v", err)
+	}
+	if _, err := file.WriteString(`{"event_id":"evt-partial","seq":2,"kind":"message","message":{"text":"partial"}`); err != nil {
+		_ = file.Close()
+		t.Fatalf("append partial trailing record: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close history file: %v", err)
+	}
+
+	resultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskRunHistory,
+		Params: mustRawParams(t, taskRunHistoryParams{
+			WorkspaceID: workspace.WorkspaceID,
+			TaskID:      taskID,
+			NodeRunID:   nodeRunID,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.run_history rpc error: %+v", rpcErr)
+	}
+	result := resultAny.(taskRunHistoryResult)
+	if got := len(result.Events); got != 1 {
+		t.Fatalf("history event count = %d, want 1", got)
+	}
+	if got := result.Events[0].Text; got != "first chunk" {
+		t.Fatalf("first history message = %q, want first chunk", got)
+	}
+}
+
+func TestServerTaskRunHistoryReadsPersistedHistoryWithoutConfig(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+	server := newTestServerAtPath(t, stateDir)
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
+	}
+	taskID, nodeRunID := seedAwaitingTask(t, workspacePath)
+	server.markInitialized()
+
+	recordedAt := time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
+	if err := taskhistory.Append(workspacePath, taskID, nodeRunID, taskexecutor.Progress{
+		SessionID: "session-123",
+		Events: []taskexecutor.StreamEvent{{
+			EventID:    "evt-first",
+			Seq:        1,
+			EmittedAt:  recordedAt,
+			SessionID:  "session-123",
+			Kind:       taskexecutor.StreamEventKindMessage,
+			Provenance: taskexecutor.StreamEventProvenanceExecutorPersisted,
+			Message: &taskexecutor.MessagePart{
+				MessageID: "msg-first",
+				PartID:    "part-first",
+				Role:      taskexecutor.MessageRoleAssistant,
+				Type:      taskexecutor.MessagePartTypeText,
+				Text:      "persisted survives",
+			},
+		}},
+	}, recordedAt); err != nil {
+		t.Fatalf("append history: %v", err)
+	}
+	if err := os.Remove(taskstore.ConfigPath(workspacePath, taskID)); err != nil {
+		t.Fatalf("remove config: %v", err)
+	}
+
+	resultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskRunHistory,
+		Params: mustRawParams(t, taskRunHistoryParams{
+			WorkspaceID: workspace.WorkspaceID,
+			TaskID:      taskID,
+			NodeRunID:   nodeRunID,
+		}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.run_history rpc error: %+v", rpcErr)
+	}
+	result := resultAny.(taskRunHistoryResult)
+	if got := result.Provenance; got != "executor_persisted" {
+		t.Fatalf("history provenance = %q, want executor_persisted", got)
+	}
+	if got := len(result.Events); got != 1 {
+		t.Fatalf("history event count = %d, want 1", got)
+	}
+	if got := result.Events[0].Text; got != "persisted survives" {
+		t.Fatalf("history message = %q, want persisted survives", got)
+	}
+}
+
+func TestServerTaskGetClearsLiveOutputAfterTerminalEvent(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "appserver")
+	workspacePath := t.TempDir()
+	server := newTestServerAtPath(t, stateDir)
+	workspace, _, err := server.registry.Add(workspacePath, "cmdr")
+	if err != nil {
+		t.Fatalf("add workspace: %v", err)
+	}
+	taskID, nodeRunID := seedAwaitingTask(t, workspacePath)
+	server.markInitialized()
+
+	server.handleRuntimeEvent(workspace.WorkspaceID, taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeStarted,
+		TaskID:    taskID,
+		NodeRunID: nodeRunID,
+		NodeName:  "approve_plan",
+	})
+	server.handleRuntimeEvent(workspace.WorkspaceID, taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeProgress,
+		TaskID:    taskID,
+		NodeRunID: nodeRunID,
+		NodeName:  "approve_plan",
+		Progress: &taskruntime.ProgressInfo{
+			Events: []taskexecutor.StreamEvent{{
+				Kind: taskexecutor.StreamEventKindTool,
+				Tool: &taskexecutor.ToolCall{
+					Name:         "Read",
+					Kind:         taskexecutor.ToolKindRead,
+					Status:       taskexecutor.ToolStatusCompleted,
+					InputSummary: "plan.md",
+				},
+			}},
+		},
+	})
+
+	getResultAny, _, _, rpcErr := server.handleRequest(context.Background(), request{
+		Method: methodTaskGet,
+		Params: mustRawParams(t, taskGetParams{WorkspaceID: workspace.WorkspaceID, TaskID: taskID}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.get before terminal rpc error: %+v", rpcErr)
+	}
+	getResult := getResultAny.(taskGetResult)
+	if len(getResult.LiveEvents) == 0 {
+		t.Fatal("task.get live_events = empty before terminal event, want events")
+	}
+
+	server.handleRuntimeEvent(workspace.WorkspaceID, taskruntime.RunEvent{
+		Type:      taskruntime.EventNodeCompleted,
+		TaskID:    taskID,
+		NodeRunID: nodeRunID,
+		NodeName:  "approve_plan",
+	})
+
+	getResultAny, _, _, rpcErr = server.handleRequest(context.Background(), request{
+		Method: methodTaskGet,
+		Params: mustRawParams(t, taskGetParams{WorkspaceID: workspace.WorkspaceID, TaskID: taskID}),
+	})
+	if rpcErr != nil {
+		t.Fatalf("task.get after terminal rpc error: %+v", rpcErr)
+	}
+	getResult = getResultAny.(taskGetResult)
+	if got := len(getResult.LiveEvents); got != 0 {
+		t.Fatalf("task.get live_events length after terminal = %d, want 0", got)
+	}
+	if getResult.LiveOutputRunID != "" {
+		t.Fatalf("task.get live_output_run_id after terminal = %q, want empty", getResult.LiveOutputRunID)
 	}
 }
 
@@ -1202,7 +1587,7 @@ func seedAwaitingTask(t *testing.T, workDir string) (taskID string, awaitingRunI
 		t.Fatalf("save awaiting node run: %v", err)
 	}
 
-	artifactPath := filepath.Join(taskstore.ArtifactRunDir(workDir, taskID, 1, "draft_plan"), "plan.md")
+	artifactPath := filepath.Join(taskstore.RunDir(workDir, taskID, entryRun.ID), "plan.md")
 	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
 		t.Fatalf("mkdir artifact dir: %v", err)
 	}

@@ -36,6 +36,7 @@ type Service struct {
 	rootCtx        context.Context
 	taskCancels    map[string]context.CancelFunc
 	taskCtxs       map[string]context.Context
+	runEventSeqs   map[string]uint64
 	shutdownReason string
 }
 
@@ -51,14 +52,15 @@ func NewService(workDir string, executor taskexecutor.Executor) (*Service, error
 		return nil, err
 	}
 	service := &Service{
-		workDir:     workDir,
-		lock:        lock,
-		store:       store,
-		engine:      taskengine.New(),
-		executor:    executor,
-		bus:         NewLocalBus(16, 64),
-		taskCancels: map[string]context.CancelFunc{},
-		taskCtxs:    map[string]context.Context{},
+		workDir:      workDir,
+		lock:         lock,
+		store:        store,
+		engine:       taskengine.New(),
+		executor:     executor,
+		bus:          NewLocalBus(16, 64),
+		taskCancels:  map[string]context.CancelFunc{},
+		taskCtxs:     map[string]context.Context{},
+		runEventSeqs: map[string]uint64{},
 	}
 	if err := service.reconcileStaleRunning(context.Background()); err != nil {
 		_ = store.Close()
@@ -75,6 +77,7 @@ func (s *Service) Close() error {
 	}
 	s.taskCancels = map[string]context.CancelFunc{}
 	s.taskCtxs = map[string]context.Context{}
+	s.runEventSeqs = map[string]uint64{}
 	s.mu.Unlock()
 	s.nodeWG.Wait()
 	storeErr := s.store.Close()

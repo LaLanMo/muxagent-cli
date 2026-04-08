@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -15,6 +16,13 @@ const (
 	StreamEventKindTool    StreamEventKind = "tool"
 	StreamEventKindPlan    StreamEventKind = "plan"
 	StreamEventKindUsage   StreamEventKind = "usage"
+)
+
+type StreamEventProvenance string
+
+const (
+	StreamEventProvenanceExecutorPersisted StreamEventProvenance = "executor_persisted"
+	StreamEventProvenanceProviderBackfill  StreamEventProvenance = "provider_backfilled"
 )
 
 type MessageRole string
@@ -103,13 +111,19 @@ type UsageSnapshot struct {
 }
 
 type StreamEvent struct {
-	Kind      StreamEventKind
-	SessionID string
-	Raw       string
-	Message   *MessagePart
-	Tool      *ToolCall
-	Plan      *PlanSnapshot
-	Usage     *UsageSnapshot
+	EventID          string
+	Seq              uint64
+	EmittedAt        time.Time
+	SessionID        string
+	ProviderRecordID string
+	ProviderSubindex int
+	Provenance       StreamEventProvenance
+	Kind             StreamEventKind
+	Raw              string
+	Message          *MessagePart
+	Tool             *ToolCall
+	Plan             *PlanSnapshot
+	Usage            *UsageSnapshot
 }
 
 func (e StreamEvent) StableKey() string {
@@ -231,11 +245,29 @@ func (e StreamEvent) Summary() string {
 
 func MergeStreamEvent(existing, next StreamEvent) StreamEvent {
 	merged := existing
+	if next.EventID != "" {
+		merged.EventID = next.EventID
+	}
+	if next.Seq != 0 {
+		merged.Seq = next.Seq
+	}
+	if !next.EmittedAt.IsZero() {
+		merged.EmittedAt = next.EmittedAt
+	}
 	if next.Kind != "" {
 		merged.Kind = next.Kind
 	}
 	if next.SessionID != "" {
 		merged.SessionID = next.SessionID
+	}
+	if next.ProviderRecordID != "" {
+		merged.ProviderRecordID = next.ProviderRecordID
+	}
+	if next.ProviderSubindex != 0 {
+		merged.ProviderSubindex = next.ProviderSubindex
+	}
+	if next.Provenance != "" {
+		merged.Provenance = next.Provenance
 	}
 	if next.Raw != "" {
 		merged.Raw = next.Raw

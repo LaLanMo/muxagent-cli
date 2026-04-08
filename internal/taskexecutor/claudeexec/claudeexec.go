@@ -339,6 +339,14 @@ func summarizeEvents(events []taskexecutor.StreamEvent, fallback string) string 
 	return strings.Join(summaries, "\n")
 }
 
+func ProgressEvents(raw json.RawMessage, sessionID string) []taskexecutor.StreamEvent {
+	return claudeProgressEvents(raw, sessionID)
+}
+
+func TranscriptEvents(raw json.RawMessage, sessionID string) []taskexecutor.StreamEvent {
+	return claudeTranscriptEvents(raw, sessionID)
+}
+
 func claudeProgressEvents(raw json.RawMessage, sessionID string) []taskexecutor.StreamEvent {
 	var payload map[string]interface{}
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -349,11 +357,33 @@ func claudeProgressEvents(raw json.RawMessage, sessionID string) []taskexecutor.
 		}}
 	}
 	rawLine := strings.TrimSpace(string(raw))
+	return claudeEventsForPayload(rawLine, sessionID, payload, false)
+}
+
+func claudeTranscriptEvents(raw json.RawMessage, sessionID string) []taskexecutor.StreamEvent {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return []taskexecutor.StreamEvent{{
+			Kind:      taskexecutor.StreamEventKindRaw,
+			SessionID: sessionID,
+			Raw:       strings.TrimSpace(string(raw)),
+		}}
+	}
+	rawLine := strings.TrimSpace(string(raw))
+	return claudeEventsForPayload(rawLine, sessionID, payload, true)
+}
+
+func claudeEventsForPayload(rawLine, sessionID string, payload map[string]interface{}, transcript bool) []taskexecutor.StreamEvent {
 	switch asString(payload["type"]) {
 	case "assistant":
 		return claudeAssistantEvents(rawLine, sessionID, payload)
 	case "user":
 		return claudeUserEvents(rawLine, sessionID, payload)
+	case "progress":
+		if transcript {
+			return claudeTranscriptProgressEvents(rawLine, sessionID, payload)
+		}
+		return nil
 	case "system", "rate_limit_event":
 		return nil
 	default:
@@ -457,27 +487,100 @@ func claudeUserEvents(rawLine, sessionID string, payload map[string]interface{})
 	if len(message) == 0 {
 		return nil
 	}
-	resultPayload := asMap(payload["tool_use_result"])
 	var events []taskexecutor.StreamEvent
 	for _, rawBlock := range asSlice(message["content"]) {
 		block := asMap(rawBlock)
-		if asString(block["type"]) != "tool_result" {
-			continue
+		switch asString(block["type"]) {
+		case "tool_result":
+			content := strings.TrimSpace(claudeToolResultContent(block["content"]))
+			callID := asString(block["tool_use_id"])
+			tool := claudeToolResultDetails(callID, content, asBool(block["is_error"]), claudeToolUseResultPayload(payload, block))
+			if tool == nil {
+				continue
+			}
+			events = append(events, taskexecutor.StreamEvent{
+				Kind:      taskexecutor.StreamEventKindTool,
+				SessionID: sessionID,
+				Raw:       rawLine,
+				Tool:      tool,
+			})
+		case "text":
+			text := strings.TrimSpace(asString(block["text"]))
+			if text == "" {
+				continue
+			}
+			events = append(events, taskexecutor.StreamEvent{
+				Kind:      taskexecutor.StreamEventKindMessage,
+				SessionID: sessionID,
+				Raw:       rawLine,
+				Message: &taskexecutor.MessagePart{
+					Role: taskexecutor.MessageRoleUser,
+					Type: taskexecutor.MessagePartTypeText,
+					Text: text,
+				},
+			})
 		}
-		content := strings.TrimSpace(claudeToolResultContent(block["content"]))
-		callID := asString(block["tool_use_id"])
-		tool := claudeToolResultDetails(callID, content, asBool(block["is_error"]), resultPayload)
-		if tool == nil {
-			continue
+	}
+	if len(events) == 0 {
+		if text := strings.TrimSpace(asString(message["content"])); text != "" {
+			events = append(events, taskexecutor.StreamEvent{
+				Kind:      taskexecutor.StreamEventKindMessage,
+				SessionID: sessionID,
+				Raw:       rawLine,
+				Message: &taskexecutor.MessagePart{
+					Role: taskexecutor.MessageRoleUser,
+					Type: taskexecutor.MessagePartTypeText,
+					Text: text,
+				},
+			})
 		}
-		events = append(events, taskexecutor.StreamEvent{
+	}
+	return events
+}
+
+func claudeTranscriptProgressEvents(rawLine, sessionID string, payload map[string]interface{}) []taskexecutor.StreamEvent {
+	data := asMap(payload["data"])
+	if nested := asMap(data["message"]); len(nested) > 0 {
+		if events := claudeEventsForPayload(rawLine, sessionID, nested, true); len(events) > 0 {
+			return events
+		}
+	}
+	callID := firstNonEmptyString(asString(payload["toolUseID"]), asString(payload["tool_use_id"]), asString(payload["parentToolUseID"]))
+	if callID != "" {
+		return []taskexecutor.StreamEvent{{
 			Kind:      taskexecutor.StreamEventKindTool,
 			SessionID: sessionID,
 			Raw:       rawLine,
-			Tool:      tool,
-		})
+			Tool: &taskexecutor.ToolCall{
+				CallID: callID,
+				Name:   firstNonEmptyString(asString(data["type"]), "progress"),
+				Title:  firstNonEmptyString(asString(data["hookName"]), asString(data["type"]), "Progress"),
+				Kind:   taskexecutor.ToolKindOther,
+				Status: taskexecutor.ToolStatusInProgress,
+			},
+		}}
 	}
-	return events
+	return []taskexecutor.StreamEvent{{
+		Kind:      taskexecutor.StreamEventKindRaw,
+		SessionID: sessionID,
+		Raw:       rawLine,
+	}}
+}
+
+func claudeToolUseResultPayload(payload map[string]interface{}, block map[string]interface{}) map[string]interface{} {
+	if result := asMap(payload["tool_use_result"]); len(result) > 0 {
+		return result
+	}
+	if result := asMap(payload["toolUseResult"]); len(result) > 0 {
+		return result
+	}
+	if result := asMap(block["tool_use_result"]); len(result) > 0 {
+		return result
+	}
+	if result := asMap(block["toolUseResult"]); len(result) > 0 {
+		return result
+	}
+	return nil
 }
 
 func claudeToolResultContent(value interface{}) string {

@@ -296,13 +296,17 @@ func artifactDisplayPath(path, workDir string) string {
 	}
 	displayPath = filepath.ToSlash(displayPath)
 	parts := strings.Split(displayPath, "/")
-	if len(parts) >= 6 && parts[0] == ".muxagent" && parts[1] == "tasks" && parts[3] == "artifacts" {
+	if len(parts) >= 6 && parts[0] == ".muxagent" && parts[1] == "tasks" && parts[3] == "runs" {
 		taskID := parts[2]
+		runID := parts[4]
 		if len(taskID) > 8 {
 			taskID = taskID[:8]
 		}
-		prefix := []string{".muxagent", "tasks", taskID, "artifacts"}
-		return strings.Join(append(prefix, parts[4:]...), "/")
+		if len(runID) > 8 {
+			runID = runID[:8]
+		}
+		prefix := []string{".muxagent", "tasks", taskID, "runs", runID}
+		return strings.Join(append(prefix, parts[5:]...), "/")
 	}
 	return displayPath
 }

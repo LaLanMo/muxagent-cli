@@ -3,6 +3,29 @@ set -eu
 
 flow=${FAKE_CODEX_FLOW:-happy}
 
+read_node_name_from_manifest() {
+  manifest_path="$1"
+  if [ ! -f "$manifest_path" ]; then
+    printf '%s' ""
+    return
+  fi
+  manifest_text=""
+  while IFS= read -r line; do
+    manifest_text="${manifest_text}${line}"
+  done < "$manifest_path"
+  case "$manifest_text" in
+    *'"node_name"'*)
+      node_chunk=${manifest_text#*\"node_name\"}
+      node_chunk=${node_chunk#*:}
+      node_chunk=${node_chunk#*\"}
+      printf '%s' "${node_chunk%%\"*}"
+      ;;
+    *)
+      printf '%s' ""
+      ;;
+  esac
+}
+
 discover_active_artifact_dir() {
   artifact_dir=""
   roots="$PWD"
@@ -17,7 +40,7 @@ $state_root"
   IFS='
 '
   for root in $roots; do
-    for dir in "$root"/.muxagent/tasks/*/artifacts/*; do
+    for dir in "$root"/.muxagent/tasks/*/runs/*; do
       [ -d "$dir" ] || continue
       if [ -f "$dir/input.md" ] && [ ! -f "$dir/output.json" ]; then
         artifact_dir=$dir
@@ -26,7 +49,7 @@ $state_root"
   done
   if [ -z "$artifact_dir" ]; then
     for root in $roots; do
-      for dir in "$root"/.muxagent/tasks/*/artifacts/*; do
+      for dir in "$root"/.muxagent/tasks/*/runs/*; do
         [ -d "$dir" ] || continue
         artifact_dir=$dir
       done
@@ -35,7 +58,8 @@ $state_root"
   IFS=$old_ifs
   if [ -n "$artifact_dir" ]; then
     run_dir=$(basename "$artifact_dir")
-    node_name=${run_dir#*-}
+    manifest_path="$artifact_dir/manifest.json"
+    node_name=$(read_node_name_from_manifest "$manifest_path")
   else
     run_dir=""
     node_name=""
@@ -322,7 +346,7 @@ exec_mode() {
 
   artifact_dir=$(dirname "$output")
   run_dir=$(basename "$artifact_dir")
-  node_name=${run_dir#*-}
+  node_name=$(read_node_name_from_manifest "$artifact_dir/manifest.json")
   state_dir=${FAKE_CODEX_STATE_DIR:-$(dirname "$artifact_dir")/.fake-state}
 
   mkdir -p "$state_dir"

@@ -11,6 +11,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
+	"github.com/LaLanMo/muxagent-cli/internal/taskhistory"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/google/uuid"
@@ -36,8 +37,16 @@ func (s *Service) runAgentNodeAsync(ctx context.Context, task taskdomain.Task, c
 }
 
 func (s *Service) startNode(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun) error {
+	return s.startNodeInternal(ctx, task, cfg, run, true)
+}
+
+func (s *Service) startNodeInternal(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun, emitEvents bool) error {
 	view, err := s.refreshTaskView(context.Background(), task.ID)
 	if err != nil {
+		return err
+	}
+	runs := viewNodeRuns(view)
+	if err := persistRunManifest(task, runs, run); err != nil {
 		return err
 	}
 	switch cfg.NodeDefinitions[run.NodeName].Type {
@@ -49,8 +58,14 @@ func (s *Service) startNode(ctx context.Context, task taskdomain.Task, cfg *task
 		if err := s.store.SaveNodeRun(context.Background(), run); err != nil {
 			return err
 		}
-		return s.afterNodeCompleted(context.Background(), task, cfg, run)
+		if err := persistRunManifest(task, runs, run); err != nil {
+			return err
+		}
+		return s.afterNodeCompletedInternal(context.Background(), task, cfg, run, emitEvents)
 	case taskconfig.NodeTypeHuman:
+		if !emitEvents {
+			return nil
+		}
 		inputRequest, err := s.buildInputRequest(context.Background(), task, cfg, viewNodeRuns(view), run)
 		if err != nil {
 			return err
@@ -65,13 +80,15 @@ func (s *Service) startNode(ctx context.Context, task taskdomain.Task, cfg *task
 		})
 		return nil
 	default:
-		s.publish(RunEvent{
-			Type:      EventNodeStarted,
-			TaskID:    task.ID,
-			NodeRunID: run.ID,
-			NodeName:  run.NodeName,
-			TaskView:  &view,
-		})
+		if emitEvents {
+			s.publish(RunEvent{
+				Type:      EventNodeStarted,
+				TaskID:    task.ID,
+				NodeRunID: run.ID,
+				NodeName:  run.NodeName,
+				TaskView:  &view,
+			})
+		}
 		s.runAgentNodeAsync(ctx, task, cfg, run)
 		return nil
 	}
@@ -152,6 +169,9 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		if err := s.store.SaveNodeRun(context.Background(), run); err != nil {
 			return err
 		}
+		if err := persistRunManifest(task, runs, run); err != nil {
+			return err
+		}
 		view, err := s.refreshTaskView(context.Background(), task.ID)
 		if err != nil {
 			return err
@@ -188,6 +208,9 @@ func (s *Service) executeAgentNode(ctx context.Context, task taskdomain.Task, cf
 		if err := s.store.SaveNodeRun(context.Background(), run); err != nil {
 			return err
 		}
+		if err := persistRunManifest(task, runs, run); err != nil {
+			return err
+		}
 		return s.afterNodeCompleted(context.Background(), task, cfg, run)
 	default:
 		return s.failRun(context.Background(), task, cfg, run, fmt.Errorf("unsupported execution result kind %q", result.Kind))
@@ -204,32 +227,107 @@ func (s *Service) handleNodeProgress(ctx context.Context, task taskdomain.Task, 
 	if item.Message == "" && item.SessionID == "" && len(item.Events) == 0 {
 		return nil
 	}
+	annotated, err := s.annotateProgressEvents(task, *run, item)
+	if err != nil {
+		return err
+	}
+	if err := taskhistory.Append(task.WorkDir, task.ID, run.ID, annotated, time.Now().UTC()); err != nil {
+		return err
+	}
 	s.publish(RunEvent{
 		Type:      EventNodeProgress,
 		TaskID:    task.ID,
 		NodeRunID: run.ID,
 		NodeName:  run.NodeName,
 		Progress: &ProgressInfo{
-			Message:   item.Message,
-			SessionID: item.SessionID,
-			Events:    append([]taskexecutor.StreamEvent(nil), item.Events...),
+			Message:   annotated.Message,
+			SessionID: annotated.SessionID,
+			Events:    append([]taskexecutor.StreamEvent(nil), annotated.Events...),
 		},
 	})
 	return nil
 }
 
+func (s *Service) annotateProgressEvents(task taskdomain.Task, run taskdomain.NodeRun, item taskexecutor.Progress) (taskexecutor.Progress, error) {
+	if len(item.Events) == 0 {
+		return item, nil
+	}
+	baseSeq, err := s.currentRunEventSeq(task, run.ID)
+	if err != nil {
+		return taskexecutor.Progress{}, err
+	}
+	now := time.Now().UTC()
+	annotated := taskexecutor.Progress{
+		Message:   item.Message,
+		SessionID: firstNonEmpty(item.SessionID, run.SessionID),
+		Events:    make([]taskexecutor.StreamEvent, 0, len(item.Events)),
+	}
+	for _, event := range item.Events {
+		next := event
+		if next.EventID == "" {
+			next.EventID = "evt_" + uuid.NewString()
+		}
+		baseSeq++
+		next.Seq = baseSeq
+		if next.EmittedAt.IsZero() {
+			next.EmittedAt = now
+		}
+		if next.SessionID == "" {
+			next.SessionID = annotated.SessionID
+		}
+		if next.Provenance == "" {
+			next.Provenance = taskexecutor.StreamEventProvenanceExecutorPersisted
+		}
+		annotated.Events = append(annotated.Events, next)
+	}
+	s.mu.Lock()
+	s.runEventSeqs[run.ID] = baseSeq
+	s.mu.Unlock()
+	return annotated, nil
+}
+
+func (s *Service) currentRunEventSeq(task taskdomain.Task, nodeRunID string) (uint64, error) {
+	s.mu.Lock()
+	current, ok := s.runEventSeqs[nodeRunID]
+	s.mu.Unlock()
+	if ok {
+		return current, nil
+	}
+	lastSeq, err := taskhistory.LastSeq(task.WorkDir, task.ID, nodeRunID)
+	if err != nil {
+		if taskhistory.IsMissing(err) {
+			lastSeq = 0
+		} else {
+			return 0, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current, ok := s.runEventSeqs[nodeRunID]; ok {
+		return current, nil
+	}
+	s.runEventSeqs[nodeRunID] = lastSeq
+	return lastSeq, nil
+}
+
 func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun) error {
+	return s.afterNodeCompletedInternal(ctx, task, cfg, run, true)
+}
+
+func (s *Service) afterNodeCompletedInternal(ctx context.Context, task taskdomain.Task, cfg *taskconfig.Config, run taskdomain.NodeRun, emitEvents bool) error {
 	view, err := s.refreshTaskView(ctx, task.ID)
 	if err != nil {
 		return err
 	}
-	s.publish(RunEvent{
-		Type:      EventNodeCompleted,
-		TaskID:    task.ID,
-		NodeRunID: run.ID,
-		NodeName:  run.NodeName,
-		TaskView:  &view,
-	})
+	if emitEvents {
+		s.publish(RunEvent{
+			Type:      EventNodeCompleted,
+			TaskID:    task.ID,
+			NodeRunID: run.ID,
+			NodeName:  run.NodeName,
+			TaskView:  &view,
+		})
+	}
 
 	runs, err := s.store.ListNodeRunsByTask(ctx, task.ID)
 	if err != nil {
@@ -276,7 +374,7 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 		if err != nil {
 			return err
 		}
-		if blockedView.Status == taskdomain.TaskStatusFailed && blockedView.CurrentIssue != nil && blockedView.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep {
+		if emitEvents && blockedView.Status == taskdomain.TaskStatusFailed && blockedView.CurrentIssue != nil && blockedView.CurrentIssue.Kind == taskdomain.TaskIssueBlockedStep {
 			s.publish(RunEvent{
 				Type:     EventTaskFailed,
 				TaskID:   task.ID,
@@ -287,7 +385,7 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 		}
 	}
 	for _, nextRun := range nextRuns {
-		if err := s.startNode(s.lookupTaskContext(task.ID), task, cfg, nextRun); err != nil {
+		if err := s.startNodeInternal(s.lookupTaskContext(task.ID), task, cfg, nextRun, emitEvents); err != nil {
 			return err
 		}
 	}
@@ -296,7 +394,7 @@ func (s *Service) afterNodeCompleted(ctx context.Context, task taskdomain.Task, 
 		if err != nil {
 			return err
 		}
-		if view.Status == taskdomain.TaskStatusDone {
+		if emitEvents && view.Status == taskdomain.TaskStatusDone {
 			s.publish(RunEvent{
 				Type:      EventTaskCompleted,
 				TaskID:    task.ID,
@@ -315,6 +413,13 @@ func (s *Service) failRun(ctx context.Context, task taskdomain.Task, cfg *taskco
 	run.FailureReason = s.failureReasonForError(runErr)
 	run.CompletedAt = &now
 	if err := s.store.SaveNodeRun(ctx, run); err != nil {
+		return err
+	}
+	runs, err := s.store.ListNodeRunsByTask(ctx, task.ID)
+	if err != nil {
+		return err
+	}
+	if err := persistRunManifest(task, runs, run); err != nil {
 		return err
 	}
 	view, err := s.refreshTaskView(ctx, task.ID)

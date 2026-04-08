@@ -16,6 +16,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/filelock"
 	"github.com/LaLanMo/muxagent-cli/internal/taskconfig"
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
+	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
 	"github.com/LaLanMo/muxagent-cli/internal/taskruntime"
 	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/google/uuid"
@@ -55,16 +56,16 @@ type Server struct {
 	activeSessionID     string
 	pendingCommands     []pendingClientCommand
 	notificationSink    func(notification)
-	liveOutputCache     map[string]map[string]liveOutputSnapshot
+	liveEventCache      map[string]map[string]liveEventSnapshot
 	notificationBacklog []notification
 	shutdownOnce        sync.Once
 	shutdownCh          chan struct{}
 	gracefulStop        bool
 }
 
-type liveOutputSnapshot struct {
+type liveEventSnapshot struct {
 	NodeRunID string
-	Lines     []string
+	Events    []taskexecutor.StreamEvent
 }
 
 type ConnectionOptions struct {
@@ -151,7 +152,7 @@ func New(opts Options) (*Server, error) {
 		lockPath:                  singletonLockPath(stateDir),
 		registry:                  registry,
 		shutdownCh:                make(chan struct{}),
-		liveOutputCache:           map[string]map[string]liveOutputSnapshot{},
+		liveEventCache:            map[string]map[string]liveEventSnapshot{},
 	}
 	s.runtimes = newRuntimeManager(opts.RuntimeFactory, s.handleRuntimeEvent)
 	return s, nil
@@ -387,6 +388,7 @@ func (s *Server) handleSessionRequest(ctx context.Context, session *connectionSe
 					methodWorkspaceGet,
 					methodTaskList,
 					methodTaskGet,
+					methodTaskRunHistory,
 					methodTaskInputRequest,
 					methodTaskStart,
 					methodTaskStartFollowUp,
@@ -550,14 +552,48 @@ func (s *Server) handleSessionRequest(ctx context.Context, session *connectionSe
 			Task:         taskViewToDTO(view),
 			InputRequest: inputRequestToDTO(input),
 		}
-		if runID, lines := s.liveOutputSnapshot(params.WorkspaceID, params.TaskID); runID != "" || len(lines) > 0 {
+		if runID, events := s.liveEventSnapshot(params.WorkspaceID, params.TaskID); runID != "" || len(events) > 0 {
 			result.LiveOutputRunID = runID
-			result.LiveOutput = lines
+			result.LiveEvents = events
 		}
 		if cfg != nil {
 			result.Config = &configViewDTO{
 				Path:   view.Task.ConfigPath,
 				Config: cfg,
+			}
+		}
+		return result, nil, stopModeContinue, nil
+
+	case methodTaskRunHistory:
+		params, err := decodeParams[taskRunHistoryParams](req.Params)
+		if err != nil {
+			return nil, nil, stopModeContinue, &rpcError{Code: errorCodeInvalidParams, Message: err.Error()}
+		}
+		workspace, rpcErr := s.requireWorkspace(params.WorkspaceID)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		model, rpcErr := s.openWorkspaceReadModel(workspace)
+		if rpcErr != nil {
+			return nil, nil, stopModeContinue, rpcErr
+		}
+		defer func() { _ = model.Close() }()
+		run, history, err := model.LoadRunHistory(ctx, strings.TrimSpace(params.TaskID), strings.TrimSpace(params.NodeRunID))
+		if err != nil {
+			return nil, nil, stopModeContinue, runtimeLookupRPCError(err)
+		}
+		result := taskRunHistoryResult{
+			TaskID:       strings.TrimSpace(params.TaskID),
+			NodeRunID:    run.ID,
+			SessionID:    firstNonEmpty(strings.TrimSpace(run.SessionID), strings.TrimSpace(history.SessionID)),
+			Provenance:   history.Provenance,
+			Completeness: history.Completeness,
+			LastSeq:      history.LastSeq,
+		}
+		if len(history.Events) > 0 {
+			result.Events = make([]sessionHistoryEventDTO, 0, len(history.Events))
+			for _, event := range history.Events {
+				result.Events = append(result.Events, historyStreamEventToDTO(event))
 			}
 		}
 		return result, nil, stopModeContinue, nil
@@ -1031,7 +1067,7 @@ func (s *Server) requireWorkspace(workspaceID string) (workspaceRecord, *rpcErro
 }
 
 func (s *Server) handleRuntimeEvent(workspaceID string, event taskruntime.RunEvent) {
-	s.recordLiveOutput(workspaceID, event)
+	s.recordLiveEvents(workspaceID, event)
 	payload := taskNotificationPayload{
 		ClientCommandID: s.claimPendingClientCommandID(workspaceID, event),
 		Event:           runEventToDTO(event),
@@ -1039,7 +1075,7 @@ func (s *Server) handleRuntimeEvent(workspaceID string, event taskruntime.RunEve
 	s.emitNotification(s.newNotification(string(event.Type), workspaceID, payload))
 }
 
-func (s *Server) recordLiveOutput(workspaceID string, event taskruntime.RunEvent) {
+func (s *Server) recordLiveEvents(workspaceID string, event taskruntime.RunEvent) {
 	taskID := strings.TrimSpace(event.TaskID)
 	if workspaceID == "" || taskID == "" {
 		return
@@ -1048,31 +1084,38 @@ func (s *Server) recordLiveOutput(workspaceID string, event taskruntime.RunEvent
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	workspaceCache := s.liveOutputCache[workspaceID]
+	workspaceCache := s.liveEventCache[workspaceID]
 	if workspaceCache == nil {
-		workspaceCache = map[string]liveOutputSnapshot{}
-		s.liveOutputCache[workspaceID] = workspaceCache
+		workspaceCache = map[string]liveEventSnapshot{}
+		s.liveEventCache[workspaceID] = workspaceCache
 	}
 
 	snapshot := workspaceCache[taskID]
 	switch event.Type {
 	case taskruntime.EventNodeStarted, taskruntime.EventInputRequested:
-		workspaceCache[taskID] = liveOutputSnapshot{NodeRunID: event.NodeRunID}
+		workspaceCache[taskID] = liveEventSnapshot{NodeRunID: event.NodeRunID}
 		return
 	case taskruntime.EventNodeProgress:
 		if snapshot.NodeRunID != event.NodeRunID {
-			snapshot = liveOutputSnapshot{NodeRunID: event.NodeRunID}
+			snapshot = liveEventSnapshot{NodeRunID: event.NodeRunID}
 		}
-		lines := summarizeProgressLines(event.Progress)
-		if len(lines) == 0 {
+		if event.Progress == nil || len(event.Progress.Events) == 0 {
 			workspaceCache[taskID] = snapshot
 			return
 		}
-		snapshot.Lines = append(snapshot.Lines, lines...)
-		if len(snapshot.Lines) > 120 {
-			snapshot.Lines = append([]string(nil), snapshot.Lines[len(snapshot.Lines)-120:]...)
+		snapshot.Events = append(snapshot.Events, event.Progress.Events...)
+		if len(snapshot.Events) > 200 {
+			snapshot.Events = append([]taskexecutor.StreamEvent(nil), snapshot.Events[len(snapshot.Events)-200:]...)
 		}
 		workspaceCache[taskID] = snapshot
+		return
+	case taskruntime.EventNodeCompleted, taskruntime.EventNodeFailed, taskruntime.EventTaskCompleted, taskruntime.EventTaskFailed:
+		if snapshot.NodeRunID == "" || snapshot.NodeRunID == event.NodeRunID {
+			delete(workspaceCache, taskID)
+			if len(workspaceCache) == 0 {
+				delete(s.liveEventCache, workspaceID)
+			}
+		}
 		return
 	}
 
@@ -1082,46 +1125,28 @@ func (s *Server) recordLiveOutput(workspaceID string, event taskruntime.RunEvent
 	}
 }
 
-func summarizeProgressLines(progress *taskruntime.ProgressInfo) []string {
-	if progress == nil {
-		return nil
-	}
-	lines := make([]string, 0, len(progress.Events)+1)
-	for _, event := range progress.Events {
-		if summary := strings.TrimSpace(event.Summary()); summary != "" {
-			lines = append(lines, summary)
-			continue
-		}
-		if raw := strings.TrimSpace(event.Raw); raw != "" {
-			lines = append(lines, raw)
-		}
-	}
-	if len(lines) == 0 {
-		if fallback := strings.TrimSpace(progress.Message); fallback != "" {
-			lines = append(lines, fallback)
-		}
-	}
-	return lines
-}
-
-func (s *Server) liveOutputSnapshot(workspaceID, taskID string) (string, []string) {
+func (s *Server) liveEventSnapshot(workspaceID, taskID string) (string, []sessionHistoryEventDTO) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	workspaceCache := s.liveOutputCache[workspaceID]
+	workspaceCache := s.liveEventCache[workspaceID]
 	if workspaceCache == nil {
 		return "", nil
 	}
 	snapshot := workspaceCache[taskID]
-	if snapshot.NodeRunID == "" && len(snapshot.Lines) == 0 {
+	if snapshot.NodeRunID == "" && len(snapshot.Events) == 0 {
 		return "", nil
 	}
-	return snapshot.NodeRunID, append([]string(nil), snapshot.Lines...)
+	events := make([]sessionHistoryEventDTO, 0, len(snapshot.Events))
+	for _, event := range snapshot.Events {
+		events = append(events, streamEventToDTO(event))
+	}
+	return snapshot.NodeRunID, events
 }
 
 func (s *Server) clearLiveOutputCache(workspaceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.liveOutputCache, workspaceID)
+	delete(s.liveEventCache, workspaceID)
 }
 
 func (s *Server) newNotification(kind, workspaceID string, payload any) notification {
@@ -1298,6 +1323,15 @@ func decodeParams[T any](raw json.RawMessage) (T, error) {
 		return params, err
 	}
 	return params, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func requestIDOrNull(id json.RawMessage) json.RawMessage {

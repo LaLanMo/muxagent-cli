@@ -17,6 +17,7 @@ import (
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
 	"github.com/LaLanMo/muxagent-cli/internal/taskengine"
 	"github.com/LaLanMo/muxagent-cli/internal/taskexecutor"
+	"github.com/LaLanMo/muxagent-cli/internal/taskhistory"
 	"github.com/LaLanMo/muxagent-cli/internal/taskstore"
 	"github.com/LaLanMo/muxagent-cli/internal/worktree"
 	"github.com/stretchr/testify/assert"
@@ -1440,6 +1441,63 @@ func TestServicePublishesProgressAndPersistsSessionIDBeforeCompletion(t *testing
 	assert.Equal(t, taskdomain.TaskStatusDone, completed.TaskView.Status)
 }
 
+func TestServicePersistsNormalizedRunHistory(t *testing.T) {
+	executor := &fakeExecutor{
+		steps: map[string][]taskexecutor.Result{
+			"implement": {{Kind: taskexecutor.ResultKindResult, Result: resultWithArtifact("impl.md")}},
+		},
+		progress: map[string][]taskexecutor.Progress{
+			"implement": {
+				{
+					SessionID: "session-456",
+					Events: []taskexecutor.StreamEvent{
+						{
+							Kind: taskexecutor.StreamEventKindTool,
+							Tool: &taskexecutor.ToolCall{
+								CallID:       "tool-1",
+								Name:         "Read",
+								Kind:         taskexecutor.ToolKindRead,
+								Status:       taskexecutor.ToolStatusCompleted,
+								InputSummary: "plan.md",
+							},
+						},
+					},
+				},
+				{Message: "wrapping up"},
+			},
+		},
+	}
+	service := newTestServiceWithConfig(t, singleAgentTerminalFixture(), executor)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = service.Run(ctx) }()
+
+	service.Dispatch(startTaskCommand(t, service, "persist history"))
+	completed := waitForTaskSuccess(t, service.Events())
+	require.NotNil(t, completed.TaskView)
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), completed.TaskID)
+	require.NoError(t, err)
+	var implementRun taskdomain.NodeRun
+	for _, run := range runs {
+		if run.NodeName == "implement" {
+			implementRun = run
+			break
+		}
+	}
+	require.NotEmpty(t, implementRun.ID)
+
+	history, err := taskhistory.ReadAll(service.workDir, completed.TaskID, implementRun.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.Equal(t, "session-456", history[0].SessionID)
+	assert.Equal(t, "tool", history[0].Kind)
+	require.NotNil(t, history[0].Tool)
+	assert.Equal(t, "Read", history[0].Tool.Name)
+}
+
 func TestServiceRejectsCrossTaskNodeRunInput(t *testing.T) {
 	service := newTestService(t, &fakeExecutor{
 		steps: map[string][]taskexecutor.Result{
@@ -2005,6 +2063,163 @@ func TestNewServiceReconcilesStaleRunningRunsOnStartup(t *testing.T) {
 	require.NotNil(t, runs[0].CompletedAt)
 }
 
+func TestNewServiceRecoversCompletedRunFromOutputEnvelopeOnStartup(t *testing.T) {
+	workDir := t.TempDir()
+	configPath := writeOverrideConfig(t, singleAgentTerminalFixture())
+	store, err := taskstore.Open(workDir)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	task := taskdomain.Task{
+		ID:          "task-recover",
+		Description: "recover",
+		WorkDir:     workDir,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	require.NoError(t, store.CreateTask(context.Background(), task))
+	_, err = taskconfig.Materialize(workDir, task.ID, configPath)
+	require.NoError(t, err)
+	run := taskdomain.NodeRun{
+		ID:        "run-recover",
+		TaskID:    task.ID,
+		NodeName:  "implement",
+		Status:    taskdomain.NodeRunRunning,
+		StartedAt: now,
+	}
+	require.NoError(t, store.SaveNodeRun(context.Background(), run))
+
+	outputPath := filepath.Join(taskstore.RunDir(workDir, task.ID, run.ID), "output.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(outputPath), 0o755))
+	require.NoError(t, os.WriteFile(outputPath, []byte("{\"kind\":\"result\",\"result\":{\"file_paths\":[\"plan.md\"]}}\n"), 0o644))
+	require.NoError(t, store.Close())
+
+	service, err := NewService(workDir, &fakeExecutor{steps: map[string][]taskexecutor.Result{}})
+	require.NoError(t, err)
+	defer service.Close()
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"implement": 1,
+		"done":      1,
+	})
+	var implementRun taskdomain.NodeRun
+	var doneRun taskdomain.NodeRun
+	for _, candidate := range runs {
+		switch candidate.NodeName {
+		case "implement":
+			implementRun = candidate
+		case "done":
+			doneRun = candidate
+		}
+	}
+	assert.Equal(t, taskdomain.NodeRunDone, implementRun.Status)
+	assert.Equal(t, map[string]any{"file_paths": []any{"plan.md"}}, implementRun.Result)
+	assert.Empty(t, implementRun.FailureReason)
+	require.NotNil(t, implementRun.CompletedAt)
+	assert.Equal(t, taskdomain.NodeRunDone, doneRun.Status)
+
+	view, _, err := service.LoadTaskView(context.Background(), task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+}
+
+func TestNewServiceRecoversSubmittedHumanNodeOnStartup(t *testing.T) {
+	workDir := t.TempDir()
+	configPath := writeOverrideConfig(t, humanApprovalFixture())
+	store, err := taskstore.Open(workDir)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	task := taskdomain.Task{
+		ID:          "task-human-recover",
+		Description: "human recover",
+		WorkDir:     workDir,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	require.NoError(t, store.CreateTask(context.Background(), task))
+	_, err = taskconfig.Materialize(workDir, task.ID, configPath)
+	require.NoError(t, err)
+	run := taskdomain.NodeRun{
+		ID:        "run-human-recover",
+		TaskID:    task.ID,
+		NodeName:  "approve_plan",
+		Status:    taskdomain.NodeRunAwaitingUser,
+		StartedAt: now,
+	}
+	require.NoError(t, store.SaveNodeRun(context.Background(), run))
+	_, err = materializeHumanNodeArtifact(task, run, []taskdomain.NodeRun{run}, map[string]interface{}{"approved": true}, now.Add(time.Second))
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	service, err := NewService(workDir, &fakeExecutor{})
+	require.NoError(t, err)
+	defer service.Close()
+
+	runs, err := service.store.ListNodeRunsByTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	assertNodeRunCounts(t, runs, map[string]int{
+		"approve_plan": 1,
+		"done":         1,
+	})
+
+	var recovered taskdomain.NodeRun
+	for _, candidate := range runs {
+		if candidate.NodeName == "approve_plan" {
+			recovered = candidate
+			break
+		}
+	}
+	assert.Equal(t, taskdomain.NodeRunDone, recovered.Status)
+	assert.Equal(t, map[string]any{"approved": true}, recovered.Result)
+	require.NotNil(t, recovered.CompletedAt)
+
+	view, _, err := service.LoadTaskView(context.Background(), task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.TaskStatusDone, view.Status)
+}
+
+func TestNewServiceDoesNotAbortWhenStaleRunConfigIsMissing(t *testing.T) {
+	workDir := t.TempDir()
+	configPath := writeOverrideConfig(t, singleAgentTerminalFixture())
+	store, err := taskstore.Open(workDir)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	task := taskdomain.Task{
+		ID:          "task-missing-config",
+		Description: "missing config",
+		WorkDir:     workDir,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	require.NoError(t, store.CreateTask(context.Background(), task))
+	_, err = taskconfig.Materialize(workDir, task.ID, configPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(taskstore.ConfigPath(workDir, task.ID)))
+	require.NoError(t, store.SaveNodeRun(context.Background(), taskdomain.NodeRun{
+		ID:        "run-missing-config",
+		TaskID:    task.ID,
+		NodeName:  "implement",
+		Status:    taskdomain.NodeRunRunning,
+		StartedAt: now,
+	}))
+	require.NoError(t, store.Close())
+
+	service, err := NewService(workDir, &fakeExecutor{})
+	require.NoError(t, err)
+	defer service.Close()
+
+	run, err := service.store.GetNodeRun(context.Background(), "run-missing-config")
+	require.NoError(t, err)
+	assert.Equal(t, taskdomain.NodeRunFailed, run.Status)
+	assert.Equal(t, taskdomain.FailureReasonOrphanedAfterRestart, run.FailureReason)
+}
+
 func TestPrepareShutdownMarksRunningRunsInterrupted(t *testing.T) {
 	blockRelease := make(chan struct{})
 	blockStarted := make(chan struct{}, 1)
@@ -2554,6 +2769,46 @@ func singleHandleRequestFixture() *taskconfig.Config {
 			"done":           {Type: taskconfig.NodeTypeTerminal},
 		},
 	}
+}
+
+func humanApprovalFixture() *taskconfig.Config {
+	return &taskconfig.Config{
+		Version: 1,
+		Clarification: taskconfig.ClarificationConfig{
+			MaxQuestions:          4,
+			MaxOptionsPerQuestion: 4,
+			MinOptionsPerQuestion: 2,
+		},
+		Topology: taskconfig.Topology{
+			MaxIterations: 1,
+			Entry:         "approve_plan",
+			Nodes: []taskconfig.NodeRef{
+				{Name: "approve_plan"},
+				{Name: "done"},
+			},
+			Edges: []taskconfig.Edge{
+				{From: "approve_plan", To: "done"},
+			},
+		},
+		NodeDefinitions: map[string]taskconfig.NodeDefinition{
+			"approve_plan": {
+				Type: taskconfig.NodeTypeHuman,
+				ResultSchema: taskconfig.JSONSchema{
+					Type: "object",
+					Properties: map[string]*taskconfig.JSONSchema{
+						"approved": {Type: "boolean"},
+					},
+					Required:             []string{"approved"},
+					AdditionalProperties: boolRef(false),
+				},
+			},
+			"done": {Type: taskconfig.NodeTypeTerminal},
+		},
+	}
+}
+
+func boolRef(value bool) *bool {
+	return &value
 }
 
 func reviewLoopLimitFixture() *taskconfig.Config {

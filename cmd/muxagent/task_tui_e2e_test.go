@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -650,7 +651,7 @@ func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
 	inputBytes, err := os.ReadFile(inputPath)
 	require.NoError(t, err)
 
-	capturedPromptPath := filepath.Join(stateDir, "01-draft_plan.prompt.txt")
+	capturedPromptPath := filepath.Join(stateDir, draftRun.ID+".prompt.txt")
 	capturedPromptBytes, err := os.ReadFile(capturedPromptPath)
 	require.NoError(t, err)
 	assert.Equal(t, string(capturedPromptBytes), string(inputBytes))
@@ -665,7 +666,8 @@ func TestTaskTUIE2EPersistsExactCodexPromptInInputArtifact(t *testing.T) {
 	assert.NotContains(t, string(inputBytes), "## Prompt")
 	assert.NotContains(t, string(inputBytes), "{{")
 
-	reviewPromptBytes, err := os.ReadFile(filepath.Join(stateDir, "02-review_plan.prompt.txt"))
+	reviewRun := requireNodeRunByName(t, runs, "review_plan")
+	reviewPromptBytes, err := os.ReadFile(filepath.Join(stateDir, reviewRun.ID+".prompt.txt"))
 	require.NoError(t, err)
 	assert.NotContains(t, string(reviewPromptBytes), "input.md")
 	assert.NotContains(t, string(reviewPromptBytes), "output.json")
@@ -1095,8 +1097,9 @@ func TestTaskTUIArtifactFilesPaneShowsSuffixVisiblePaths(t *testing.T) {
 	session.send(t, "\r")
 	session.waitForAll(t, 5*time.Second, "New Task", "Describe your task")
 	session.submitNewTask(t, "Show suffix-visible artifact rows")
-	output := session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·", "draft_plan (#1)", "…01-draft_plan/plan-1.md")
-	assert.Contains(t, output, "…01-draft_plan/plan-1.md")
+	output := session.waitForAll(t, 10*time.Second, "approve_plan", "awaiting approval", "Shift+Tab timeline", "Files", "Preview ·", "draft_plan (#1)", "…runs/")
+	assert.Contains(t, output, "…runs/")
+	assert.Contains(t, output, "/plan-1.md")
 	assert.Contains(t, output, "draft_plan (#1)")
 	assert.NotContains(t, output, "Preview · 01-draft_plan/plan-1.md")
 
@@ -2792,8 +2795,10 @@ func assertPromptContainsLiteralTemplateLines(t *testing.T, input, templatePath 
 
 func mustRunAuditPath(t *testing.T, workDir string, task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun, name string) string {
 	t.Helper()
-	sequence := nodeRunSequenceForTest(t, runs, run.ID)
-	return filepath.Join(taskstore.ArtifactRunDir(workDir, task.ID, sequence, run.NodeName), name)
+	if nodeRunSequenceForTest(t, runs, run.ID) == 0 {
+		t.Fatalf("node run %q missing from task timeline", run.ID)
+	}
+	return filepath.Join(taskstore.RunDir(workDir, task.ID, run.ID), name)
 }
 
 func nodeRunSequenceForTest(t *testing.T, runs []taskdomain.NodeRun, runID string) int {
@@ -2816,19 +2821,46 @@ func nodeRunSequenceForTest(t *testing.T, runs []taskdomain.NodeRun, runID strin
 
 func assertArtifactDirs(t *testing.T, task taskdomain.Task, want []string) {
 	t.Helper()
-	artifactRoot := filepath.Join(taskstore.TaskDir(task.WorkDir, task.ID), "artifacts")
-	entries, err := os.ReadDir(artifactRoot)
+	runRoot := filepath.Join(taskstore.TaskDir(task.WorkDir, task.ID), "runs")
+	entries, err := os.ReadDir(runRoot)
 	require.NoError(t, err)
 	var names []string
 	for _, entry := range entries {
-		if entry.IsDir() {
-			names = append(names, entry.Name())
+		if !entry.IsDir() {
+			continue
 		}
+		runDir := filepath.Join(runRoot, entry.Name())
+		runEntries, err := os.ReadDir(runDir)
+		require.NoError(t, err)
+		hasArtifactPayload := false
+		for _, runEntry := range runEntries {
+			name := runEntry.Name()
+			if name == "manifest.json" || name == "history.jsonl" {
+				continue
+			}
+			hasArtifactPayload = true
+			break
+		}
+		if !hasArtifactPayload {
+			continue
+		}
+		manifestPath := filepath.Join(runDir, "manifest.json")
+		data, err := os.ReadFile(manifestPath)
+		require.NoError(t, err)
+		var manifest struct {
+			NodeName string `json:"node_name"`
+			Sequence int    `json:"sequence"`
+		}
+		require.NoError(t, json.Unmarshal(data, &manifest))
+		names = append(names, fmt.Sprintf("%02d-%s", manifest.Sequence, manifest.NodeName))
 	}
 	sort.Strings(names)
 	assert.Equal(t, want, names)
-	for _, name := range names {
-		assert.NoFileExists(t, filepath.Join(artifactRoot, name, "result_schema.json"))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		assert.NoFileExists(t, filepath.Join(runRoot, entry.Name(), "result_schema.json"))
 	}
 }
 

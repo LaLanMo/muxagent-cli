@@ -18,15 +18,26 @@ import (
 const (
 	inputArtifactName          = "input.md"
 	outputArtifactName         = "output.json"
+	manifestArtifactName       = "manifest.json"
 	clarificationHistoryMarker = "<!-- muxagent:clarification-history -->"
 )
 
-func runArtifactDirPath(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun) (string, error) {
-	sequence := nodeRunSequence(runs, run.ID)
-	if sequence == 0 {
-		return "", fmt.Errorf("node run %q not found in task timeline", run.ID)
+type runManifest struct {
+	TaskID      string                   `json:"task_id"`
+	NodeRunID   string                   `json:"node_run_id"`
+	NodeName    string                   `json:"node_name"`
+	Sequence    int                      `json:"sequence,omitempty"`
+	Status      taskdomain.NodeRunStatus `json:"status"`
+	SessionID   string                   `json:"session_id,omitempty"`
+	StartedAt   time.Time                `json:"started_at"`
+	CompletedAt *time.Time               `json:"completed_at,omitempty"`
+}
+
+func runArtifactDirPath(task taskdomain.Task, _ []taskdomain.NodeRun, run taskdomain.NodeRun) (string, error) {
+	if strings.TrimSpace(run.ID) == "" {
+		return "", fmt.Errorf("node run id is required")
 	}
-	return taskstore.ArtifactRunDir(task.WorkDir, task.ID, sequence, run.NodeName), nil
+	return taskstore.RunDir(task.WorkDir, task.ID, run.ID), nil
 }
 
 func runArtifactDir(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun) (string, error) {
@@ -35,6 +46,9 @@ func runArtifactDir(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdom
 		return "", err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := persistRunManifest(task, runs, run); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -70,6 +84,32 @@ func nodeRunSequence(runs []taskdomain.NodeRun, runID string) int {
 		}
 	}
 	return 0
+}
+
+func persistRunManifest(task taskdomain.Task, runs []taskdomain.NodeRun, run taskdomain.NodeRun) error {
+	dir, err := runArtifactDirPath(task, runs, run)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	manifest := runManifest{
+		TaskID:      task.ID,
+		NodeRunID:   run.ID,
+		NodeName:    run.NodeName,
+		Sequence:    nodeRunSequence(runs, run.ID),
+		Status:      run.Status,
+		SessionID:   run.SessionID,
+		StartedAt:   run.StartedAt,
+		CompletedAt: run.CompletedAt,
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(filepath.Join(dir, manifestArtifactName), data, 0o644)
 }
 
 func materializeHumanNodeArtifact(task taskdomain.Task, run taskdomain.NodeRun, runs []taskdomain.NodeRun, payload map[string]interface{}, submittedAt time.Time) (map[string]interface{}, error) {

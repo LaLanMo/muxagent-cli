@@ -243,7 +243,7 @@ func TestClarificationPanelVisibleAfterTabRoundTrip(t *testing.T) {
 func TestClarificationArtifactsIncludePendingInputMarkdownWithoutPrioritizingIt(t *testing.T) {
 	tempDir := t.TempDir()
 	reviewPath := filepath.Join(tempDir, "review.md")
-	inputPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, "task-1", 2, "implement"), "input.md")
+	inputPath := filepath.Join(taskstore.RunDir(tempDir, "task-1", "run-2"), "input.md")
 	require.NoError(t, os.WriteFile(reviewPath, []byte("# Review\n\nLGTM\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Dir(inputPath), 0o755))
 	require.NoError(t, os.WriteFile(inputPath, []byte("# Clarification History\n\n## Exchange 1\n\nAnswer: pending\n"), 0o644))
@@ -291,9 +291,9 @@ func TestFollowUpApprovalArtifactsExcludeInheritedParentArtifacts(t *testing.T) 
 	tempDir := t.TempDir()
 	parentTaskID := "parent-task-12345678"
 	childTaskID := "child-task-87654321"
-	parentPlanPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, parentTaskID, 1, "draft_plan"), "parent-plan.md")
-	childPlanPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, childTaskID, 1, "draft_plan"), "child-plan.md")
-	childReviewPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, childTaskID, 2, "review_plan"), "child-review.md")
+	parentPlanPath := filepath.Join(taskstore.RunDir(tempDir, parentTaskID, "parent-run-1"), "parent-plan.md")
+	childPlanPath := filepath.Join(taskstore.RunDir(tempDir, childTaskID, "run-1"), "child-plan.md")
+	childReviewPath := filepath.Join(taskstore.RunDir(tempDir, childTaskID, "run-2"), "child-review.md")
 	for _, path := range []string{parentPlanPath, childPlanPath, childReviewPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	}
@@ -341,7 +341,7 @@ func TestApprovalDefaultsAndTimelineHintIgnoreInheritedParentArtifacts(t *testin
 	tempDir := t.TempDir()
 	parentTaskID := "parent-task-12345678"
 	childTaskID := "child-task-87654321"
-	parentPlanPath := filepath.Join(taskstore.ArtifactRunDir(tempDir, parentTaskID, 1, "draft_plan"), "parent-plan.md")
+	parentPlanPath := filepath.Join(taskstore.RunDir(tempDir, parentTaskID, "parent-run-1"), "parent-plan.md")
 	require.NoError(t, os.MkdirAll(filepath.Dir(parentPlanPath), 0o755))
 	require.NoError(t, os.WriteFile(parentPlanPath, []byte("# Parent Plan\n"), 0o644))
 
@@ -769,10 +769,10 @@ func TestArtifactPaneShowsCompactFileWindow(t *testing.T) {
 
 func TestArtifactDisplayPathKeepsArtifactRunDirectory(t *testing.T) {
 	workDir := t.TempDir()
-	taskPath := filepath.Join(workDir, ".muxagent", "tasks", "83c937d0-4c2b-4342-b20d-ab32733421fd", "artifacts", "01-draft_plan", "plan.md")
+	taskPath := filepath.Join(workDir, ".muxagent", "tasks", "83c937d0-4c2b-4342-b20d-ab32733421fd", "runs", "1735cafc-bdf8-493c-b61e-e26acf624f78", "plan.md")
 	nonTaskPath := filepath.Join(workDir, "docs", "notes.md")
 
-	assert.Equal(t, ".muxagent/tasks/83c937d0/artifacts/01-draft_plan/plan.md", artifactDisplayPath(taskPath, workDir))
+	assert.Equal(t, ".muxagent/tasks/83c937d0/runs/1735cafc/plan.md", artifactDisplayPath(taskPath, workDir))
 	assert.Equal(t, filepath.ToSlash(filepath.Join("docs", "notes.md")), artifactDisplayPath(nonTaskPath, workDir))
 }
 
@@ -785,18 +785,18 @@ func TestFormatArtifactFileLabel(t *testing.T) {
 	}{
 		{
 			name:  "left truncates unlabeled path",
-			item:  artifactItem{DisplayPath: "artifacts/01-draft_plan/plan-1.md"},
+			item:  artifactItem{DisplayPath: ".muxagent/tasks/83c937d0/runs/1735cafc/plan-1.md"},
 			width: 24,
-			want:  "…01-draft_plan/plan-1.md",
+			want:  "…runs/1735cafc/plan-1.md",
 		},
 		{
 			name: "ignores provenance and keeps path readable",
 			item: artifactItem{
 				SourceLabel: "draft_plan (#1)",
-				DisplayPath: "artifacts/01-draft_plan/plan-1.md",
+				DisplayPath: ".muxagent/tasks/83c937d0/runs/1735cafc/plan-1.md",
 			},
-			width: 42,
-			want:  "artifacts/01-draft_plan/plan-1.md",
+			width: 80,
+			want:  ".muxagent/tasks/83c937d0/runs/1735cafc/plan-1.md",
 		},
 		{
 			name:  "short path stays unchanged",
@@ -815,12 +815,12 @@ func TestFormatArtifactFileLabel(t *testing.T) {
 
 func TestRenderArtifactFileLinesShowsSuffixVisibleSelectedRow(t *testing.T) {
 	model := NewModel(&fakeService{events: make(chan taskruntime.RunEvent, 8)}, "/tmp/project", "", nil, "v0.1.0")
-	model.artifactItems = []artifactItem{{DisplayPath: "artifacts/01-draft_plan/plan-1.md"}}
+	model.artifactItems = []artifactItem{{DisplayPath: ".muxagent/tasks/83c937d0/runs/1735cafc/plan-1.md"}}
 	model.artifactIndex = 0
 
 	lines := model.renderArtifactFileLines(26, 1)
 	require.Len(t, lines, 1)
-	assert.Equal(t, "> …01-draft_plan/plan-1.md", ansi.Strip(lines[0]))
+	assert.Equal(t, "> …runs/1735cafc/plan-1.md", ansi.Strip(lines[0]))
 }
 
 func TestRenderArtifactFileLinesShowsNodeRunGroupHeaders(t *testing.T) {

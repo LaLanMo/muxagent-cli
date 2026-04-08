@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/LaLanMo/muxagent-cli/internal/taskdomain"
@@ -142,19 +141,12 @@ func resolveArtifactPaths(task taskdomain.Task, runs []taskdomain.NodeRun) []str
 		if run.Status != taskdomain.NodeRunDone {
 			continue
 		}
-		artifactDir, err := runArtifactPathForExistingRun(task, runs, run, ".")
-		if err != nil {
-			continue
-		}
-		baseDir := artifactDir
 		for _, rawPath := range taskdomain.ArtifactPaths(run.Result) {
 			path := strings.TrimSpace(rawPath)
 			if path == "" {
 				continue
 			}
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(baseDir, path)
-			}
+			path = taskstore.ResolveRunPath(task.WorkDir, task.ID, run.ID, path)
 			resolved = append(resolved, path)
 		}
 	}
